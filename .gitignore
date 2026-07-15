@@ -1,0 +1,4 @@
+__pycache__/
+input_images/
+
+*.tar.xz
