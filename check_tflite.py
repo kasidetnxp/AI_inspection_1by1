@@ -6,11 +6,18 @@ except ImportError:
     from tensorflow.lite.python.interpreter import Interpreter
 
 
-MODEL_PATH = "best.tflite"
+MODEL_PATH = "unet.tflite"
 
 
 def main():
-    interpreter = Interpreter(model_path=MODEL_PATH)
+    try:
+        import tensorflow as tf
+        op_resolver = tf.lite.experimental.OpResolverType.BUILTIN_WITHOUT_DEFAULT_DELEGATES
+        interpreter = Interpreter(model_path=MODEL_PATH, experimental_op_resolver_type=op_resolver)
+    except Exception as e:
+        print("Fallback to default interpreter due to:", e)
+        interpreter = Interpreter(model_path=MODEL_PATH)
+        
     interpreter.allocate_tensors()
 
     input_details = interpreter.get_input_details()

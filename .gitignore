@@ -1,4 +1,11 @@
 __pycache__/
 input_images/
+output_images/
 
 *.tar.xz
+
+# Big models and temp files
+unet_pytorch_3class.pth
+unet.onnx
+unet_tf/
+conversion.log
