@@ -1,0 +1,19 @@
+# Edge AI Semiconductor Wafer Defect Inspection System - i.MX8 Configuration
+
+# Folder Paths for Machine Shared Interfacing
+paths:
+  image_dir: "simulation/image"       # Raw image shared folder from Machine (Prober)
+  process_dir: "simulation/process"   # Temporary buffer folder during AI inference
+  output_dir: "simulation/output"     # Output folder for annotated/comparison visual images
+  judge_dir: "simulation/judge"       # Judgement folder for machine (.txt result files)
+
+# AI Model Inference Settings
+ai:
+  model_path: "unet.tflite"
+  conf_threshold: 0.25
+  mask_threshold: 0.50
+
+# Central NestJS Server Connection (PC Server)
+central_server:
+  enabled: true
+  url: "http://localhost:3000/api/v1/inspections"

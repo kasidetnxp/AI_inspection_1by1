@@ -1,11 +1,38 @@
+# Virtual environment
+.venv/
+venv/
+
+# Node modules
+node_modules/
+**/node_modules/
+
+# Logs & temporary files
+*.log
+backend.log
+backend_imx8.log
+backend_pc.log
+frontend.log
+start.log
+
+# Python cache & compiled files
 __pycache__/
-input_images/
-output_images/
+*.py[cod]
+*.so
 
-*.tar.xz
+# Docker data directories
+docker/pgdata/
 
-# Big models and temp files
-unet_pytorch_3class.pth
-unet.onnx
-unet_tf/
-conversion.log
+# Databases & local run outputs
+inspections.db
+*.db
+
+# Large model files (>100MB limit on GitHub)
+*.pth
+*.pt
+*.onnx
+*.weights
+
+# Datasets, raw images, and simulation outputs
+simulation/
+Pun_for_Accuracy/
+*.bmp
