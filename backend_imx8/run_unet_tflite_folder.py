@@ -269,6 +269,36 @@ class ModelRunner:
             self.input_details = self.interpreter.get_input_details()
             self.output_details = self.interpreter.get_output_details()
 
+        # Run 1x dummy warm-up inference to initialize VX Delegate / NPU execution graphs once
+        self._warmup()
+
+    def _warmup(self):
+        try:
+            inp_shape = self.input_details[0]["shape"]
+            inp_dtype = self.input_details[0]["dtype"]
+            dummy_input = np.zeros(inp_shape, dtype=inp_dtype)
+            
+            t0 = time.time()
+            _ = self.infer(dummy_input)
+            warmup_ms = (time.time() - t0) * 1000
+            print(f"[WARM-UP] ✅ Model & VX Delegate dummy warm-up completed in {warmup_ms:.1f} ms")
+        except Exception as e:
+            print(f"[WARM-UP] ⚠️  Warm-up inference failed on delegate: {e}")
+            if not self.is_onnx:
+                try:
+                    print("[WARM-UP] Attempting fallback to standard CPU TFLite interpreter...")
+                    self.interpreter = Interpreter(model_path=self.model_path)
+                    self.interpreter.allocate_tensors()
+                    self.input_details = self.interpreter.get_input_details()
+                    self.output_details = self.interpreter.get_output_details()
+                    dummy_input = np.zeros(self.input_details[0]["shape"], dtype=self.input_details[0]["dtype"])
+                    t0 = time.time()
+                    _ = self.infer(dummy_input)
+                    warmup_ms = (time.time() - t0) * 1000
+                    print(f"[WARM-UP] ✅ CPU fallback warm-up completed in {warmup_ms:.1f} ms")
+                except Exception as e2:
+                    print(f"[WARM-UP] ❌ CPU fallback warm-up also failed: {e2}")
+
     def get_input_details(self):
         return self.input_details
 

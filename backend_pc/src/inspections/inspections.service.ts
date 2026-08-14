@@ -1,12 +1,17 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Inject, forwardRef } from '@nestjs/common';
 import { EventsGateway } from '../events/events.gateway';
+import { HardwareMonitorService } from '../events/hardware-monitor.service';
 
 @Injectable()
 export class InspectionsService {
   private latestRecord: any = {};
   private history: any[] = [];
 
-  constructor(private readonly eventsGateway: EventsGateway) {}
+  constructor(
+    private readonly eventsGateway: EventsGateway,
+    @Inject(forwardRef(() => HardwareMonitorService))
+    private readonly hardwareMonitorService: HardwareMonitorService,
+  ) {}
 
   saveInspection(payload: any) {
     const formattedRecord = {
@@ -55,14 +60,16 @@ export class InspectionsService {
   }
 
   getStats() {
+    const metrics = this.hardwareMonitorService ? this.hardwareMonitorService.getLatestMetrics() : { cpu: 0, ram: 0, temp: 0, npu: -1 };
     return {
-      cpu: Math.floor(30 + Math.random() * 20),
-      npu: Math.floor(80 + Math.random() * 15),
-      ram: Math.floor(1024 + Math.random() * 200),
-      temp: parseFloat((45.0 + Math.random() * 5.0).toFixed(1)),
+      cpu: metrics.cpu,
+      npu: metrics.npu,
+      ram: metrics.ram,
+      temp: metrics.temp,
       node: 'PC NestJS Central Server',
       db: 'PostgreSQL / Memory',
       edgeIp: process.env.EDGE_IP || '10.42.0.95',
     };
   }
 }
+

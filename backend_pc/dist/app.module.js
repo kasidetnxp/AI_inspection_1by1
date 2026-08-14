@@ -11,6 +11,7 @@ const common_1 = require("@nestjs/common");
 const inspections_controller_1 = require("./inspections/inspections.controller");
 const inspections_service_1 = require("./inspections/inspections.service");
 const events_gateway_1 = require("./events/events.gateway");
+const hardware_monitor_service_1 = require("./events/hardware-monitor.service");
 let AppModule = class AppModule {
 };
 exports.AppModule = AppModule;
@@ -18,7 +19,7 @@ exports.AppModule = AppModule = __decorate([
     (0, common_1.Module)({
         imports: [],
         controllers: [inspections_controller_1.InspectionsController],
-        providers: [inspections_service_1.InspectionsService, events_gateway_1.EventsGateway],
+        providers: [inspections_service_1.InspectionsService, events_gateway_1.EventsGateway, hardware_monitor_service_1.HardwareMonitorService],
     })
 ], AppModule);
 //# sourceMappingURL=app.module.js.map

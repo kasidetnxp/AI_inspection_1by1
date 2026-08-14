@@ -1,6 +1,0 @@
-path: /home/nxp1/Desktop/PUNPUNJA/PROJECT/CASE_UNET/data/3_processed_yolo
-train: images/train
-val: images/val
-names:
-  0: pad
-  1: probemark

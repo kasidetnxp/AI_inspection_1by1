@@ -603,6 +603,28 @@ def run_inspection(image_results,
                 cv2.drawContours(img_viz, [gr], -1, (255, 0, 255), 2)
 
         # ------------------------------------------------------------------
+        # Total Probemark % Area Badge (Bottom-Right Corner)
+        # ------------------------------------------------------------------
+        if max_ratio_pct > 0 or len(probemarks) > 0:
+            area_str = f"Area : {max_ratio_pct:.1f}%"
+            font_scale = 0.55
+            thickness = 2
+            (t_w, t_h), _ = cv2.getTextSize(area_str, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness)
+            margin = 10
+            box_x1 = max(5, w - t_w - margin * 2)
+            box_y1 = max(5, h - t_h - margin * 2)
+            box_x2 = min(w - 2, w - margin // 2)
+            box_y2 = min(h - 2, h - margin // 2)
+
+            sub_overlay = img_viz.copy()
+            cv2.rectangle(sub_overlay, (box_x1, box_y1), (box_x2, box_y2), (0, 0, 0), -1)
+            cv2.addWeighted(sub_overlay, 0.65, img_viz, 0.35, 0, img_viz)
+            cv2.rectangle(img_viz, (box_x1, box_y1), (box_x2, box_y2), (255, 255, 0), 1)
+
+            cv2.putText(img_viz, area_str, (box_x1 + margin, box_y2 - margin + 2),
+                        cv2.FONT_HERSHEY_SIMPLEX, font_scale, (255, 255, 255), thickness, cv2.LINE_AA)
+
+        # ------------------------------------------------------------------
         # Build visualization canvas
         # ------------------------------------------------------------------
         # Deduplicate reasons list preserving order
@@ -639,13 +661,13 @@ def run_inspection(image_results,
         x_main = max(10, (total_width - t_w_main) // 2)
         cv2.putText(canvas, banner_text, (x_main, 30), font, 0.85, text_color_main, 2)
 
-        # Determine subtext (reason or status)
+        # Determine subtext (reason or status) including Probemark Area %
         if decision == "FAIL":
             import re
             clean_reasons = [re.sub(r'\s*\([^)]*\)', '', r_txt) for r_txt in unique_reasons]
-            sub_text = " & ".join(clean_reasons)
+            sub_text = f"PM Area: {max_ratio_pct:.1f}% | " + " & ".join(clean_reasons)
         else:
-            sub_text = "Meets all inspection criteria."
+            sub_text = f"PM Area: {max_ratio_pct:.1f}% | Meets all inspection criteria."
 
         # Center-align Subtext
         (t_w_sub, _), _ = cv2.getTextSize(sub_text, font, 0.55, 1)

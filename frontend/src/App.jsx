@@ -1,11 +1,38 @@
 import React, { useState, useEffect, useRef } from "react";
+import {
+  Chart as ChartJS,
+  CategoryScale,
+  LinearScale,
+  PointElement,
+  LineElement,
+  BarElement,
+  ArcElement,
+  Title,
+  Tooltip,
+  Legend,
+  Filler
+} from "chart.js";
+import { Doughnut, Bar, Line } from "react-chartjs-2";
+
+ChartJS.register(
+  CategoryScale,
+  LinearScale,
+  PointElement,
+  LineElement,
+  BarElement,
+  ArcElement,
+  Title,
+  Tooltip,
+  Legend,
+  Filler
+);
 
 export default function App() {
   // ==========================================
   // STATE MANAGEMENT
   // ==========================================
   const [activeTab, setActiveTab] = useState("inspect");
-  const [compareMode, setCompareMode] = useState("overlay");
+  const [compareMode, setCompareMode] = useState("split");
   const [isLight, setIsLight] = useState(true);
   const [isBackendConnected, setIsBackendConnected] = useState(false);
   const [dbType, setDbType] = useState("SQLite");
@@ -60,27 +87,138 @@ export default function App() {
   const lineCanvasRef = useRef(null);
   const scannerRef = useRef(null);
 
-  // Filter Search
+  // Analytics Tab Filters
   const [filterSearch, setFilterSearch] = useState("");
   const [analyticsFilter, setAnalyticsFilter] = useState("ALL");
+  const [analyticsBatchFilter, setAnalyticsBatchFilter] = useState("ALL");
+  const [analyticsMachineFilter, setAnalyticsMachineFilter] = useState("ALL");
 
   // Historical Inspection Image Modal State
   const [selectedModalItem, setSelectedModalItem] = useState(null);
   const [modalViewMode, setModalViewMode] = useState("split");
 
+  const handlePrevModalItem = (e) => {
+    if (e) e.stopPropagation();
+    const currentList = typeof filteredHistory !== "undefined" && filteredHistory.length > 0 ? filteredHistory : history;
+    if (!selectedModalItem || currentList.length === 0) return;
+    const idx = currentList.findIndex(item => item === selectedModalItem || (item.imageUrl && item.imageUrl === selectedModalItem.imageUrl) || (item.timestamp === selectedModalItem.timestamp && item.pad === selectedModalItem.pad && item.xyCoord === selectedModalItem.xyCoord));
+    if (idx > 0) {
+      setSelectedModalItem(currentList[idx - 1]);
+    } else {
+      setSelectedModalItem(currentList[currentList.length - 1]);
+    }
+  };
+
+  const handleNextModalItem = (e) => {
+    if (e) e.stopPropagation();
+    const currentList = typeof filteredHistory !== "undefined" && filteredHistory.length > 0 ? filteredHistory : history;
+    if (!selectedModalItem || currentList.length === 0) return;
+    const idx = currentList.findIndex(item => item === selectedModalItem || (item.imageUrl && item.imageUrl === selectedModalItem.imageUrl) || (item.timestamp === selectedModalItem.timestamp && item.pad === selectedModalItem.pad && item.xyCoord === selectedModalItem.xyCoord));
+    if (idx >= 0 && idx < currentList.length - 1) {
+      setSelectedModalItem(currentList[idx + 1]);
+    } else {
+      setSelectedModalItem(currentList[0]);
+    }
+  };
+
+  useEffect(() => {
+    if (!selectedModalItem) return;
+    const handleKeyDown = (e) => {
+      if (e.key === "ArrowLeft") {
+        handlePrevModalItem();
+      } else if (e.key === "ArrowRight") {
+        handleNextModalItem();
+      } else if (e.key === "Escape") {
+        setSelectedModalItem(null);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [selectedModalItem, history]);
+
   // Drag and drop uploading state
+  const fileInputRef = useRef(null);
   const [isDragging, setIsDragging] = useState(false);
   const [loadedImage, setLoadedImage] = useState(null);
   const [loadedRawImage, setLoadedRawImage] = useState(null);
   const [selectedClasses, setSelectedClasses] = useState(3);
   const [uploadClassCount, setUploadClassCount] = useState(3);
   const [modelFilter, setModelFilter] = useState("ALL");
-  const [modelsList, setModelsList] = useState([
-    { name: "yolov8n-seg-wafer-v2.tflite", version: "v2.0.1", engine: "TFLite / NPU", size: "12.4 MB", accuracy: "97.8%", classes: 3, active: true },
-    { name: "yolov8n-2class-padmark.tflite", version: "v2.1.0", engine: "TFLite / NPU", size: "10.2 MB", accuracy: "98.9%", classes: 2, active: false },
-    { name: "unet-wafer-efficientnet.tflite", version: "v1.4.2", engine: "TFLite / CPU", size: "28.1 MB", accuracy: "98.5%", classes: 2, active: false },
-    { name: "yolov8s-seg-wafer-v1.tflite", version: "v1.0.0", engine: "ONNX / CPU", size: "45.0 MB", accuracy: "96.4%", classes: 3, active: false }
-  ]);
+  const [modelsList, setModelsList] = useState([]);
+
+  const handleUploadFile = (file) => {
+    if (!file) return;
+    const formData = new FormData();
+    formData.append("file", file);
+    formData.append("classes", uploadClassCount);
+
+    fetch(`${apiBase}/api/models/upload`, {
+      method: "POST",
+      body: formData
+    })
+      .then(res => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.json();
+      })
+      .then(data => {
+        alert(`📥 [UPLOAD SUCCESS] Model '${file.name}' saved to i.MX8 node!`);
+        fetchModels();
+      })
+      .catch(err => {
+        console.error("Upload error:", err);
+        const newModel = {
+          name: file.name,
+          version: "v1.0.0",
+          engine: file.name.endsWith(".tflite") ? "TFLite / NPU" : "ONNX / CPU",
+          size: `${(file.size / (1024 * 1024)).toFixed(1)} MB`,
+          accuracy: "95.0%",
+          classes: uploadClassCount,
+          active: false
+        };
+        setModelsList(prev => [newModel, ...prev]);
+        alert(`Model '${file.name}' added to local view.`);
+      });
+  };
+
+  const handleActivateModel = (model) => {
+    fetch(`${apiBase}/api/models/activate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: model.name, classes: model.classes || 3 })
+    })
+      .then(res => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.json();
+      })
+      .then(data => {
+        setSelectedClasses(model.classes || 3);
+        alert(`⚡ [NPU HOT-SWAP SUCCESS]\nModel '${model.name}' activated on i.MX8 NPU Delegate!`);
+        fetchModels();
+      })
+      .catch(err => {
+        console.error("Activation error:", err);
+        setSelectedClasses(model.classes || 3);
+        setModelsList(prev => prev.map(m => ({ ...m, active: m.name === model.name })));
+      });
+  };
+
+  const handleDeleteModel = (model) => {
+    if (!window.confirm(`Are you sure you want to delete model '${model.name}'?`)) return;
+    fetch(`${apiBase}/api/models/${encodeURIComponent(model.name)}`, {
+      method: "DELETE"
+    })
+      .then(res => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.json();
+      })
+      .then(data => {
+        alert(`🗑️ Deleted model '${model.name}' successfully!`);
+        fetchModels();
+      })
+      .catch(err => {
+        setModelsList(prev => prev.filter(m => m.name !== model.name));
+      });
+  };
 
 
 
@@ -117,12 +255,15 @@ export default function App() {
 
   const getDefaultEdgeIp = () => {
     const saved = localStorage.getItem("IMX8_EDGE_IP");
-    if (saved && saved !== "10.42.0.1") return saved;
-    const hostname = typeof window !== "undefined" ? window.location.hostname : "10.42.0.95";
-    if (!hostname || hostname === "0.0.0.0" || hostname === "::" || hostname === "localhost" || hostname === "127.0.0.1" || hostname === "10.42.0.1") {
-      return "10.42.0.95";
-    }
-    return hostname;
+    if (saved && saved !== "10.42.0.1" && saved !== "10.42.0.95") return saved;
+
+    // [Mode A: Local PC Execution - Active]
+    const hostname = typeof window !== "undefined" ? (window.location.hostname || "localhost") : "localhost";
+    return (hostname === "0.0.0.0" || hostname === "::") ? "localhost" : hostname;
+
+    // [Mode B: Physical i.MX8 Hardware Execution]
+    // Uncomment line below if running HMI against physical i.MX8 board IP:
+    // return "10.42.0.95";
   };
 
   const [edgeIp, setEdgeIp] = useState(getDefaultEdgeIp);
@@ -193,33 +334,39 @@ export default function App() {
           })
           .catch(e => console.error(e));
 
-        // Start hardware stats fetch loop
+        // Fallback polling loop if real-time hardware WS is inactive
         pollStats = setInterval(() => {
           fetch(`${apiBase}/api/sys-stats`)
             .then(r => r.json())
             .then(stats => {
-              setSysStats({
-                cpu: stats.cpu,
-                npu: stats.npu,
-                ram: stats.ram,
-                temp: stats.temp
-              });
+              setSysStats(prev => ({
+                ...prev,
+                cpu: stats.cpu ?? prev.cpu,
+                npu: stats.npu ?? prev.npu,
+                ram: stats.ram ?? prev.ram,
+                temp: stats.temp ?? prev.temp
+              }));
               setDbType(stats.db);
             })
             .catch(e => console.error(e));
-        }, 2000);
+        }, 3000);
       };
 
       ws.onmessage = (event) => {
         const payload = JSON.parse(event.data);
-        if (payload.event === "NEW_INSPECTION") {
+        if (payload.event === "NEW_INSPECTION" && payload.data) {
           mapInspectionData(payload.data);
-
-          // Refresh logs
-          fetch(`${apiBase}/api/history`)
-            .then(r => r.json())
-            .then(data => setHistory(Array.isArray(data) ? data : []))
-            .catch(e => setHistory([]));
+          setHistory(prev => {
+            const list = Array.isArray(prev) ? prev : [];
+            const combined = [payload.data, ...list];
+            const seen = new Set();
+            return combined.filter(item => {
+              const key = item.imageUrl || (item.id + "_" + item.timestamp + "_" + (item.pad || "") + "_" + (item.xyCoord || ""));
+              if (seen.has(key)) return false;
+              seen.add(key);
+              return true;
+            });
+          });
         }
       };
 
@@ -244,6 +391,75 @@ export default function App() {
       if (reconnectTimeout) clearTimeout(reconnectTimeout);
     };
   }, [edgeIp]);
+
+  // ==========================================
+  // REAL-TIME HARDWARE MONITORING WEBSOCKET
+  // ==========================================
+  useEffect(() => {
+    let hwWs = null;
+    let reconnectTimeout = null;
+    let isSubscribed = true;
+
+    const connectHardwareMonitor = () => {
+      const hostname = typeof window !== "undefined" ? (window.location.hostname || "localhost") : "localhost";
+      const pcWsUrl = `ws://${hostname}:3000/ws/hardware`;
+      const imx8WsUrl = `ws://${edgeIp}:8000/ws/hardware`;
+
+      // Try PC NestJS relay first, with fallback to direct i.MX8 WebSocket
+      const targetUrl = pcWsUrl;
+
+      console.log(`[HMI] Connecting to Real-time Hardware WS at ${targetUrl}...`);
+      try {
+        hwWs = new WebSocket(targetUrl);
+
+        hwWs.onopen = () => {
+          console.log(`[HMI] Real-time Hardware WebSocket connected: ${targetUrl}`);
+        };
+
+        hwWs.onmessage = (event) => {
+          if (!isSubscribed) return;
+          try {
+            const parsed = JSON.parse(event.data);
+            const data = parsed.data || parsed;
+            if (data && typeof data.cpu !== "undefined") {
+              setSysStats({
+                cpu: data.cpu,
+                ram: data.ram,
+                temp: data.temp,
+                npu: data.npu
+              });
+            }
+          } catch (e) {
+            console.error("[HMI] Error parsing hardware metrics payload:", e);
+          }
+        };
+
+        hwWs.onerror = () => {
+          if (hwWs) hwWs.close();
+        };
+
+        hwWs.onclose = () => {
+          if (!isSubscribed) return;
+          console.warn("[HMI] Real-time Hardware WS closed. Reconnecting in 2s...");
+          reconnectTimeout = setTimeout(connectHardwareMonitor, 2000);
+        };
+      } catch (err) {
+        console.error("[HMI] Failed to initiate Real-time Hardware WS:", err);
+        if (isSubscribed) {
+          reconnectTimeout = setTimeout(connectHardwareMonitor, 2000);
+        }
+      }
+    };
+
+    connectHardwareMonitor();
+
+    return () => {
+      isSubscribed = false;
+      if (hwWs) hwWs.close();
+      if (reconnectTimeout) clearTimeout(reconnectTimeout);
+    };
+  }, [edgeIp]);
+
 
   const preloadImages = (annotatedUrl, rawUrl) => {
     return new Promise((resolve) => {
@@ -590,7 +806,7 @@ export default function App() {
       ctx.restore();
 
       ctx.fillStyle = isLight ? "#64748b" : "#94a3b8";
-      ctx.font = "bold 10px 'Outfit', sans-serif"; ctx.textAlign = "center";
+      ctx.font = "bold 13px 'Inter', sans-serif"; ctx.textAlign = "center";
       ctx.fillText("RAW CAMERA FEED", 150, 30);
 
       ctx.save();
@@ -599,231 +815,152 @@ export default function App() {
       ctx.restore();
 
       ctx.fillStyle = "var(--color-info)";
-      ctx.font = "bold 10px 'Outfit', sans-serif"; ctx.textAlign = "center";
+      ctx.font = "bold 13px 'Inter', sans-serif"; ctx.textAlign = "center";
       ctx.fillText("AI SEGMENTATION", 450, 30);
     }
   }, [currentDieImage, compareMode, isLight, filters, loadedImage, loadedRawImage, currentInspection]);
 
   // ==========================================
-  // CHARTS RENDERING ENGINE (WebGL/Canvas)
+  // CHARTS CONFIGURATION ENGINE (Chart.js React)
   // ==========================================
-  useEffect(() => {
-    if (activeTab !== "analytics") return;
+  const passCountChart = (Array.isArray(history) ? history : []).filter(r => r.decision === "PASS").length;
+  const failCountChart = (Array.isArray(history) ? history : []).filter(r => r.decision !== "PASS").length;
 
-    const scaleCanvasChart = (c) => {
-      const dpr = window.devicePixelRatio || 1;
-      const rect = c.getBoundingClientRect();
-      const w = rect.width || c.clientWidth || 300;
-      const h = rect.height || c.clientHeight || 150;
-      c.width = w * dpr;
-      c.height = h * dpr;
-      const context = c.getContext("2d");
-      context.setTransform(1, 0, 0, 1, 0, 0);
-      context.scale(dpr, dpr);
-      return { w, h };
-    };
-
-    const drawDonutSlice = (c, cx, cy, rOut, rIn, sAngle, eAngle, color) => {
-      c.fillStyle = color;
-      c.beginPath();
-      c.arc(cx, cy, rOut, sAngle, eAngle, false);
-      c.arc(cx, cy, rIn, eAngle, sAngle, true);
-      c.closePath();
-      c.fill();
-    };
-
-    const drawLegendItem = (c, x, y, dotColor, labelText, txtColor) => {
-      c.fillStyle = dotColor;
-      c.beginPath(); c.arc(x, y - 3, 4, 0, Math.PI * 2); c.fill();
-      c.fillStyle = txtColor;
-      c.font = "600 10px 'Outfit', sans-serif"; c.textAlign = "left";
-      c.fillText(labelText, x + 10, y);
-    };
-
-    const labelColor = isLight ? "#475569" : "#94a3b8";
-    const gridColor = isLight ? "rgba(0, 0, 0, 0.04)" : "rgba(255, 255, 255, 0.03)";
-    const textColor = isLight ? "#0f172a" : "#f1f5f9";
-
-    const passColor = isLight ? "#059669" : "#10b981";
-    const warnColor = isLight ? "#d97706" : "#f59e0b";
-    const failColor = isLight ? "#dc2626" : "#ef4444";
-    const infoColor = isLight ? "#0284c7" : "#38bdf8";
-
-    // 1. DONUT CHART (PASS vs FAIL)
-    const donutC = donutCanvasRef.current;
-    if (donutC) {
-      const { w, h } = scaleCanvasChart(donutC);
-      const c = donutC.getContext("2d");
-      c.clearRect(0, 0, w, h);
-
-      let pass = 0, fail = 0;
-      history.forEach(r => {
-        if (r.decision === "PASS") pass++;
-        else fail++;
-      });
-      const total = pass + fail;
-
-      const cx = w * 0.35, cy = h * 0.5;
-      const rOuter = Math.min(w * 0.28, h * 0.38), rInner = rOuter * 0.65;
-
-      if (total === 0) {
-        c.strokeStyle = gridColor; c.lineWidth = 12;
-        c.beginPath(); c.arc(cx, cy, rOuter - 6, 0, Math.PI * 2); c.stroke();
-        c.fillStyle = labelColor; c.font = "10px 'Outfit'"; c.textAlign = "center";
-        c.fillText("No Data", cx, cy + 4);
-      } else {
-        const pPass = pass / total, pFail = fail / total;
-        let startAngle = -Math.PI / 2;
-
-        if (pPass > 0) {
-          const e = startAngle + (Math.PI * 2 * pPass);
-          drawDonutSlice(c, cx, cy, rOuter, rInner, startAngle, e, passColor);
-          startAngle = e;
-        }
-        if (pFail > 0) {
-          const e = startAngle + (Math.PI * 2 * pFail);
-          drawDonutSlice(c, cx, cy, rOuter, rInner, startAngle, e, failColor);
-          startAngle = e;
-        }
-        const yieldPct = total > 0 ? ((pass / total) * 100).toFixed(0) : 0;
-        c.fillStyle = textColor; c.font = "bold 15px 'Outfit', sans-serif"; c.textAlign = "center";
-        c.fillText(`${yieldPct}%`, cx, cy - 1);
-        c.fillStyle = labelColor; c.font = "600 8px 'Outfit', sans-serif";
-        c.fillText("YIELD", cx, cy + 9);
+  const donutChartData = {
+    labels: ["PASS", "FAIL"],
+    datasets: [
+      {
+        data: [passCountChart, failCountChart],
+        backgroundColor: [isLight ? "#059669" : "#10b981", isLight ? "#dc2626" : "#ef4444"],
+        borderColor: isLight ? "#ffffff" : "#1e293b",
+        borderWidth: 2,
+        hoverOffset: 6
       }
-      const lx = cx + rOuter + 20, ly = cy - 12, spacing = 24;
-      drawLegendItem(c, lx, ly, passColor, `PASS: ${pass}`, labelColor);
-      drawLegendItem(c, lx, ly + spacing, failColor, `FAIL: ${fail}`, labelColor);
-    }
+    ]
+  };
 
-    // 2. BAR CHART (DEFECT CAUSE BREAKDOWN)
-    const barC = barCanvasRef.current;
-    if (barC) {
-      const { w, h } = scaleCanvasChart(barC);
-      const c = barC.getContext("2d");
-      c.clearRect(0, 0, w, h);
-
-      let bigMark = 0, closeEdge = 0, noMark = 0;
-      history.forEach(r => {
-        const r_str = (r.reason || "").toLowerCase();
-        const a_str = (r.alarms || []).map(a => a.name.toLowerCase()).join(" ");
-        if (r_str.includes("big") || r_str.includes("area too large") || a_str.includes("big")) {
-          bigMark++;
-        } else if (r_str.includes("no probe") || r_str.includes("missing") || r_str.includes("cannot classify") || a_str.includes("no probe") || a_str.includes("missing")) {
-          noMark++;
-        } else if (r.decision === "FAIL") {
-          closeEdge++;
+  const donutChartOptions = {
+    responsive: true,
+    maintainAspectRatio: false,
+    cutout: "68%",
+    animation: {
+      animateScale: true,
+      animateRotate: true,
+      duration: 500
+    },
+    plugins: {
+      legend: {
+        position: "right",
+        labels: {
+          color: isLight ? "#334155" : "#cbd5e1",
+          font: { family: "'Outfit', sans-serif", size: 12, weight: "bold" }
         }
-      });
-
-      const categories = [
-        { label: "Big Probe Mark", count: bigMark, color: "#ef4444" },
-        { label: "Close to Edge", count: closeEdge, color: "#f97316" },
-        { label: "No Probe Mark", count: noMark, color: "#a855f7" }
-      ];
-
-      const maxCount = Math.max(5, ...categories.map(cat => cat.count));
-      const marginL = 120, marginR = 30, marginT = 18, gap = 16, barH = 18;
-
-      categories.forEach((cat, idx) => {
-        const y = marginT + idx * (barH + gap);
-        const barW = maxCount > 0 ? (cat.count / maxCount) * (w - marginL - marginR) : 0;
-
-        // Label
-        c.fillStyle = labelColor;
-        c.font = "600 10px 'Outfit', sans-serif";
-        c.textAlign = "right";
-        c.fillText(cat.label, marginL - 10, y + 13);
-
-        // Track
-        c.fillStyle = gridColor;
-        c.fillRect(marginL, y, w - marginL - marginR, barH);
-
-        // Fill Bar
-        if (barW > 0) {
-          c.fillStyle = cat.color;
-          c.fillRect(marginL, y, barW, barH);
+      },
+      tooltip: {
+        callbacks: {
+          label: (context) => {
+            const total = passCountChart + failCountChart;
+            const val = context.raw || 0;
+            const pct = total > 0 ? ((val / total) * 100).toFixed(1) : 0;
+            return ` ${context.label}: ${val} (${pct}%)`;
+          }
         }
-
-        // Count Text
-        c.fillStyle = textColor;
-        c.font = "bold 10px 'JetBrains Mono', monospace";
-        c.textAlign = "left";
-        c.fillText(`${cat.count}`, marginL + barW + 6, y + 13);
-      });
-    }
-
-    // 2. LINE CHART
-    const lineC = lineCanvasRef.current;
-    if (lineC) {
-      const { w, h } = scaleCanvasChart(lineC);
-      const c = lineC.getContext("2d");
-      c.clearRect(0, 0, w, h);
-
-      const dataset = history.slice(-10);
-      const marginL = 35, marginR = 15, marginT = 20, marginB = 25;
-      const gw = w - marginL - marginR, gh = h - marginT - marginB;
-
-      const maxDataVal = Math.max(30, ...dataset.map(d => Number(d.inferenceTime) || 0));
-      const maxVal = Math.ceil((maxDataVal * 1.15) / 10) * 10 || 150;
-      const stepVal = Math.round(maxVal / 3);
-      const yTicks = [0, stepVal, stepVal * 2, maxVal];
-
-      c.strokeStyle = gridColor; c.lineWidth = 1;
-      c.fillStyle = labelColor; c.font = "500 8px 'JetBrains Mono', monospace"; c.textAlign = "right";
-
-      yTicks.forEach(tick => {
-        const y = marginT + gh - (tick / maxVal) * gh;
-        c.beginPath(); c.moveTo(marginL, y); c.lineTo(w - marginR, y); c.stroke();
-        c.fillText(`${tick}`, marginL - 6, y + 3);
-      });
-
-      if (dataset.length === 0) {
-        c.textAlign = "center"; c.font = "10px 'Outfit'";
-        c.fillText("No Trend Data Available", w / 2, h / 2);
-      } else {
-        const points = [];
-        const stepX = dataset.length > 1 ? gw / (dataset.length - 1) : gw;
-        dataset.forEach((data, index) => {
-          const x = marginL + index * stepX;
-          const y = marginT + gh - (data.inferenceTime / maxVal) * gh;
-          points.push({ x, y, val: data.inferenceTime, id: data.id.replace("#WF-", "") });
-        });
-
-        // Area Gradient
-        const grad = c.createLinearGradient(0, marginT, 0, marginT + gh);
-        grad.addColorStop(0, isLight ? "rgba(2, 132, 199, 0.2)" : "rgba(56, 189, 248, 0.2)");
-        grad.addColorStop(1, isLight ? "rgba(2, 132, 199, 0.0)" : "rgba(56, 189, 248, 0.0)");
-
-        c.fillStyle = grad;
-        c.beginPath();
-        points.forEach((pt, idx) => {
-          if (idx === 0) c.moveTo(pt.x, pt.y); else c.lineTo(pt.x, pt.y);
-        });
-        c.lineTo(points[points.length - 1].x, marginT + gh);
-        c.lineTo(points[0].x, marginT + gh);
-        c.closePath();
-        c.fill();
-
-        // Line Stroke
-        c.strokeStyle = infoColor; c.lineWidth = 2; c.beginPath();
-        points.forEach((pt, idx) => {
-          if (idx === 0) c.moveTo(pt.x, pt.y); else c.lineTo(pt.x, pt.y);
-        });
-        c.stroke();
-
-        // Data Points
-        points.forEach(pt => {
-          c.fillStyle = infoColor; c.beginPath(); c.arc(pt.x, pt.y, 3.5, 0, Math.PI * 2); c.fill();
-          c.strokeStyle = isLight ? "#ffffff" : "#0f172a"; c.lineWidth = 1.5; c.stroke();
-          c.fillStyle = textColor; c.font = "bold 8px 'JetBrains Mono', monospace"; c.textAlign = "center";
-          c.fillText(pt.val.toFixed(0), pt.x, pt.y - 7);
-          c.fillStyle = labelColor; c.font = "500 7px 'JetBrains Mono', monospace";
-          c.fillText(pt.id, pt.x, marginT + gh + 12);
-        });
       }
     }
-  }, [history, activeTab, isLight]);
+  };
+
+  let bigMarkChart = 0, closeEdgeChart = 0, noMarkChart = 0;
+  (Array.isArray(history) ? history : []).forEach(r => {
+    const r_str = (r.reason || "").toLowerCase();
+    const a_str = (r.alarms || []).map(a => a.name.toLowerCase()).join(" ");
+    if (r_str.includes("big") || r_str.includes("area too large") || a_str.includes("big")) {
+      bigMarkChart++;
+    } else if (r_str.includes("no probe") || r_str.includes("missing") || r_str.includes("cannot classify") || a_str.includes("no probe") || a_str.includes("missing")) {
+      noMarkChart++;
+    } else if (r.decision === "FAIL") {
+      closeEdgeChart++;
+    }
+  });
+
+  const barChartData = {
+    labels: ["Big Probe Mark", "Close to Edge", "No Probe Mark"],
+    datasets: [
+      {
+        label: "Defects",
+        data: [bigMarkChart, closeEdgeChart, noMarkChart],
+        backgroundColor: ["#ef4444", "#f97316", "#a855f7"],
+        borderRadius: 4
+      }
+    ]
+  };
+
+  const barChartOptions = {
+    indexAxis: "y",
+    responsive: true,
+    maintainAspectRatio: false,
+    animation: { duration: 500 },
+    plugins: {
+      legend: { display: false },
+      tooltip: {
+        callbacks: {
+          label: (context) => ` Defects: ${context.raw}`
+        }
+      }
+    },
+    scales: {
+      x: {
+        grid: { color: isLight ? "rgba(0,0,0,0.05)" : "rgba(255,255,255,0.05)" },
+        ticks: { color: isLight ? "#64748b" : "#94a3b8", font: { family: "'JetBrains Mono'" } }
+      },
+      y: {
+        grid: { display: false },
+        ticks: { color: isLight ? "#334155" : "#cbd5e1", font: { family: "'Outfit'", weight: "600" } }
+      }
+    }
+  };
+
+  const latencyRecent = (Array.isArray(history) ? history : []).slice(0, 15).reverse();
+  const lineChartData = {
+    labels: latencyRecent.map(d => (d.id || "").replace("#WF-", "")),
+    datasets: [
+      {
+        label: "Inference Latency (ms)",
+        data: latencyRecent.map(d => Number(d.inferenceTime) || 0),
+        borderColor: isLight ? "#0284c7" : "#38bdf8",
+        backgroundColor: isLight ? "rgba(2, 132, 199, 0.15)" : "rgba(56, 189, 248, 0.15)",
+        fill: true,
+        tension: 0.35,
+        pointBackgroundColor: isLight ? "#0284c7" : "#38bdf8",
+        pointRadius: 4,
+        pointHoverRadius: 6
+      }
+    ]
+  };
+
+  const lineChartOptions = {
+    responsive: true,
+    maintainAspectRatio: false,
+    animation: { duration: 400 },
+    plugins: {
+      legend: { display: false },
+      tooltip: {
+        callbacks: {
+          label: (context) => ` Latency: ${context.raw} ms`
+        }
+      }
+    },
+    scales: {
+      x: {
+        grid: { color: isLight ? "rgba(0,0,0,0.05)" : "rgba(255,255,255,0.05)" },
+        ticks: { color: isLight ? "#64748b" : "#94a3b8", font: { family: "'JetBrains Mono'", size: 10 } }
+      },
+      y: {
+        grid: { color: isLight ? "rgba(0,0,0,0.05)" : "rgba(255,255,255,0.05)" },
+        ticks: { color: isLight ? "#64748b" : "#94a3b8", font: { family: "'JetBrains Mono'" } },
+        beginAtZero: true
+      }
+    }
+  };
 
   // ==========================================
   // REPORT DATA EXPORT (CSV SPREADSHEET)
@@ -852,12 +989,26 @@ export default function App() {
     document.body.removeChild(link);
   };
 
-  // Filter logs logic
+  // Filter logs logic for Analytics Tab
   const historyList = Array.isArray(history) ? history : [];
+  const uniqueBatches = Array.from(new Set(historyList.map(item => item.batch).filter(b => b && b !== "-")));
+  const uniqueMachines = Array.from(new Set(historyList.map(item => item.machineNo || "PROBER01").filter(m => m && m !== "-")));
+
   const filteredHistory = historyList.filter(record => {
-    const matchType = (analyticsFilter === "ALL" || record.decision === analyticsFilter);
-    const matchQuery = (record.id.toUpperCase().includes(filterSearch.toUpperCase()));
-    return matchType && matchQuery;
+    if (analyticsFilter === "PASS" && record.decision !== "PASS") return false;
+    if (analyticsFilter === "FAIL" && record.decision === "PASS") return false;
+    if (analyticsBatchFilter !== "ALL" && record.batch !== analyticsBatchFilter) return false;
+    if (analyticsMachineFilter !== "ALL" && (record.machineNo || "PROBER01") !== analyticsMachineFilter) return false;
+    if (filterSearch.trim() !== "") {
+      const q = filterSearch.toLowerCase().trim();
+      const searchableStr = [
+        record.machineNo, record.batch, record.waferNo, record.xyCoord,
+        record.site, record.pad, record.timeShort, record.timestamp,
+        record.decision, record.reason, record.productSetup, record.temp, record.id
+      ].join(" ").toLowerCase();
+      if (!searchableStr.includes(q)) return false;
+    }
+    return true;
   });
 
   // Calculate local yields
@@ -890,17 +1041,17 @@ export default function App() {
           <div className="header-center">
             <div className="status-indicator-group">
               {isBackendConnected && (
-                <div className="status-pill online" style={{ background: "rgba(16, 185, 129, 0.05)", border: "1px solid rgba(16, 185, 129, 0.15)", color: "var(--color-pass)", fontSize: "9px", padding: "4px 8px", borderRadius: "4px", fontWeight: "600", fontFamily: "var(--font-display)", textTransform: "uppercase" }}>
+                <div className="status-pill online" style={{ background: "rgba(16, 185, 129, 0.05)", border: "1px solid rgba(16, 185, 129, 0.15)", color: "var(--color-pass)", fontSize: "12px", padding: "4px 8px", borderRadius: "4px", fontWeight: "600", fontFamily: "var(--font-display)", textTransform: "uppercase" }}>
                   DB: {dbType}
                 </div>
               )}
               <div className="status-pill" style={{ background: "rgba(2, 132, 199, 0.08)", border: "1px solid rgba(2, 132, 199, 0.25)", padding: "2px 6px", borderRadius: "4px", display: "flex", alignItems: "center", gap: "4px" }}>
-                <span style={{ fontSize: "9px", fontWeight: "bold", color: "var(--color-info)" }}>EDGE IP:</span>
+                <span style={{ fontSize: "12px", fontWeight: "bold", color: "var(--color-info)" }}>EDGE IP:</span>
                 <input 
                   type="text" 
                   value={edgeIp} 
                   onChange={(e) => updateEdgeIp(e.target.value)} 
-                  style={{ background: "transparent", border: "none", color: "inherit", fontSize: "10px", fontFamily: "var(--font-mono)", width: "85px", outline: "none", fontWeight: "bold" }}
+                  style={{ background: "transparent", border: "none", color: "inherit", fontSize: "12px", fontFamily: "var(--font-mono)", width: "95px", outline: "none", fontWeight: "bold" }}
                   title="Change i.MX8 Edge Node IP Address"
                 />
               </div>
@@ -917,6 +1068,7 @@ export default function App() {
 
           <div className="header-right" style={{ display: "flex", alignItems: "center", gap: "12px" }}>
             <div className="datetime-display" id="live-time">{clockStr}</div>
+
             <div className="toggle-group theme-group" style={{ display: "flex", gap: "2px" }}>
               <button id="btn-theme-dark" className={`view-btn ${!isLight ? "active" : ""}`} onClick={() => setIsLight(false)}>Dark</button>
               <button id="btn-theme-light" className={`view-btn ${isLight ? "active" : ""}`} onClick={() => setIsLight(true)}>Light</button>
@@ -940,9 +1092,30 @@ export default function App() {
                   <div className="machine-action-block">
                     <div className="machine-action-status" id="machine-action-text">{currentInspection.machineAction}</div>
 
-                    <div className="manual-overrides">
-                      <button id="btn-action-continue" className={`override-btn ${currentInspection.decision === "PASS" ? "active" : ""}`}>CONTINUE</button>
-                      <button id="btn-action-stop" className={`override-btn ${currentInspection.decision === "FAIL" ? "active" : ""}`}>STOP</button>
+                    <div className="manual-overrides" style={{ display: "flex", flexDirection: "column", gap: "8px", width: "100%" }}>
+                      <div style={{ display: "flex", gap: "8px" }}>
+                        <button id="btn-action-continue" className={`override-btn ${currentInspection.decision === "PASS" ? "active" : ""}`} style={{ flex: 1 }}>CONTINUE</button>
+                        <button id="btn-action-stop" className={`override-btn ${currentInspection.decision === "FAIL" ? "active" : ""}`} style={{ flex: 1 }}>STOP</button>
+                      </div>
+                      <button 
+                        className="override-btn" 
+                        style={{ width: "100%", background: "rgba(255, 165, 0, 0.2)", border: "1px solid rgba(255, 165, 0, 0.6)", color: "#ffb703", fontWeight: "bold", padding: "8px" }}
+                        title="Simulate Prober Machine sending .END.bmp signal to summarize batch judgement TXT"
+                        onClick={() => {
+                          fetch(`${apiBase}/api/simulate-end`, { method: "POST" })
+                            .then(res => res.json())
+                            .then(data => {
+                              if (data.status === "success") {
+                                alert(`🏁 [END SIGNAL TRIGGERED]\nSummarized ${data.totalImages} images!\nResult: ${data.decision} (${data.mask})\nJudgement File Saved: ${data.filename}`);
+                              } else {
+                                alert(`ℹ️ ${data.message || "No images in current batch queue to summarize."}`);
+                              }
+                            })
+                            .catch(err => alert(`Error sending END signal: ${err}`));
+                        }}
+                      >
+                        🏁 SIMULATE END SIGNAL
+                      </button>
                     </div>
                   </div>
                 </div>
@@ -977,44 +1150,12 @@ export default function App() {
             <section className="grid-col center-col">
               <div className="hmi-card wafer-viewer-card">
                 <div className="card-header">
-                  <div className="header-with-toggles">
-                    <div className="view-header-title">
-                      <h3>LIVE VIEW</h3>
-                      <div className="compare-toggle">
-                        <button id="btn-compare-overlay" className={`compare-btn ${compareMode === "overlay" ? "active" : ""}`} onClick={() => setCompareMode("overlay")}>Overlay</button>
-                        <button id="btn-compare-split" className={`compare-btn ${compareMode === "split" ? "active" : ""}`} onClick={() => setCompareMode("split")}>Split Compare</button>
-                      </div>
-                    </div>
-
-                    <div className="overlay-toggles">
-                      <label className="toggle-cb label-pad">
-                        <input type="checkbox" checked={filters.pad} onChange={() => setFilters(prev => ({ ...prev, pad: !prev.pad }))} />
-                        <span className="cb-custom"></span> Pads
-                      </label>
-                      <label className="toggle-cb label-mark">
-                        <input type="checkbox" checked={filters.mark} onChange={() => setFilters(prev => ({ ...prev, mark: !prev.mark }))} />
-                        <span className="cb-custom"></span> Marks
-                      </label>
-                      <label className="toggle-cb label-grain">
-                        <input type="checkbox" checked={filters.grain} onChange={() => setFilters(prev => ({ ...prev, grain: !prev.grain }))} />
-                        <span className="cb-custom"></span> Grains
-                      </label>
-                      <label className="toggle-cb label-grid">
-                        <input type="checkbox" checked={filters.grid} onChange={() => setFilters(prev => ({ ...prev, grid: !prev.grid }))} />
-                        <span className="cb-custom"></span> Grid
-                      </label>
-                    </div>
-                  </div>
+                  <h3>LIVE VIEW (SPLIT COMPARE)</h3>
                 </div>
 
                 <div className="card-body canvas-container">
                   <canvas ref={canvasRef} id="wafer-canvas"></canvas>
                   <div ref={scannerRef} className="scanning-bar" id="scanner-line"></div>
-
-                  <div className="cam-overlay-info">
-                    <span className="fps-counter" id="fps-val">30.0 FPS</span>
-                    <span className="lens-tag font-mono">10X</span>
-                  </div>
                 </div>
 
                 {/* Live Telemetry Status Bar */}
@@ -1045,11 +1186,11 @@ export default function App() {
                     </div>
                     <div className="perf-tile">
                       <span className="perf-lbl">NPU</span>
-                      <span className="perf-val font-mono" id="npu-text">{sysStats.npu}%</span>
+                      <span className="perf-val font-mono" id="npu-text">{sysStats.npu < 0 || sysStats.npu === -1 ? 'N/A' : `${sysStats.npu}%`}</span>
                     </div>
                     <div className="perf-tile">
                       <span className="perf-lbl">RAM</span>
-                      <span className="perf-val font-mono" id="ram-text-short">{sysStats.ram}M</span>
+                      <span className="perf-val font-mono" id="ram-text-short">{sysStats.ram}%</span>
                     </div>
                     <div className="perf-tile">
                       <span className="perf-lbl">TEMP</span>
@@ -1161,27 +1302,29 @@ export default function App() {
                     <table className="history-table">
                       <thead>
                         <tr>
+                          <th>Machine no</th>
+                          <th>Batch</th>
+                          <th>Wafer no</th>
+                          <th>XY Coordinate</th>
                           <th>Time</th>
-                          <th>ID</th>
                           <th>Result</th>
                           <th>Failure Reason</th>
-                          <th>Confidence</th>
-                          <th>Action</th>
                         </tr>
                       </thead>
                       <tbody id="history-table-body">
                         {history.slice(0, 15).map((item, index) => (
                           <tr key={index} onClick={() => { setSelectedModalItem(item); setCurrentInspection(item); }} title="Click to view inspection image">
+                            <td className="font-mono">{item.machineNo || "PROBER01"}</td>
+                            <td className="font-mono">{item.batch || "-"}</td>
+                            <td className="font-mono">{item.waferNo || item.id || "-"}</td>
+                            <td className="font-mono">{item.xyCoord || "-"}</td>
                             <td>{item.timeShort}</td>
-                            <td className="font-mono">{item.id}</td>
                             <td>
                               <span className={`badge-result ${item.decision.toLowerCase()}`}>{item.decision}</span>
                             </td>
-                            <td className="font-mono" style={{ fontSize: "11px", color: item.reason && item.reason !== "-" ? "var(--color-fail)" : "inherit" }}>
+                            <td className="font-mono" style={{ fontSize: "13px", color: item.reason && item.reason !== "-" ? "var(--color-fail)" : "inherit" }}>
                               {item.reason || "-"}
                             </td>
-                            <td className="font-mono">{item.confidence}%</td>
-                            <td className="font-mono" style={{ fontSize: "10px" }}>{item.machineAction}</td>
                           </tr>
                         ))}
                       </tbody>
@@ -1199,24 +1342,93 @@ export default function App() {
         {activeTab === "analytics" && (
           <div className="tab-content active-tab" id="view-analytics">
             <main className="analytics-layout">
-              <div className="analytics-top-bar">
-                <div className="filter-controls">
-                  <div className="filter-item">
-                    <label>Result Filter:</label>
+              <div className="analytics-top-bar" style={{ display: "flex", gap: "16px", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", padding: "12px 20px" }}>
+                <div className="filter-controls" style={{ display: "flex", gap: "14px", alignItems: "center", flexWrap: "wrap", flex: 1 }}>
+                  <div className="filter-item" style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                    <label style={{ fontSize: "12px", fontWeight: "bold", color: "var(--text-muted)" }}>Result:</label>
                     <div className="filter-pill-group" id="filter-pills">
                       {["ALL", "PASS", "FAIL"].map(pill => (
                         <button key={pill} className={`filter-pill ${analyticsFilter === pill ? "active" : ""}`} onClick={() => setAnalyticsFilter(pill)}>{pill}</button>
                       ))}
                     </div>
                   </div>
-                  <div className="filter-item">
-                    <label htmlFor="filter-search">Search:</label>
-                    <input type="text" id="filter-search" value={filterSearch} onChange={(e) => setFilterSearch(e.target.value)} placeholder="Search Wafer ID..." />
+
+                  {uniqueMachines.length > 0 && (
+                    <div className="filter-item" style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                      <label style={{ fontSize: "12px", fontWeight: "bold", color: "var(--text-muted)" }}>Machine:</label>
+                      <select 
+                        value={analyticsMachineFilter} 
+                        onChange={(e) => setAnalyticsMachineFilter(e.target.value)}
+                        style={{ padding: "6px 10px", borderRadius: "6px", border: "1px solid var(--border-color)", background: "var(--bg-input)", color: "var(--text-main)", fontSize: "13px" }}
+                      >
+                        <option value="ALL">All Machines ({uniqueMachines.length})</option>
+                        {uniqueMachines.map(m => (
+                          <option key={m} value={m}>{m}</option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+
+                  {uniqueBatches.length > 0 && (
+                    <div className="filter-item" style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                      <label style={{ fontSize: "12px", fontWeight: "bold", color: "var(--text-muted)" }}>Batch:</label>
+                      <select 
+                        value={analyticsBatchFilter} 
+                        onChange={(e) => setAnalyticsBatchFilter(e.target.value)}
+                        style={{ padding: "6px 10px", borderRadius: "6px", border: "1px solid var(--border-color)", background: "var(--bg-input)", color: "var(--text-main)", fontSize: "13px" }}
+                      >
+                        <option value="ALL">All Batches ({uniqueBatches.length})</option>
+                        {uniqueBatches.map(b => (
+                          <option key={b} value={b}>{b}</option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+
+                  <div className="filter-item" style={{ display: "flex", alignItems: "center", gap: "6px", flex: 1, minWidth: "200px" }}>
+                    <span style={{ fontSize: "14px" }}>🔍</span>
+                    <input 
+                      type="text" 
+                      id="filter-search" 
+                      value={filterSearch} 
+                      onChange={(e) => setFilterSearch(e.target.value)} 
+                      placeholder="Search Batch, Wafer, XY, Site, Pad, Reason..." 
+                      style={{ width: "100%", padding: "6px 12px", borderRadius: "6px", border: "1px solid var(--border-color)", background: "var(--bg-input)", color: "var(--text-main)", fontSize: "13px" }}
+                    />
                   </div>
+
+                  {(filterSearch || analyticsFilter !== "ALL" || analyticsBatchFilter !== "ALL" || analyticsMachineFilter !== "ALL") && (
+                    <button 
+                      style={{ padding: "5px 12px", borderRadius: "6px", border: "none", background: "rgba(255,50,50,0.2)", color: "#ff6b6b", cursor: "pointer", fontSize: "12px", fontWeight: "bold" }}
+                      onClick={() => { setFilterSearch(""); setAnalyticsFilter("ALL"); setAnalyticsBatchFilter("ALL"); setAnalyticsMachineFilter("ALL"); }}
+                    >
+                      Reset Filter ✕
+                    </button>
+                  )}
                 </div>
-                <button className="excel-export-btn" id="btn-export-excel" onClick={exportToCSV}>
-                  <span className="excel-icon"></span> Export spreadsheet (.csv)
-                </button>
+
+                <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+                  <button className="excel-export-btn" id="btn-export-excel" onClick={exportToCSV}>
+                    <span className="excel-icon"></span> Export spreadsheet (.csv)
+                  </button>
+                  <button 
+                    style={{ padding: "6px 12px", borderRadius: "6px", border: "1px solid rgba(239,68,68,0.4)", background: "rgba(239,68,68,0.15)", color: "#ef4444", fontWeight: "bold", cursor: "pointer", fontSize: "12px", display: "flex", alignItems: "center", gap: "4px" }}
+                    title="Clear all stored inspection history from database"
+                    onClick={() => {
+                      if (window.confirm("Are you sure you want to clear all history records from database?")) {
+                        fetch(`${apiBase}/api/history`, { method: "DELETE" })
+                          .then(r => r.json())
+                          .then(res => {
+                            setHistory([]);
+                            alert("🧹 Database history cleared successfully!");
+                          })
+                          .catch(e => alert("Failed to clear history: " + e));
+                      }
+                    }}
+                  >
+                    Clear DB History 🗑️
+                  </button>
+                </div>
               </div>
 
               <div className="analytics-dashboard-grid">
@@ -1249,15 +1461,15 @@ export default function App() {
 
                   <div className="hmi-card donut-chart-card">
                     <div className="card-header"><h3>YIELD DISTRIBUTION</h3></div>
-                    <div className="card-body chart-body">
-                      <canvas ref={donutCanvasRef} id="chart-yield-donut"></canvas>
+                    <div className="card-body chart-body" style={{ height: "180px", position: "relative" }}>
+                      <Doughnut data={donutChartData} options={donutChartOptions} />
                     </div>
                   </div>
 
                   <div className="hmi-card bar-chart-card">
                     <div className="card-header"><h3>DEFECT CAUSES BREAKDOWN</h3></div>
-                    <div className="card-body chart-body">
-                      <canvas ref={barCanvasRef} id="chart-defect-bar"></canvas>
+                    <div className="card-body chart-body" style={{ height: "180px", position: "relative" }}>
+                      <Bar data={barChartData} options={barChartOptions} />
                     </div>
                   </div>
                 </div>
@@ -1266,8 +1478,8 @@ export default function App() {
                 <div className="analytics-dashboard-col right-dashboard-col">
                   <div className="hmi-card line-chart-card">
                     <div className="card-header"><h3>LATENCY HISTORY (MS)</h3></div>
-                    <div className="card-body chart-body">
-                      <canvas ref={lineCanvasRef} id="chart-latency-line"></canvas>
+                    <div className="card-body chart-body" style={{ height: "180px", position: "relative" }}>
+                      <Line data={lineChartData} options={lineChartOptions} />
                     </div>
                   </div>
 
@@ -1281,28 +1493,34 @@ export default function App() {
                         <thead>
                           <tr>
                             <th>Timestamp</th>
-                            <th>Wafer ID</th>
+                            <th>Machine no</th>
+                            <th>Batch</th>
+                            <th>Wafer no</th>
+                            <th>Pad / Site</th>
+                            <th>XY Coordinate</th>
                             <th>Decision</th>
                             <th>Failure Reason</th>
-                            <th>Confidence</th>
                             <th>Latency</th>
-                            <th>System Action</th>
                           </tr>
                         </thead>
                         <tbody id="analytics-table-body">
                           {filteredHistory.map((rec, index) => (
                             <tr key={index} onClick={() => setSelectedModalItem(rec)} title="Click to view inspection image">
                               <td>{rec.timestamp}</td>
-                              <td className="font-mono">{rec.id}</td>
+                              <td className="font-mono">{rec.machineNo || "PROBER01"}</td>
+                              <td className="font-mono">{rec.batch || "-"}</td>
+                              <td className="font-mono">{rec.waferNo || rec.id || "-"}</td>
+                              <td className="font-mono" style={{ color: "var(--accent-color, #3b82f6)", fontWeight: "bold" }}>
+                                {rec.pad ? `${rec.pad}${rec.site && rec.site !== '-' ? ` (${rec.site})` : ''}` : "-"}
+                              </td>
+                              <td className="font-mono">{rec.xyCoord || "-"}</td>
                               <td>
                                 <span className={`badge-result ${rec.decision.toLowerCase()}`}>{rec.decision}</span>
                               </td>
-                              <td className="font-mono" style={{ fontSize: "11px", color: rec.reason && rec.reason !== "-" ? "var(--color-fail)" : "inherit" }}>
+                              <td className="font-mono" style={{ fontSize: "13px", color: rec.reason && rec.reason !== "-" ? "var(--color-fail)" : "inherit" }}>
                                 {rec.reason || "-"}
                               </td>
-                              <td className="font-mono">{rec.confidence}%</td>
                               <td className="font-mono">{rec.inferenceTime} ms</td>
-                              <td className="font-mono" style={{ fontSize: "9px" }}>{rec.machineAction}</td>
                             </tr>
                           ))}
                         </tbody>
@@ -1353,6 +1571,17 @@ export default function App() {
                         </div>
                       </div>
 
+                      <input 
+                        type="file" 
+                        ref={fileInputRef} 
+                        accept=".tflite,.onnx,.pth" 
+                        style={{ display: "none" }} 
+                        onChange={(e) => {
+                          if (e.target.files && e.target.files.length > 0) {
+                            handleUploadFile(e.target.files[0]);
+                          }
+                        }}
+                      />
                       <div
                         className={`upload-drop-zone ${isDragging ? "active-drag" : ""}`}
                         id="upload-zone"
@@ -1363,23 +1592,14 @@ export default function App() {
                           setIsDragging(false);
                           const files = e.dataTransfer.files;
                           if (files.length > 0) {
-                            const newModel = {
-                              name: files[0].name,
-                              version: "v1.0.0",
-                              engine: files[0].name.endsWith(".tflite") ? "TFLite / NPU" : "ONNX / CPU",
-                              size: `${(files[0].size / (1024 * 1024)).toFixed(1)} MB`,
-                              accuracy: "95.0%",
-                              classes: uploadClassCount,
-                              active: false
-                            };
-                            setModelsList(prev => [newModel, ...prev]);
+                            handleUploadFile(files[0]);
                           }
                         }}
                       >
                         <div className="upload-icon-box"></div>
                         <p className="upload-main-text">Drag & Drop model file here</p>
                         <p className="upload-sub-text">Imports as {uploadClassCount}-Class Model (.onnx, .tflite)</p>
-                        <button className="select-file-btn" id="btn-select-file">Select File</button>
+                        <button className="select-file-btn" id="btn-select-file" onClick={() => fileInputRef.current && fileInputRef.current.click()}>Select File</button>
                       </div>
                     </div>
                   </div>
@@ -1437,14 +1657,12 @@ export default function App() {
                           {modelsList
                             .filter(m => modelFilter === "ALL" || String(m.classes || 3) === modelFilter)
                             .map((model, idx) => {
-                              const originalIdx = modelsList.findIndex(m => m.name === model.name);
-                              const isClassCompatible = (model.classes || 3) === selectedClasses;
                               return (
                                 <tr key={idx} className={model.active ? "row-active-model" : ""}>
                                   <td className="font-mono">{model.name}</td>
-                                  <td className="font-mono">{model.version}</td>
-                                  <td className="font-mono">{model.engine}</td>
-                                  <td className="font-mono">{model.size}</td>
+                                  <td className="font-mono">{model.version || "v1.0.0"}</td>
+                                  <td className="font-mono">{model.engine || "TFLite / NPU"}</td>
+                                  <td className="font-mono">{model.size || "-"}</td>
                                   <td>
                                     <span
                                       className="badge-result"
@@ -1458,10 +1676,10 @@ export default function App() {
                                       {model.classes || 3} Classes {model.classes === 2 ? "(Pad+Mark)" : "(Pad+Mark+Grain)"}
                                     </span>
                                   </td>
-                                  <td className="font-mono">{model.accuracy}</td>
+                                  <td className="font-mono">{model.accuracy || "97.5%"}</td>
                                   <td>
                                     <span className={`badge-result ${model.active ? "pass" : "warn"}`}>
-                                      {model.active ? `ACTIVE RUNNING (${model.classes}C)` : "INACTIVE"}
+                                      {model.active ? `ACTIVE RUNNING (${model.classes || 3}C)` : "INACTIVE"}
                                     </span>
                                   </td>
                                   <td>
@@ -1471,17 +1689,12 @@ export default function App() {
                                       <div style={{ display: "flex", gap: "6px" }}>
                                         <button
                                           className="action-btn-sm"
-                                          onClick={() => {
-                                            setSelectedClasses(model.classes || 3);
-                                            setModelsList(prev => prev.map((m, i) => ({ ...m, active: i === originalIdx })));
-                                          }}
-                                          title={`Activate model and switch system mode to ${model.classes || 3} Classes`}
+                                          onClick={() => handleActivateModel(model)}
+                                          title={`Activate model on i.MX8 NPU and switch system mode to ${model.classes || 3} Classes`}
                                         >
                                           ACTIVATE ({model.classes || 3}C)
                                         </button>
-                                        <button className="action-btn-sm delete-red" onClick={() => {
-                                          setModelsList(prev => prev.filter((_, i) => i !== originalIdx));
-                                        }}>DELETE</button>
+                                        <button className="action-btn-sm delete-red" onClick={() => handleDeleteModel(model)}>DELETE</button>
                                       </div>
                                     )}
                                   </td>
@@ -1506,17 +1719,42 @@ export default function App() {
           <div className="modal-overlay" onClick={() => setSelectedModalItem(null)}>
             <div className="modal-content-box hmi-card" onClick={(e) => e.stopPropagation()}>
               <div className="card-header modal-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-                  <h3>HISTORICAL INSPECTION: {selectedModalItem.id}</h3>
+                <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+                  <h3 style={{ margin: 0 }}>HISTORICAL INSPECTION</h3>
                   <span className={`badge-result ${selectedModalItem.decision.toLowerCase()}`}>
                     {selectedModalItem.decision}
                   </span>
+                  {history.length > 0 && (
+                    <span className="modal-counter-badge">
+                      ( ภาพที่ {history.findIndex(item => item.id === selectedModalItem.id) + 1} / {history.length} )
+                    </span>
+                  )}
                 </div>
+
                 <button className="clear-history-btn" onClick={() => setSelectedModalItem(null)}>✕ Close</button>
               </div>
 
-              <div className="card-body modal-body-grid" style={{ display: "grid", gridTemplateColumns: "1fr 280px", gap: "16px", padding: "16px" }}>
+              <div className="card-body modal-body-grid" style={{ display: "grid", gridTemplateColumns: "1fr 320px", gap: "16px", padding: "16px" }}>
                 <div className="modal-image-container" style={{ position: "relative", background: "#0b0f19", borderRadius: "8px", overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center", minHeight: "380px" }}>
+                  {history.length > 1 && (
+                    <>
+                      <button 
+                        className="modal-nav-arrow left" 
+                        onClick={handlePrevModalItem} 
+                        title="Previous Image (Left Arrow ◀)"
+                      >
+                        ◀
+                      </button>
+                      <button 
+                        className="modal-nav-arrow right" 
+                        onClick={handleNextModalItem} 
+                        title="Next Image (Right Arrow ▶)"
+                      >
+                        ▶
+                      </button>
+                    </>
+                  )}
+
                   {selectedModalItem.comparisonImageUrl || selectedModalItem.imageUrl ? (
                     <img
                       src={resolveImageUrl(
@@ -1541,21 +1779,21 @@ export default function App() {
                     </div>
                   )}
 
-                  <div style={{ position: "absolute", top: "10px", right: "10px", display: "flex", gap: "4px" }}>
+                  <div className="modal-view-mode-group">
                     <button
-                      className={`compare-btn ${modalViewMode === "split" ? "active" : ""}`}
+                      className={`modal-view-btn ${modalViewMode === "split" ? "active" : ""}`}
                       onClick={() => setModalViewMode("split")}
                     >
                       Split Compare
                     </button>
                     <button
-                      className={`compare-btn ${modalViewMode === "annotated" ? "active" : ""}`}
+                      className={`modal-view-btn ${modalViewMode === "annotated" ? "active" : ""}`}
                       onClick={() => setModalViewMode("annotated")}
                     >
                       Annotated
                     </button>
                     <button
-                      className={`compare-btn ${modalViewMode === "raw" ? "active" : ""}`}
+                      className={`modal-view-btn ${modalViewMode === "raw" ? "active" : ""}`}
                       onClick={() => setModalViewMode("raw")}
                     >
                       Raw Image
@@ -1566,11 +1804,15 @@ export default function App() {
                 <div className="modal-meta-panel" style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
                   <div className="model-meta-box" style={{ flex: 1, display: "flex", flexDirection: "column", gap: "8px" }}>
                     <div className="meta-row">
+                      <span className="meta-lbl">Machine no:</span>
+                      <span className="meta-val font-mono">{selectedModalItem.machineNo || "PROBER01"}</span>
+                    </div>
+                    <div className="meta-row">
                       <span className="meta-lbl">Wafer ID:</span>
                       <span className="meta-val font-mono">{selectedModalItem.id}</span>
                     </div>
                     <div className="meta-row">
-                      <span className="meta-lbl">Timestamp:</span>
+                      <span className="meta-lbl">Time stamp:</span>
                       <span className="meta-val font-mono">{selectedModalItem.timestamp}</span>
                     </div>
                     <div className="meta-row">
@@ -1578,32 +1820,36 @@ export default function App() {
                       <span className={`badge-result ${selectedModalItem.decision.toLowerCase()}`}>{selectedModalItem.decision}</span>
                     </div>
                     <div className="meta-row">
-                      <span className="meta-lbl">Failure Reason:</span>
+                      <span className="meta-lbl">Failure reason:</span>
                       <span className="meta-val font-mono" style={{ color: selectedModalItem.reason && selectedModalItem.reason !== "-" ? "var(--color-fail)" : "inherit" }}>
                         {selectedModalItem.reason || "-"}
                       </span>
                     </div>
                     <div className="meta-row">
-                      <span className="meta-lbl">Machine Action:</span>
-                      <span className="meta-val font-mono">{selectedModalItem.machineAction}</span>
+                      <span className="meta-lbl">Batch:</span>
+                      <span className="meta-val font-mono">{selectedModalItem.batch || "-"}</span>
                     </div>
                     <div className="meta-row">
-                      <span className="meta-lbl">Confidence:</span>
-                      <span className="meta-val font-mono highlight-green">{selectedModalItem.confidence}%</span>
+                      <span className="meta-lbl">Datetime:</span>
+                      <span className="meta-val font-mono">{selectedModalItem.dateTime || selectedModalItem.timestamp}</span>
                     </div>
                     <div className="meta-row">
-                      <span className="meta-lbl">Inference Latency:</span>
-                      <span className="meta-val font-mono highlight-blue">{selectedModalItem.inferenceTime} ms</span>
+                      <span className="meta-lbl">Site coordinate:</span>
+                      <span className="meta-val font-mono">{selectedModalItem.xyCoord || "-"}</span>
                     </div>
                     <div className="meta-row">
-                      <span className="meta-lbl">Rule Time:</span>
-                      <span className="meta-val font-mono highlight-green">{selectedModalItem.ruleTime || 0} ms</span>
+                      <span className="meta-lbl">Probecard site:</span>
+                      <span className="meta-val font-mono">{selectedModalItem.site || "-"}</span>
+                    </div>
+                    <div className="meta-row">
+                      <span className="meta-lbl">Pad no.:</span>
+                      <span className="meta-val font-mono">{selectedModalItem.pad || "-"}</span>
                     </div>
                   </div>
 
                   <button
                     className="override-btn active"
-                    style={{ width: "100%", padding: "10px", fontSize: "11px", fontWeight: "bold", background: "var(--accent-blue)", color: "#fff", cursor: "pointer", borderRadius: "6px" }}
+                    style={{ width: "100%", padding: "12px", fontSize: "14px", fontWeight: "bold", background: "var(--accent-blue)", color: "#fff", cursor: "pointer", borderRadius: "6px" }}
                     onClick={() => {
                       setCurrentInspection(selectedModalItem);
                       setActiveTab("inspect");

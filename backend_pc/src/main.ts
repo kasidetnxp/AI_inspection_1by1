@@ -1,5 +1,6 @@
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
+import { EventsGateway } from './events/events.gateway';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
@@ -13,6 +14,11 @@ async function bootstrap() {
 
   const PORT = process.env.PORT || 3000;
   const EDGE_IP = process.env.EDGE_IP || '10.42.0.95';
+
+  const httpServer = app.getHttpServer();
+  const eventsGateway = app.get(EventsGateway);
+  eventsGateway.initRawWebSocketServer(httpServer);
+
   await app.listen(PORT);
 
   console.log('============================================================');
@@ -23,3 +29,4 @@ async function bootstrap() {
   console.log('============================================================');
 }
 bootstrap();
+

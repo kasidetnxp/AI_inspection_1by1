@@ -21,17 +21,26 @@ else
 fi
 
 
-# 1. Start i.MX8 Edge Backend (FastAPI on Port 8000)
-# if lsof -i:8000 > /dev/null 2>&1 || nc -z localhost 8000 > /dev/null 2>&1; then
-#     echo "⚙️ i.MX8 Edge Backend is already running on http://localhost:8000"
-# else
-#     echo "🧠 Launching i.MX8 Edge AI Backend Server (FastAPI)..."
-#     nohup "$PROJECT_DIR/.venv/bin/python3" -m uvicorn backend_imx8.main:app --host 0.0.0.0 --port 8000 < /dev/null > "$PROJECT_DIR/backend_imx8.log" 2>&1 &
-#     sleep 2
-# fi
+# 1. Start Edge AI Backend (FastAPI on Port 8000)
+if lsof -iTCP:8000 -sTCP:LISTEN > /dev/null 2>&1 || nc -z 127.0.0.1 8000 > /dev/null 2>&1; then
+    echo "⚙️ Edge AI Backend is already running on http://localhost:8000"
+else
+    echo "🧠 Launching Edge AI Backend Server (FastAPI on PC)..."
+    
+    # [Mode A: Local PC Execution - Active]
+    cd "$PROJECT_DIR/backend_imx8" || exit 1
+    nohup setsid "$PROJECT_DIR/.venv/bin/python3" -m uvicorn main:app --host 0.0.0.0 --port 8000 < /dev/null > "$PROJECT_DIR/backend_imx8.log" 2>&1 &
+    cd "$PROJECT_DIR" || exit 1
+
+    # [Mode B: Physical i.MX8 Hardware Execution]
+    # If running backend directly on physical i.MX8 board (10.42.0.95), comment out Mode A above.
+    # echo "ℹ️ Connecting to remote i.MX8 Board at http://10.42.0.95:8000"
+
+    sleep 2
+fi
 
 # 2. Start PC Central Backend (NestJS on Port 3000)
-if lsof -i:3000 > /dev/null 2>&1 || nc -z localhost 3000 > /dev/null 2>&1; then
+if lsof -iTCP:3000 -sTCP:LISTEN > /dev/null 2>&1 || nc -z 127.0.0.1 3000 > /dev/null 2>&1; then
     echo "⚙️ NestJS PC Central Backend is already running on http://localhost:3000"
 else
     echo "🪺 Launching PC Central Backend Server (NestJS)..."
@@ -42,7 +51,7 @@ else
 fi
 
 # 3. Start Frontend HMI Dev Server (React 19 + Vite on Port 5173)
-if lsof -i:5173 > /dev/null 2>&1 || nc -z localhost 5173 > /dev/null 2>&1; then
+if lsof -iTCP:5173 -sTCP:LISTEN > /dev/null 2>&1 || nc -z 127.0.0.1 5173 > /dev/null 2>&1; then
     echo "💻 Frontend HMI server is already running on http://localhost:5173"
 else
     echo "💻 Launching React 19 HMI Frontend Server..."

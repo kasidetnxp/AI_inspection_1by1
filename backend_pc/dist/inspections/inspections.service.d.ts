@@ -1,9 +1,11 @@
 import { EventsGateway } from '../events/events.gateway';
+import { HardwareMonitorService } from '../events/hardware-monitor.service';
 export declare class InspectionsService {
     private readonly eventsGateway;
+    private readonly hardwareMonitorService;
     private latestRecord;
     private history;
-    constructor(eventsGateway: EventsGateway);
+    constructor(eventsGateway: EventsGateway, hardwareMonitorService: HardwareMonitorService);
     saveInspection(payload: any): {
         status: string;
         record: {

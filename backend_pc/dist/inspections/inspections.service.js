@@ -8,13 +8,18 @@ var __decorate = (this && this.__decorate) || function (decorators, target, key,
 var __metadata = (this && this.__metadata) || function (k, v) {
     if (typeof Reflect === "object" && typeof Reflect.metadata === "function") return Reflect.metadata(k, v);
 };
+var __param = (this && this.__param) || function (paramIndex, decorator) {
+    return function (target, key) { decorator(target, key, paramIndex); }
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.InspectionsService = void 0;
 const common_1 = require("@nestjs/common");
 const events_gateway_1 = require("../events/events.gateway");
+const hardware_monitor_service_1 = require("../events/hardware-monitor.service");
 let InspectionsService = class InspectionsService {
-    constructor(eventsGateway) {
+    constructor(eventsGateway, hardwareMonitorService) {
         this.eventsGateway = eventsGateway;
+        this.hardwareMonitorService = hardwareMonitorService;
         this.latestRecord = {};
         this.history = [];
     }
@@ -58,11 +63,12 @@ let InspectionsService = class InspectionsService {
         return this.history;
     }
     getStats() {
+        const metrics = this.hardwareMonitorService ? this.hardwareMonitorService.getLatestMetrics() : { cpu: 0, ram: 0, temp: 0, npu: -1 };
         return {
-            cpu: Math.floor(30 + Math.random() * 20),
-            npu: Math.floor(80 + Math.random() * 15),
-            ram: Math.floor(1024 + Math.random() * 200),
-            temp: parseFloat((45.0 + Math.random() * 5.0).toFixed(1)),
+            cpu: metrics.cpu,
+            npu: metrics.npu,
+            ram: metrics.ram,
+            temp: metrics.temp,
             node: 'PC NestJS Central Server',
             db: 'PostgreSQL / Memory',
             edgeIp: process.env.EDGE_IP || '10.42.0.95',
@@ -72,6 +78,8 @@ let InspectionsService = class InspectionsService {
 exports.InspectionsService = InspectionsService;
 exports.InspectionsService = InspectionsService = __decorate([
     (0, common_1.Injectable)(),
-    __metadata("design:paramtypes", [events_gateway_1.EventsGateway])
+    __param(1, (0, common_1.Inject)((0, common_1.forwardRef)(() => hardware_monitor_service_1.HardwareMonitorService))),
+    __metadata("design:paramtypes", [events_gateway_1.EventsGateway,
+        hardware_monitor_service_1.HardwareMonitorService])
 ], InspectionsService);
 //# sourceMappingURL=inspections.service.js.map

@@ -5,7 +5,7 @@ paths:
   image_dir: "simulation/image"       # Raw image shared folder from Machine (Prober)
   process_dir: "simulation/process"   # Temporary buffer folder during AI inference
   output_dir: "simulation/output"     # Output folder for annotated/comparison visual images
-  judge_dir: "simulation/judge"       # Judgement folder for machine (.txt result files)
+  judge_dir: "simulation/judgement"   # Judgement folder for machine (.txt result files)
 
 # AI Model Inference Settings
 ai:
