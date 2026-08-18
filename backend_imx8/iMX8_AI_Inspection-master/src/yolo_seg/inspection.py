@@ -411,7 +411,30 @@ def run_inspection(image_results,
             # Inspect each pad individually
             for pad_idx, pad in enumerate(pads):
                 matched_pms = pad_to_pms[pad_idx]
-                matched_grains = pad_to_grains[pad_idx]
+                matched_grains_raw = pad_to_grains[pad_idx]
+
+                # Filter out grains that overlap with probemarks — these are
+                # duplicate detections of the same feature and must NOT inflate
+                # the pad area via convex-hull correction.
+                if matched_pms and matched_grains_raw:
+                    pm_union = np.zeros(img.shape[:2], dtype=np.uint8)
+                    for pm in matched_pms:
+                        cv2.fillPoly(pm_union, [pm], 255)
+                    matched_grains = []
+                    for gr in matched_grains_raw:
+                        gr_mask = polygon_to_mask(gr, img.shape)
+                        gr_area = cv2.countNonZero(gr_mask)
+                        if gr_area == 0:
+                            continue
+                        overlap = cv2.countNonZero(cv2.bitwise_and(gr_mask, pm_union))
+                        if overlap / gr_area < 0.3:
+                            matched_grains.append(gr)
+                        else:
+                            print(f"[GRAIN-FILTER] {image_name}: Skipping grain overlapping PM "
+                                  f"({overlap/gr_area*100:.0f}% overlap)")
+                else:
+                    matched_grains = matched_grains_raw
+
                 matched_defects = matched_pms + matched_grains
                 
                 # Correct pad shape: Logical OR pad mask with matched probe marks AND grains,
@@ -469,8 +492,11 @@ def run_inspection(image_results,
                         cv2.fillPoly(pad_mask_calc, [pad_calc], 255)
                         pad_area = cv2.countNonZero(pad_mask_calc)
                         
-                        # Scale PM mask to target size using nearest-neighbor interpolation to preserve binary values
-                        pm_mask_calc = cv2.resize(combined_pm_mask, (target_w, target_h), interpolation=cv2.INTER_NEAREST)
+                        # Scale PM polygons to target size and rasterize (same method as pad)
+                        pm_mask_calc = np.zeros((target_h, target_w), dtype=np.uint8)
+                        for pm in matched_pms:
+                            pm_calc = scale_polygon(pm, img.shape, (target_h, target_w))
+                            cv2.fillPoly(pm_mask_calc, [pm_calc], 255)
                         total_pm_area = cv2.countNonZero(pm_mask_calc)
                     else:
                         pad_mask = np.zeros((h_orig, w_orig), dtype=np.uint8)
@@ -526,10 +552,10 @@ def run_inspection(image_results,
                             min_dist_um = dist_um
                             
                         # ③ FAIL / WARNING / PASS decision (distance-based)
-                        if dist_um <= FAIL_DIST_UM:
+                        if dist_um < FAIL_DIST_UM:
                             decision = "FAIL"
                             reasons.append(
-                                f"Probemark too close to edge ({dist_um:.2f}um <= {FAIL_DIST_UM}um)"
+                                f"Probemark too close to edge ({dist_um:.2f}um < {FAIL_DIST_UM}um)"
                             )
                             _warning_counter[image_name] = 0
                         elif WARN_DIST_UM > 0.0 and dist_um < (FAIL_DIST_UM + WARN_DIST_UM):
@@ -558,7 +584,7 @@ def run_inspection(image_results,
                                 )
                             
                         # ④ Visualization
-                        is_fail = (dist_um <= FAIL_DIST_UM or ratio > MAX_RATIO_PCT or
+                        is_fail = (dist_um < FAIL_DIST_UM or ratio > MAX_RATIO_PCT or
                                    (MIN_RATIO_PCT > 0.0 and ratio < MIN_RATIO_PCT))
                         is_warn = any("[WARNING]" in r_txt for r_txt in reasons)
                         
@@ -569,8 +595,8 @@ def run_inspection(image_results,
                         cv2.drawContours(img_viz, [pm], -1, pm_color, 2)
                         
                         # Distance line color
-                        is_dist_fail = (dist_um <= FAIL_DIST_UM)
-                        is_dist_warn = (WARN_DIST_UM > 0.0) and (dist_um > FAIL_DIST_UM) and (dist_um < FAIL_DIST_UM + WARN_DIST_UM)
+                        is_dist_fail = (dist_um < FAIL_DIST_UM)
+                        is_dist_warn = (WARN_DIST_UM > 0.0) and (dist_um >= FAIL_DIST_UM) and (dist_um < FAIL_DIST_UM + WARN_DIST_UM)
                         dist_line_color = (0, 0, 255) if is_dist_fail else (0, 255, 255) if is_dist_warn else (0, 255, 0)
                         
                         # Distance helper line drawing
@@ -598,9 +624,19 @@ def run_inspection(image_results,
         # Grain — visual only, does NOT affect pass/fail
         # ------------------------------------------------------------------
         if len(grains) > 0:
+            # Build union mask of all probemarks to prevent drawing grain over probemarks
+            all_pm_mask = np.zeros(img.shape[:2], dtype=np.uint8)
+            for pm in probemarks:
+                cv2.fillPoly(all_pm_mask, [pm], 255)
+
             for gr in grains:
-                # Draw grain contours in Magenta (255, 0, 255) instead of Red (0, 0, 255) without text labels
-                cv2.drawContours(img_viz, [gr], -1, (255, 0, 255), 2)
+                gr_mask = polygon_to_mask(gr, img.shape)
+                # Subtract probemark area from grain mask so grain never draws over PM
+                gr_clean_mask = cv2.bitwise_and(gr_mask, cv2.bitwise_not(all_pm_mask))
+                if cv2.countNonZero(gr_clean_mask) > 0:
+                    cnts, _ = cv2.findContours(gr_clean_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                    if cnts:
+                        cv2.drawContours(img_viz, cnts, -1, (255, 0, 255), 2)
 
         # ------------------------------------------------------------------
         # Total Probemark % Area Badge (Bottom-Right Corner)

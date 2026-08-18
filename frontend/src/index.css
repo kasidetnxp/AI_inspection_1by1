@@ -343,8 +343,8 @@ body.light-theme .status-pill {
 
 .bottom-row {
   grid-column: 1 / 4;
-  display: grid;
-  grid-template-columns: minmax(260px, 300px) 1fr;
+  display: flex;
+  width: 100%;
   gap: 12px;
   overflow: hidden;
 }
@@ -352,14 +352,14 @@ body.light-theme .status-pill {
 /* 1. DECISION PANEL */
 .decision-card {
   flex-shrink: 0;
-  height: 175px;
+  height: auto;
 }
 
 .central-decision {
   display: flex;
   flex-direction: column;
-  justify-content: space-between;
-  padding: 12px;
+  justify-content: center;
+  padding: 14px;
 }
 
 .decision-display {
@@ -983,7 +983,10 @@ body.light-theme .sub-stat {
 .alarm-time { font-family: var(--font-mono); font-size: calc(9.5px * var(--font-scale, 1.35)); color: var(--text-muted); }
 
 /* 7. INSPECTION HISTORY */
-.history-card { grid-column: 2; }
+.history-card {
+  width: 100%;
+  flex: 1;
+}
 
 .clear-history-btn {
   background: transparent;

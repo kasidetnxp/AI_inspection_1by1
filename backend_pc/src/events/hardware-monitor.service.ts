@@ -62,7 +62,7 @@ export class HardwareMonitorService implements OnModuleInit, OnModuleDestroy {
       }
 
       const targetIp = targets[index];
-      const targetUrl = `ws://${targetIp}:8000/ws/hardware`;
+      const targetUrl = `ws://${targetIp}:8001/ws/hardware`;
       console.log(`📡 [NestJS PC] Connecting to i.MX8 Hardware WS at ${targetUrl}...`);
 
       try {

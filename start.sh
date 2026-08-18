@@ -21,20 +21,20 @@ else
 fi
 
 
-# 1. Start Edge AI Backend (FastAPI on Port 8000)
-if lsof -iTCP:8000 -sTCP:LISTEN > /dev/null 2>&1 || nc -z 127.0.0.1 8000 > /dev/null 2>&1; then
-    echo "⚙️ Edge AI Backend is already running on http://localhost:8000"
+# 1. Start Edge AI Backend (FastAPI on Port 8001)
+if lsof -iTCP:8001 -sTCP:LISTEN > /dev/null 2>&1 || nc -z 127.0.0.1 8001 > /dev/null 2>&1; then
+    echo "⚙️ Edge AI Backend is already running on http://localhost:8001"
 else
     echo "🧠 Launching Edge AI Backend Server (FastAPI on PC)..."
     
     # [Mode A: Local PC Execution - Active]
     cd "$PROJECT_DIR/backend_imx8" || exit 1
-    nohup setsid "$PROJECT_DIR/.venv/bin/python3" -m uvicorn main:app --host 0.0.0.0 --port 8000 < /dev/null > "$PROJECT_DIR/backend_imx8.log" 2>&1 &
+    nohup setsid "$PROJECT_DIR/.venv/bin/python3" -m uvicorn main:app --host 0.0.0.0 --port 8001 < /dev/null > "$PROJECT_DIR/backend_imx8.log" 2>&1 &
     cd "$PROJECT_DIR" || exit 1
 
     # [Mode B: Physical i.MX8 Hardware Execution]
     # If running backend directly on physical i.MX8 board (10.42.0.95), comment out Mode A above.
-    # echo "ℹ️ Connecting to remote i.MX8 Board at http://10.42.0.95:8000"
+    # echo "ℹ️ Connecting to remote i.MX8 Board at http://10.42.0.95:8001"
 
     sleep 2
 fi
@@ -75,7 +75,7 @@ fi
 echo "============================================================"
 echo "✅ All nodes launched successfully!"
 echo "👉 HMI Dashboard URL:        $URL"
-echo "👉 i.MX8 Edge API (Port 8000): http://localhost:8000/docs"
+echo "👉 i.MX8 Edge API (Port 8001): http://localhost:8001/docs"
 echo "👉 PC NestJS API (Port 3000):  http://localhost:3000/api/v1/latest-inspection"
 echo "👉 Logs saved to:            backend_imx8.log, backend_pc.log & frontend.log"
 echo "👉 To stop all nodes:        ./stop.sh"

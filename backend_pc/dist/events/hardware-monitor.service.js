@@ -60,7 +60,7 @@ let HardwareMonitorService = class HardwareMonitorService {
                 return;
             }
             const targetIp = targets[index];
-            const targetUrl = `ws://${targetIp}:8000/ws/hardware`;
+            const targetUrl = `ws://${targetIp}:8001/ws/hardware`;
             console.log(`📡 [NestJS PC] Connecting to i.MX8 Hardware WS at ${targetUrl}...`);
             try {
                 const client = new WebSocket(targetUrl);

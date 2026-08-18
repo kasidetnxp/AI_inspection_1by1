@@ -20,7 +20,7 @@ async function bootstrap() {
     console.log(`🪺 NestJS Central PC Backend is running on: http://localhost:${PORT}`);
     console.log(`📡 WebSocket Gateway (Socket.io) ready on:  ws://localhost:${PORT}`);
     console.log(`👉 Ingestion Endpoint:                     POST http://localhost:${PORT}/api/v1/inspections`);
-    console.log(`🌐 i.MX8 Edge Node Target IP:              http://${EDGE_IP}:8000`);
+    console.log(`🌐 i.MX8 Edge Node Target IP:              http://${EDGE_IP}:8001`);
     console.log('============================================================');
 }
 bootstrap();

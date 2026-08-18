@@ -46,6 +46,12 @@ export default function App() {
 
   const [currentInspection, setCurrentInspection] = useState({
     id: "-",
+    batch: "-",
+    waferNo: "-",
+    xyCoord: "-",
+    site: "-",
+    pad: "-",
+    temp: "-",
     padsTotal: 0,
     padsDetected: 0,
     probeMarks: 0,
@@ -93,31 +99,70 @@ export default function App() {
   const [analyticsBatchFilter, setAnalyticsBatchFilter] = useState("ALL");
   const [analyticsMachineFilter, setAnalyticsMachineFilter] = useState("ALL");
 
+  // Filter logs logic for Analytics Tab
+  const historyList = Array.isArray(history) ? history : [];
+  const filteredHistory = historyList.filter(record => {
+    if (analyticsFilter === "PASS" && record.decision !== "PASS") return false;
+    if (analyticsFilter === "FAIL" && record.decision === "PASS") return false;
+    if (analyticsBatchFilter !== "ALL" && record.batch !== analyticsBatchFilter) return false;
+    if (analyticsMachineFilter !== "ALL" && (record.machineNo || "PROBER01") !== analyticsMachineFilter) return false;
+    if (filterSearch.trim() !== "") {
+      const q = filterSearch.toLowerCase().trim();
+      const searchableStr = [
+        record.machineNo, record.batch, record.waferNo, record.xyCoord,
+        record.site, record.pad, record.timeShort, record.timestamp,
+        record.decision, record.reason, record.productSetup, record.temp, record.id
+      ].join(" ").toLowerCase();
+      if (!searchableStr.includes(q)) return false;
+    }
+    return true;
+  });
+
   // Historical Inspection Image Modal State
   const [selectedModalItem, setSelectedModalItem] = useState(null);
+  const [selectedModalIndex, setSelectedModalIndex] = useState(null);
   const [modalViewMode, setModalViewMode] = useState("split");
+
+  const getActiveModalList = () => {
+    return (activeTab === "analytics" && filteredHistory.length > 0) ? filteredHistory : historyList;
+  };
+
+  const openModalWithItem = (item, idx) => {
+    setSelectedModalItem(item);
+    setSelectedModalIndex(idx);
+    mapInspectionData(item);
+  };
+
+  const closeModal = () => {
+    setSelectedModalItem(null);
+    setSelectedModalIndex(null);
+  };
 
   const handlePrevModalItem = (e) => {
     if (e) e.stopPropagation();
-    const currentList = typeof filteredHistory !== "undefined" && filteredHistory.length > 0 ? filteredHistory : history;
-    if (!selectedModalItem || currentList.length === 0) return;
-    const idx = currentList.findIndex(item => item === selectedModalItem || (item.imageUrl && item.imageUrl === selectedModalItem.imageUrl) || (item.timestamp === selectedModalItem.timestamp && item.pad === selectedModalItem.pad && item.xyCoord === selectedModalItem.xyCoord));
-    if (idx > 0) {
-      setSelectedModalItem(currentList[idx - 1]);
-    } else {
-      setSelectedModalItem(currentList[currentList.length - 1]);
+    const currentList = getActiveModalList();
+    if (currentList.length === 0) return;
+    const curIdx = selectedModalIndex !== null && selectedModalIndex >= 0 ? selectedModalIndex : 0;
+    const prevIdx = (curIdx - 1 + currentList.length) % currentList.length;
+    const prevItem = currentList[prevIdx];
+    if (prevItem) {
+      setSelectedModalIndex(prevIdx);
+      setSelectedModalItem(prevItem);
+      mapInspectionData(prevItem);
     }
   };
 
   const handleNextModalItem = (e) => {
     if (e) e.stopPropagation();
-    const currentList = typeof filteredHistory !== "undefined" && filteredHistory.length > 0 ? filteredHistory : history;
-    if (!selectedModalItem || currentList.length === 0) return;
-    const idx = currentList.findIndex(item => item === selectedModalItem || (item.imageUrl && item.imageUrl === selectedModalItem.imageUrl) || (item.timestamp === selectedModalItem.timestamp && item.pad === selectedModalItem.pad && item.xyCoord === selectedModalItem.xyCoord));
-    if (idx >= 0 && idx < currentList.length - 1) {
-      setSelectedModalItem(currentList[idx + 1]);
-    } else {
-      setSelectedModalItem(currentList[0]);
+    const currentList = getActiveModalList();
+    if (currentList.length === 0) return;
+    const curIdx = selectedModalIndex !== null && selectedModalIndex >= 0 ? selectedModalIndex : 0;
+    const nextIdx = (curIdx + 1) % currentList.length;
+    const nextItem = currentList[nextIdx];
+    if (nextItem) {
+      setSelectedModalIndex(nextIdx);
+      setSelectedModalItem(nextItem);
+      mapInspectionData(nextItem);
     }
   };
 
@@ -125,16 +170,16 @@ export default function App() {
     if (!selectedModalItem) return;
     const handleKeyDown = (e) => {
       if (e.key === "ArrowLeft") {
-        handlePrevModalItem();
+        handlePrevModalItem(e);
       } else if (e.key === "ArrowRight") {
-        handleNextModalItem();
+        handleNextModalItem(e);
       } else if (e.key === "Escape") {
-        setSelectedModalItem(null);
+        closeModal();
       }
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [selectedModalItem, history]);
+  }, [selectedModalItem, selectedModalIndex, history, activeTab, analyticsFilter, analyticsBatchFilter, analyticsMachineFilter, filterSearch]);
 
   // Drag and drop uploading state
   const fileInputRef = useRef(null);
@@ -161,8 +206,8 @@ export default function App() {
         return res.json();
       })
       .then(data => {
-        alert(`📥 [UPLOAD SUCCESS] Model '${file.name}' saved to i.MX8 node!`);
-        fetchModels();
+        alert(`[UPLOAD SUCCESS] อัปโหลดโมเดล '${file.name}' สำเร็จ!\n\nกำลังเปิดใช้งานโมเดลนี้สำหรับการตรวจจับ...`);
+        handleActivateModel({ name: file.name, classes: uploadClassCount });
       })
       .catch(err => {
         console.error("Upload error:", err);
@@ -191,8 +236,9 @@ export default function App() {
         return res.json();
       })
       .then(data => {
-        setSelectedClasses(model.classes || 3);
-        alert(`⚡ [NPU HOT-SWAP SUCCESS]\nModel '${model.name}' activated on i.MX8 NPU Delegate!`);
+        const activeClasses = data.classes || model.classes || 3;
+        setSelectedClasses(activeClasses);
+        alert(`[NPU HOT-SWAP SUCCESS]\nModel '${model.name}' (${activeClasses}-Class Auto-Detected) activated on i.MX8 NPU Delegate!`);
         fetchModels();
       })
       .catch(err => {
@@ -212,7 +258,7 @@ export default function App() {
         return res.json();
       })
       .then(data => {
-        alert(`🗑️ Deleted model '${model.name}' successfully!`);
+        alert(`Deleted model '${model.name}' successfully!`);
         fetchModels();
       })
       .catch(err => {
@@ -267,7 +313,7 @@ export default function App() {
   };
 
   const [edgeIp, setEdgeIp] = useState(getDefaultEdgeIp);
-  const apiBase = `http://${edgeIp}:8000`;
+  const apiBase = `http://${edgeIp}:8001`;
 
   const resolveImageUrl = (url) => {
     if (!url) return null;
@@ -309,8 +355,8 @@ export default function App() {
     let reconnectTimeout = null;
 
     const connectBackend = () => {
-      console.log(`Attempting connection to FastAPI server at ${edgeIp}:8000...`);
-      ws = new WebSocket(`ws://${edgeIp}:8000/ws`);
+      console.log(`Attempting connection to FastAPI server at ${edgeIp}:8001...`);
+      ws = new WebSocket(`ws://${edgeIp}:8001/ws`);
 
       ws.onopen = () => {
         console.log("WebSocket connection established with NXP i.MX8 backend.");
@@ -403,7 +449,7 @@ export default function App() {
     const connectHardwareMonitor = () => {
       const hostname = typeof window !== "undefined" ? (window.location.hostname || "localhost") : "localhost";
       const pcWsUrl = `ws://${hostname}:3000/ws/hardware`;
-      const imx8WsUrl = `ws://${edgeIp}:8000/ws/hardware`;
+      const imx8WsUrl = `ws://${edgeIp}:8001/ws/hardware`;
 
       // Try PC NestJS relay first, with fallback to direct i.MX8 WebSocket
       const targetUrl = pcWsUrl;
@@ -533,6 +579,12 @@ export default function App() {
         // 3. Atomically update decision banner, full-screen theme and result text at the exact same frame!
         setCurrentInspection({
           id: data.id,
+          batch: data.batch,
+          waferNo: data.waferNo,
+          xyCoord: data.xyCoord,
+          site: data.site,
+          pad: data.pad,
+          temp: data.temp || "-",
           padsTotal: data.padsTotal,
           padsDetected: data.padsDetected,
           probeMarks: data.probeMarks,
@@ -564,6 +616,12 @@ export default function App() {
       setLoadedRawImage(null);
       setCurrentInspection({
         id: data.id,
+        batch: data.batch,
+        waferNo: data.waferNo,
+        xyCoord: data.xyCoord,
+        site: data.site,
+        pad: data.pad,
+        temp: data.temp || "-",
         padsTotal: data.padsTotal,
         padsDetected: data.padsDetected,
         probeMarks: data.probeMarks,
@@ -675,6 +733,12 @@ export default function App() {
     const waferId = `#WF-${2940 + nextId}`;
     const newRecord = {
       id: waferId,
+      machineNo: "PROBER01",
+      batch: "B2940",
+      waferNo: waferId,
+      pad: "P1",
+      site: "S1",
+      xyCoord: `X${Math.floor(Math.random() * 50)}Y${Math.floor(Math.random() * 50)}`,
       timestamp: clockStr,
       timeShort: clockStr.split(" ")[1],
       decision: decision,
@@ -962,6 +1026,18 @@ export default function App() {
     }
   };
 
+  // Helper to format Batch/Wafer identifier fully without extraneous delimiters
+  const formatBatchWafer = (item) => {
+    if (!item) return "-";
+    const b = (item.batch && item.batch !== "-") ? item.batch : "";
+    const w = (item.waferNo && item.waferNo !== "-") ? item.waferNo : (item.id && !item.id.startsWith("#WF") ? item.id : "");
+    if (b && w) {
+      if (w.includes(b)) return w;
+      return `${b}${w}`;
+    }
+    return w || b || item.waferNo || item.batch || item.id || "-";
+  };
+
   // ==========================================
   // REPORT DATA EXPORT (CSV SPREADSHEET)
   // ==========================================
@@ -971,12 +1047,21 @@ export default function App() {
       return;
     }
     const csvRows = [
-      ["Timestamp", "Wafer ID", "Decision", "Failure Reason", "Confidence Score (%)", "Inference Latency (ms)", "Rule Execution Time (ms)", "System Action"]
+      ["Timestamp", "Machine no", "Batch/Wafer no", "Pad", "Site", "XY Coordinate", "Temp", "Result", "Failure Reason", "Latency (ms)"]
     ];
     history.forEach(rec => {
+      const bw = formatBatchWafer(rec);
       csvRows.push([
-        rec.timestamp, rec.id, rec.decision, rec.reason || "-",
-        rec.confidence, rec.inferenceTime, rec.ruleTime || 0, rec.machineAction
+        `"${rec.timestamp || rec.timeShort || "-"}"`,
+        `"${rec.machineNo || "PROBER01"}"`,
+        `"${bw}"`,
+        `"${rec.pad || "-"}"`,
+        `"${rec.site || "-"}"`,
+        `"${rec.xyCoord || "-"}"`,
+        `"${rec.temp || "-"}"`,
+        `"${rec.decision}"`,
+        `"${rec.reason || "-"}"`,
+        rec.inferenceTime ?? 0
       ]);
     });
     const csvContent = "data:text/csv;charset=utf-8," + csvRows.map(e => e.join(",")).join("\n");
@@ -990,26 +1075,8 @@ export default function App() {
   };
 
   // Filter logs logic for Analytics Tab
-  const historyList = Array.isArray(history) ? history : [];
   const uniqueBatches = Array.from(new Set(historyList.map(item => item.batch).filter(b => b && b !== "-")));
   const uniqueMachines = Array.from(new Set(historyList.map(item => item.machineNo || "PROBER01").filter(m => m && m !== "-")));
-
-  const filteredHistory = historyList.filter(record => {
-    if (analyticsFilter === "PASS" && record.decision !== "PASS") return false;
-    if (analyticsFilter === "FAIL" && record.decision === "PASS") return false;
-    if (analyticsBatchFilter !== "ALL" && record.batch !== analyticsBatchFilter) return false;
-    if (analyticsMachineFilter !== "ALL" && (record.machineNo || "PROBER01") !== analyticsMachineFilter) return false;
-    if (filterSearch.trim() !== "") {
-      const q = filterSearch.toLowerCase().trim();
-      const searchableStr = [
-        record.machineNo, record.batch, record.waferNo, record.xyCoord,
-        record.site, record.pad, record.timeShort, record.timestamp,
-        record.decision, record.reason, record.productSetup, record.temp, record.id
-      ].join(" ").toLowerCase();
-      if (!searchableStr.includes(q)) return false;
-    }
-    return true;
-  });
 
   // Calculate local yields
   const totalScans = historyList.length;
@@ -1047,10 +1114,10 @@ export default function App() {
               )}
               <div className="status-pill" style={{ background: "rgba(2, 132, 199, 0.08)", border: "1px solid rgba(2, 132, 199, 0.25)", padding: "2px 6px", borderRadius: "4px", display: "flex", alignItems: "center", gap: "4px" }}>
                 <span style={{ fontSize: "12px", fontWeight: "bold", color: "var(--color-info)" }}>EDGE IP:</span>
-                <input 
-                  type="text" 
-                  value={edgeIp} 
-                  onChange={(e) => updateEdgeIp(e.target.value)} 
+                <input
+                  type="text"
+                  value={edgeIp}
+                  onChange={(e) => updateEdgeIp(e.target.value)}
                   style={{ background: "transparent", border: "none", color: "inherit", fontSize: "12px", fontFamily: "var(--font-mono)", width: "95px", outline: "none", fontWeight: "bold" }}
                   title="Change i.MX8 Edge Node IP Address"
                 />
@@ -1088,44 +1155,14 @@ export default function App() {
                   <div id="decision-indicator" className={`decision-display ${currentInspection.decision === "PASS" ? "state-pass" : currentInspection.decision === "FAIL" ? "state-fail" : "state-idle"}`}>
                     <span className="decision-title">{currentInspection.decision === "-" ? "WAITING" : currentInspection.decision}</span>
                   </div>
-
-                  <div className="machine-action-block">
-                    <div className="machine-action-status" id="machine-action-text">{currentInspection.machineAction}</div>
-
-                    <div className="manual-overrides" style={{ display: "flex", flexDirection: "column", gap: "8px", width: "100%" }}>
-                      <div style={{ display: "flex", gap: "8px" }}>
-                        <button id="btn-action-continue" className={`override-btn ${currentInspection.decision === "PASS" ? "active" : ""}`} style={{ flex: 1 }}>CONTINUE</button>
-                        <button id="btn-action-stop" className={`override-btn ${currentInspection.decision === "FAIL" ? "active" : ""}`} style={{ flex: 1 }}>STOP</button>
-                      </div>
-                      <button 
-                        className="override-btn" 
-                        style={{ width: "100%", background: "rgba(255, 165, 0, 0.2)", border: "1px solid rgba(255, 165, 0, 0.6)", color: "#ffb703", fontWeight: "bold", padding: "8px" }}
-                        title="Simulate Prober Machine sending .END.bmp signal to summarize batch judgement TXT"
-                        onClick={() => {
-                          fetch(`${apiBase}/api/simulate-end`, { method: "POST" })
-                            .then(res => res.json())
-                            .then(data => {
-                              if (data.status === "success") {
-                                alert(`🏁 [END SIGNAL TRIGGERED]\nSummarized ${data.totalImages} images!\nResult: ${data.decision} (${data.mask})\nJudgement File Saved: ${data.filename}`);
-                              } else {
-                                alert(`ℹ️ ${data.message || "No images in current batch queue to summarize."}`);
-                              }
-                            })
-                            .catch(err => alert(`Error sending END signal: ${err}`));
-                        }}
-                      >
-                        🏁 SIMULATE END SIGNAL
-                      </button>
-                    </div>
-                  </div>
                 </div>
               </div>
 
               {/* SUMMARY PANEL */}
-              <div className="hmi-card summary-card">
+              <div className="hmi-card summary-card" style={{ flex: 1 }}>
                 <div className="card-header">
                   <h3>SUMMARY</h3>
-                  <span className="pill-id" id="wafer-id-tag">{currentInspection.id}</span>
+                  <span className="pill-id" id="wafer-id-tag">{formatBatchWafer(currentInspection)}</span>
                 </div>
                 <div className="card-body">
                   <div className="metric-list">
@@ -1140,6 +1177,10 @@ export default function App() {
                     <div className="metric-row">
                       <span className="met-label">Rule Time</span>
                       <span className="met-value font-mono highlight-green" id="val-rule-time">{currentInspection.ruleTime || 0} ms</span>
+                    </div>
+                    <div className="metric-row">
+                      <span className="met-label">Temp</span>
+                      <span className="met-value font-mono highlight-orange" id="val-temp">{currentInspection.temp || "-"}</span>
                     </div>
                   </div>
                 </div>
@@ -1255,41 +1296,17 @@ export default function App() {
               </div>
             </section>
 
-            {/* BOTTOM ROW: ALARMS & HISTORY */}
+            {/* BOTTOM ROW: HISTORY */}
             <section className="grid-row bottom-row">
-                {/* ALARM PANEL */}
-                <div className="hmi-card alarm-card">
-                  <div className="card-header">
-                    <h3>ALARMS</h3>
-                    <span className="alarm-badge" id="alarm-count-badge">{activeAlarms.length}</span>
-                  </div>
-                  <div className="card-body">
-                    <div className="alarm-list-container" id="alarm-container">
-                      {activeAlarms.length === 0 ? (
-                        <div className="alarm-empty-state" id="alarm-empty">OK</div>
-                      ) : (
-                        activeAlarms.map((alarm, idx) => (
-                          <div className="alarm-entry-row" key={idx}>
-                            <div className="alarm-indicator-red"></div>
-                            <div className="alarm-body-content">
-                              <div className="alarm-name-lbl">{alarm.name}</div>
-                              <div className="alarm-time-lbl font-mono">{alarm.time}</div>
-                            </div>
-                          </div>
-                        ))
-                      )}
-                    </div>
-                  </div>
-                </div>
-
-                {/* HISTORY PANEL */}
-                <div className="hmi-card history-card" style={{ flex: 1 }}>
-                  <div className="card-header">
-                    <h3>HISTORY</h3>
-                    <button className="clear-history-btn" id="btn-clear-history" onClick={() => {
+              {/* HISTORY PANEL */}
+              <div className="hmi-card history-card" style={{ width: "100%" }}>
+                <div className="card-header">
+                  <h3>HISTORY</h3>
+                  <button className="clear-history-btn" id="btn-clear-history" onClick={() => {
                       setHistory([]);
                       setCurrentInspection({
-                        id: "-", padsTotal: 0, padsDetected: 0, probeMarks: 0, grains: 0,
+                        id: "-", batch: "-", waferNo: "-", xyCoord: "-", site: "-", pad: "-", temp: "-",
+                        padsTotal: 0, padsDetected: 0, probeMarks: 0, grains: 0,
                         confidence: 0, inferenceTime: 0, ruleTime: 0, decision: "-", machineAction: "WAITING"
                       });
                       setLoadedImage(null);
@@ -1297,41 +1314,47 @@ export default function App() {
                       fetch(`${apiBase}/api/history`, { method: "DELETE" })
                         .catch(err => console.error("Error clearing backend history:", err));
                     }}>Clear</button>
-                  </div>
-                  <div className="card-body table-container">
-                    <table className="history-table">
-                      <thead>
-                        <tr>
-                          <th>Machine no</th>
-                          <th>Batch</th>
-                          <th>Wafer no</th>
-                          <th>XY Coordinate</th>
-                          <th>Time</th>
-                          <th>Result</th>
-                          <th>Failure Reason</th>
-                        </tr>
-                      </thead>
-                      <tbody id="history-table-body">
-                        {history.slice(0, 15).map((item, index) => (
-                          <tr key={index} onClick={() => { setSelectedModalItem(item); setCurrentInspection(item); }} title="Click to view inspection image">
-                            <td className="font-mono">{item.machineNo || "PROBER01"}</td>
-                            <td className="font-mono">{item.batch || "-"}</td>
-                            <td className="font-mono">{item.waferNo || item.id || "-"}</td>
-                            <td className="font-mono">{item.xyCoord || "-"}</td>
-                            <td>{item.timeShort}</td>
-                            <td>
-                              <span className={`badge-result ${item.decision.toLowerCase()}`}>{item.decision}</span>
-                            </td>
-                            <td className="font-mono" style={{ fontSize: "13px", color: item.reason && item.reason !== "-" ? "var(--color-fail)" : "inherit" }}>
-                              {item.reason || "-"}
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
                 </div>
-              </section>
+                <div className="card-body table-container">
+                  <table className="history-table">
+                    <thead>
+                      <tr>
+                        <th>Timestamp</th>
+                        <th>Machine no</th>
+                        <th>Batch/Wafer no</th>
+                        <th>Pad</th>
+                        <th>Site</th>
+                        <th>XY Coordinate</th>
+                        <th>Temp</th>
+                        <th>Result</th>
+                        <th>Failure Reason</th>
+                        <th>Latency</th>
+                      </tr>
+                    </thead>
+                    <tbody id="history-table-body">
+                      {history.slice(0, 15).map((item, index) => (
+                        <tr key={index} onClick={() => openModalWithItem(item, index)} title="Click to view inspection image">
+                          <td>{item.timestamp || item.timeShort || "-"}</td>
+                          <td className="font-mono">{item.machineNo || "PROBER01"}</td>
+                          <td className="font-mono">{formatBatchWafer(item)}</td>
+                          <td className="font-mono">{item.pad || "-"}</td>
+                          <td className="font-mono">{item.site || "-"}</td>
+                          <td className="font-mono">{item.xyCoord || "-"}</td>
+                          <td className="font-mono">{item.temp || "-"}</td>
+                          <td>
+                            <span className={`badge-result ${item.decision.toLowerCase()}`}>{item.decision}</span>
+                          </td>
+                          <td className="font-mono" style={{ fontSize: "13px", color: item.reason && item.reason !== "-" ? "var(--color-fail)" : "inherit" }}>
+                            {item.reason || "-"}
+                          </td>
+                          <td className="font-mono">{item.inferenceTime ?? 0} ms</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </section>
 
           </main>
         </div>
@@ -1356,8 +1379,8 @@ export default function App() {
                   {uniqueMachines.length > 0 && (
                     <div className="filter-item" style={{ display: "flex", alignItems: "center", gap: "6px" }}>
                       <label style={{ fontSize: "12px", fontWeight: "bold", color: "var(--text-muted)" }}>Machine:</label>
-                      <select 
-                        value={analyticsMachineFilter} 
+                      <select
+                        value={analyticsMachineFilter}
                         onChange={(e) => setAnalyticsMachineFilter(e.target.value)}
                         style={{ padding: "6px 10px", borderRadius: "6px", border: "1px solid var(--border-color)", background: "var(--bg-input)", color: "var(--text-main)", fontSize: "13px" }}
                       >
@@ -1372,8 +1395,8 @@ export default function App() {
                   {uniqueBatches.length > 0 && (
                     <div className="filter-item" style={{ display: "flex", alignItems: "center", gap: "6px" }}>
                       <label style={{ fontSize: "12px", fontWeight: "bold", color: "var(--text-muted)" }}>Batch:</label>
-                      <select 
-                        value={analyticsBatchFilter} 
+                      <select
+                        value={analyticsBatchFilter}
                         onChange={(e) => setAnalyticsBatchFilter(e.target.value)}
                         style={{ padding: "6px 10px", borderRadius: "6px", border: "1px solid var(--border-color)", background: "var(--bg-input)", color: "var(--text-main)", fontSize: "13px" }}
                       >
@@ -1386,33 +1409,33 @@ export default function App() {
                   )}
 
                   <div className="filter-item" style={{ display: "flex", alignItems: "center", gap: "6px", flex: 1, minWidth: "200px" }}>
-                    <span style={{ fontSize: "14px" }}>🔍</span>
-                    <input 
-                      type="text" 
-                      id="filter-search" 
-                      value={filterSearch} 
-                      onChange={(e) => setFilterSearch(e.target.value)} 
-                      placeholder="Search Batch, Wafer, XY, Site, Pad, Reason..." 
+                    <input
+                      type="text"
+                      id="filter-search"
+                      value={filterSearch}
+                      onChange={(e) => setFilterSearch(e.target.value)}
+                      placeholder="Search Batch, Wafer, XY, Site, Pad, Reason..."
                       style={{ width: "100%", padding: "6px 12px", borderRadius: "6px", border: "1px solid var(--border-color)", background: "var(--bg-input)", color: "var(--text-main)", fontSize: "13px" }}
                     />
                   </div>
 
                   {(filterSearch || analyticsFilter !== "ALL" || analyticsBatchFilter !== "ALL" || analyticsMachineFilter !== "ALL") && (
-                    <button 
+                    <button
                       style={{ padding: "5px 12px", borderRadius: "6px", border: "none", background: "rgba(255,50,50,0.2)", color: "#ff6b6b", cursor: "pointer", fontSize: "12px", fontWeight: "bold" }}
                       onClick={() => { setFilterSearch(""); setAnalyticsFilter("ALL"); setAnalyticsBatchFilter("ALL"); setAnalyticsMachineFilter("ALL"); }}
                     >
-                      Reset Filter ✕
+                      Reset Filter
                     </button>
                   )}
                 </div>
 
-                <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+                <div style={{ display: "flex", gap: "8px", flexWrap: "wrap", alignItems: "center" }}>
                   <button className="excel-export-btn" id="btn-export-excel" onClick={exportToCSV}>
                     <span className="excel-icon"></span> Export spreadsheet (.csv)
                   </button>
-                  <button 
-                    style={{ padding: "6px 12px", borderRadius: "6px", border: "1px solid rgba(239,68,68,0.4)", background: "rgba(239,68,68,0.15)", color: "#ef4444", fontWeight: "bold", cursor: "pointer", fontSize: "12px", display: "flex", alignItems: "center", gap: "4px" }}
+                  <button
+                    className="clear-history-btn"
+                    id="btn-clear-db-history"
                     title="Clear all stored inspection history from database"
                     onClick={() => {
                       if (window.confirm("Are you sure you want to clear all history records from database?")) {
@@ -1420,13 +1443,13 @@ export default function App() {
                           .then(r => r.json())
                           .then(res => {
                             setHistory([]);
-                            alert("🧹 Database history cleared successfully!");
+                            alert("Database history cleared successfully!");
                           })
                           .catch(e => alert("Failed to clear history: " + e));
                       }
                     }}
                   >
-                    Clear DB History 🗑️
+                    Clear
                   </button>
                 </div>
               </div>
@@ -1494,33 +1517,33 @@ export default function App() {
                           <tr>
                             <th>Timestamp</th>
                             <th>Machine no</th>
-                            <th>Batch</th>
-                            <th>Wafer no</th>
-                            <th>Pad / Site</th>
+                            <th>Batch/Wafer no</th>
+                            <th>Pad</th>
+                            <th>Site</th>
                             <th>XY Coordinate</th>
-                            <th>Decision</th>
+                            <th>Temp</th>
+                            <th>Result</th>
                             <th>Failure Reason</th>
                             <th>Latency</th>
                           </tr>
                         </thead>
                         <tbody id="analytics-table-body">
                           {filteredHistory.map((rec, index) => (
-                            <tr key={index} onClick={() => setSelectedModalItem(rec)} title="Click to view inspection image">
-                              <td>{rec.timestamp}</td>
+                            <tr key={index} onClick={() => openModalWithItem(rec, index)} title="Click to view inspection image">
+                              <td>{rec.timestamp || rec.timeShort || "-"}</td>
                               <td className="font-mono">{rec.machineNo || "PROBER01"}</td>
-                              <td className="font-mono">{rec.batch || "-"}</td>
-                              <td className="font-mono">{rec.waferNo || rec.id || "-"}</td>
-                              <td className="font-mono" style={{ color: "var(--accent-color, #3b82f6)", fontWeight: "bold" }}>
-                                {rec.pad ? `${rec.pad}${rec.site && rec.site !== '-' ? ` (${rec.site})` : ''}` : "-"}
-                              </td>
+                              <td className="font-mono">{formatBatchWafer(rec)}</td>
+                              <td className="font-mono">{rec.pad || "-"}</td>
+                              <td className="font-mono">{rec.site || "-"}</td>
                               <td className="font-mono">{rec.xyCoord || "-"}</td>
+                              <td className="font-mono">{rec.temp || "-"}</td>
                               <td>
                                 <span className={`badge-result ${rec.decision.toLowerCase()}`}>{rec.decision}</span>
                               </td>
                               <td className="font-mono" style={{ fontSize: "13px", color: rec.reason && rec.reason !== "-" ? "var(--color-fail)" : "inherit" }}>
                                 {rec.reason || "-"}
                               </td>
-                              <td className="font-mono">{rec.inferenceTime} ms</td>
+                              <td className="font-mono">{rec.inferenceTime ?? 0} ms</td>
                             </tr>
                           ))}
                         </tbody>
@@ -1571,11 +1594,11 @@ export default function App() {
                         </div>
                       </div>
 
-                      <input 
-                        type="file" 
-                        ref={fileInputRef} 
-                        accept=".tflite,.onnx,.pth" 
-                        style={{ display: "none" }} 
+                      <input
+                        type="file"
+                        ref={fileInputRef}
+                        accept=".tflite,.onnx,.pth"
+                        style={{ display: "none" }}
                         onChange={(e) => {
                           if (e.target.files && e.target.files.length > 0) {
                             handleUploadFile(e.target.files[0]);
@@ -1716,7 +1739,7 @@ export default function App() {
             HISTORICAL INSPECTION IMAGE PREVIEW MODAL
             ========================================== */}
         {selectedModalItem && (
-          <div className="modal-overlay" onClick={() => setSelectedModalItem(null)}>
+          <div className="modal-overlay" onClick={closeModal}>
             <div className="modal-content-box hmi-card" onClick={(e) => e.stopPropagation()}>
               <div className="card-header modal-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
@@ -1724,31 +1747,31 @@ export default function App() {
                   <span className={`badge-result ${selectedModalItem.decision.toLowerCase()}`}>
                     {selectedModalItem.decision}
                   </span>
-                  {history.length > 0 && (
+                  {getActiveModalList().length > 0 && (
                     <span className="modal-counter-badge">
-                      ( ภาพที่ {history.findIndex(item => item.id === selectedModalItem.id) + 1} / {history.length} )
+                      ( ภาพที่ {selectedModalIndex !== null ? selectedModalIndex + 1 : 1} / {getActiveModalList().length} )
                     </span>
                   )}
                 </div>
 
-                <button className="clear-history-btn" onClick={() => setSelectedModalItem(null)}>✕ Close</button>
+                <button className="clear-history-btn" onClick={closeModal}>Close</button>
               </div>
 
               <div className="card-body modal-body-grid" style={{ display: "grid", gridTemplateColumns: "1fr 320px", gap: "16px", padding: "16px" }}>
                 <div className="modal-image-container" style={{ position: "relative", background: "#0b0f19", borderRadius: "8px", overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center", minHeight: "380px" }}>
-                  {history.length > 1 && (
+                  {getActiveModalList().length > 1 && (
                     <>
-                      <button 
-                        className="modal-nav-arrow left" 
-                        onClick={handlePrevModalItem} 
-                        title="Previous Image (Left Arrow ◀)"
+                      <button
+                        className="modal-nav-arrow left"
+                        onClick={handlePrevModalItem}
+                        title="Previous Image (Left Arrow)"
                       >
                         ◀
                       </button>
-                      <button 
-                        className="modal-nav-arrow right" 
-                        onClick={handleNextModalItem} 
-                        title="Next Image (Right Arrow ▶)"
+                      <button
+                        className="modal-nav-arrow right"
+                        onClick={handleNextModalItem}
+                        title="Next Image (Right Arrow)"
                       >
                         ▶
                       </button>
@@ -1757,19 +1780,19 @@ export default function App() {
 
                   {selectedModalItem.comparisonImageUrl || selectedModalItem.imageUrl ? (
                     <img
+                      key={selectedModalItem.id + "_" + (selectedModalItem.imageUrl || "") + "_" + modalViewMode}
                       src={resolveImageUrl(
                         modalViewMode === "raw"
                           ? selectedModalItem.rawImageUrl || selectedModalItem.imageUrl
                           : modalViewMode === "annotated"
-                          ? selectedModalItem.annotatedImageUrl || selectedModalItem.imageUrl
-                          : selectedModalItem.comparisonImageUrl || selectedModalItem.imageUrl
+                            ? selectedModalItem.annotatedImageUrl || selectedModalItem.imageUrl
+                            : selectedModalItem.comparisonImageUrl || selectedModalItem.imageUrl
                       )}
                       alt={selectedModalItem.id}
                       style={{ width: "100%", height: "auto", maxHeight: "450px", objectFit: "contain" }}
                     />
                   ) : (
                     <div style={{ padding: "30px", textAlign: "center", color: "var(--text-muted)" }}>
-                      <div style={{ fontSize: "36px", marginBottom: "8px" }}>🔍</div>
                       <div className="font-mono" style={{ fontSize: "14px", fontWeight: "bold", color: "var(--text-main)", marginBottom: "6px" }}>
                         WAFER IMAGE: WF_IMG_{selectedModalItem.id.replace("#WF-", "")}_{selectedModalItem.decision}.PNG
                       </div>
@@ -1845,18 +1868,22 @@ export default function App() {
                       <span className="meta-lbl">Pad no.:</span>
                       <span className="meta-val font-mono">{selectedModalItem.pad || "-"}</span>
                     </div>
+                    <div className="meta-row">
+                      <span className="meta-lbl">Temp:</span>
+                      <span className="meta-val font-mono">{selectedModalItem.temp || "-"}</span>
+                    </div>
                   </div>
 
                   <button
                     className="override-btn active"
                     style={{ width: "100%", padding: "12px", fontSize: "14px", fontWeight: "bold", background: "var(--accent-blue)", color: "#fff", cursor: "pointer", borderRadius: "6px" }}
                     onClick={() => {
-                      setCurrentInspection(selectedModalItem);
+                      mapInspectionData(selectedModalItem);
                       setActiveTab("inspect");
-                      setSelectedModalItem(null);
+                      closeModal();
                     }}
                   >
-                    LOAD INTO LIVE VIEW 🖥️
+                    LOAD INTO LIVE VIEW
                   </button>
                 </div>
               </div>

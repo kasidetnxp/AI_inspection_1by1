@@ -11,8 +11,8 @@ echo "🛑 Stopping Wafer AI Inspection System (All Nodes)..."
 echo "============================================================"
 
 # Stop i.MX8 Edge Backend
-pkill -f "backend_imx8.main:app" && echo "✅ i.MX8 Edge Backend terminated." || echo "ℹ️ i.MX8 Edge Backend was not running."
-pkill -f "uvicorn backend.main:app" > /dev/null 2>&1
+pkill -f "uvicorn main:app" > /dev/null 2>&1
+fuser -k 8001/tcp > /dev/null 2>&1 && echo "✅ i.MX8 Edge Backend terminated." || echo "ℹ️ i.MX8 Edge Backend was not running."
 
 # Stop NestJS PC Central Backend
 pkill -f "backend_pc" && echo "✅ NestJS PC Central Backend terminated." || echo "ℹ️ NestJS PC Central Backend was not running."

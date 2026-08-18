@@ -253,17 +253,21 @@ def save_inspection_to_db(record):
                     wafer_id, timestamp, decision, pads_total, pads_detected, 
                     probe_marks, grains, confidence, inference_time, rule_time, machine_action, reason, image_url
                 ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING id;
             """, (
                 record["id"], record["timestamp"], record["decision"], record["padsTotal"],
                 record["padsDetected"], record["probeMarks"], record["grains"], record["confidence"],
                 record["inferenceTime"], record["ruleTime"], record["machineAction"], record.get("reason", "-"), record.get("imageUrl")
             ))
+            new_id = cursor.fetchone()
+            if new_id:
+                record["db_id"] = new_id[0]
             conn.commit()
             cursor.close()
             conn.close()
             return
-        except Exception:
-            pass
+        except Exception as pg_err:
+            print("Failed to save to PostgreSQL:", pg_err)
             
     # SQLite Fallback
     try:
@@ -279,6 +283,7 @@ def save_inspection_to_db(record):
             record["padsDetected"], record["probeMarks"], record["grains"], record["confidence"],
             record["inferenceTime"], record["ruleTime"], record["machineAction"], record.get("reason", "-"), record.get("imageUrl")
         ))
+        record["db_id"] = cursor.lastrowid
         conn.commit()
         conn.close()
     except Exception as e:
@@ -356,7 +361,7 @@ def parse_wafer_filename(filename: str, prober_default="PROBER01") -> dict:
             m_bw = re.match(r'^([A-Z0-9]+?)(W[A-Z0-9]+)$', bw, re.IGNORECASE)
             if m_bw:
                 meta["batch"] = m_bw.group(1)
-                meta["waferNo"] = m_bw.group(2)
+                meta["waferNo"] = bw
             else:
                 meta["batch"] = bw
                 meta["waferNo"] = bw
@@ -478,7 +483,7 @@ def process_new_file(filepath, filename):
                 with inference_lock:  # NPU delegate not thread-safe
                     output_tensor = tflite_runner.infer(input_data)
                 inf_time = round((time.time() - t_start) * 1000, 1)
-                class_names = ["pad", "probemark", "grain"]
+                class_names = ["pad", "probemark"] if active_class_mode == 2 else ["pad", "probemark", "grain"]
                 class_ids, masks = postprocess_unet(output_tensor, output_details[0], meta, class_names)
                 for c_id, mask in zip(class_ids, masks):
                     if c_id == 0:  # Pad
@@ -490,7 +495,7 @@ def process_new_file(filepath, filename):
                         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
                         for c in contours:
                             mark_polys.append(c.astype(np.int32))
-                    elif c_id == 2 and active_class_mode == 3:  # Grain
+                    elif c_id == 2 and active_class_mode >= 3:  # Grain
                         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
                         for c in contours:
                             grain_polys.append(c.astype(np.int32))
@@ -499,7 +504,7 @@ def process_new_file(filepath, filename):
             print(f"[ERROR] Reused tflite_runner inference failed: {e}")
     else:
         # Fallback if tflite_runner was not pre-loaded at startup
-        model_path = PATHS_CFG.get("model_path") or SYS_CONFIG.get("ai", {}).get("model_path")
+        model_path = tflite_model_path or PATHS_CFG.get("model_path") or SYS_CONFIG.get("ai", {}).get("model_path")
         print(f"[DEBUG] config model_path='{model_path}', exists={os.path.exists(model_path) if model_path else 'N/A'}")
         if model_path and not os.path.exists(model_path):
             print(f"[DEBUG] model_path '{model_path}' not found, will search...")
@@ -551,7 +556,7 @@ def process_new_file(filepath, filename):
                                 contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
                                 for c in contours:
                                     mark_polys.append(c.astype(np.int32))
-                            elif c_id == 2 and active_class_mode == 3: # Grain
+                            elif c_id == 2 and active_class_mode >= 3: # Grain
                                 contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
                                 for c in contours:
                                     grain_polys.append(c.astype(np.int32))
@@ -568,11 +573,11 @@ def process_new_file(filepath, filename):
                             pass
                     
                     if is_unet:
-                        unet_dir = os.path.join(_THIS_DIR, "iMX8_AI_Inspection-master", "src", "unet")
-                        if unet_dir not in sys.path:
-                            sys.path.append(unet_dir)
+                        imx8_src_root = os.path.join(_THIS_DIR, "iMX8_AI_Inspection-master")
+                        if imx8_src_root not in sys.path:
+                            sys.path.insert(0, imx8_src_root)
                         import src.utils.config
-                        if active_class_mode == 3:
+                        if active_class_mode >= 3:
                             src.utils.config.ID_TO_LABEL[3] = "grain"
                             src.utils.config.NUM_CLASSES = 4
                         else:
@@ -607,7 +612,7 @@ def process_new_file(filepath, filename):
                         
                         pads = unet_res["pads"]
                         mark_polys = unet_res["probemarks"]
-                        grain_polys = unet_res.get("grains", []) if active_class_mode == 3 else []
+                        grain_polys = unet_res.get("grains", []) if active_class_mode >= 3 else []
                         confidence = 95.0
 
                     else:
@@ -624,7 +629,7 @@ def process_new_file(filepath, filename):
                                     class_name = r.names[int(cls_id)]
                                     if class_name == "pad": pads.append(polygon)
                                     elif class_name == "probemark": mark_polys.append(polygon)
-                                    elif class_name in ("grain", "contam") and active_class_mode == 3: grain_polys.append(polygon)
+                                    elif class_name in ("grain", "contam") and active_class_mode >= 3: grain_polys.append(polygon)
             except Exception as ai_err:
                 import traceback
                 print(f"AI Model execution error ({ai_err}). Using simulation metrics.")
@@ -713,9 +718,9 @@ def process_new_file(filepath, filename):
         if not fail_mode_str: fail_mode_str = "DEFECT"
 
     t_query = f"?t={int(time.time() * 1000)}"
-    ann_img_url = f"http://localhost:8000/visuals/annotated_{filename}{t_query}"
-    raw_img_url = f"http://localhost:8000/visuals/raw_{filename}{t_query}"
-    inspect_img_url = f"http://localhost:8000/visuals/inspect_{filename}{t_query}"
+    ann_img_url = f"http://localhost:8001/visuals/annotated_{filename}{t_query}"
+    raw_img_url = f"http://localhost:8001/visuals/raw_{filename}{t_query}"
+    inspect_img_url = f"http://localhost:8001/visuals/inspect_{filename}{t_query}"
     
     record = {
         "id": wafer_id,
@@ -761,22 +766,21 @@ def process_new_file(filepath, filename):
         txt_filename = f"{batch_decision}_{mask8_str}_{prober_name}_{t_stamp}.txt"
         txt_judgement_path = os.path.join(JUDGEMENT_DIR, txt_filename)
         
-        txt_content = (
-            f"RESULT={batch_decision}\n"
-            f"FAILURE_MODE_MASK={mask8_str}\n"
-            f"PROBER_NAME={prober_name}\n"
-            f"TIMESTAMP={now}\n"
-            f"TOTAL_IMAGES_IN_SESSION={len(current_batch_records)}\n"
-        )
-        if batch_decision == "FAIL":
-            txt_content += "FAILURES_DETECTED:\n"
-            for pos_num, fail_desc in sorted(fail_summary.items()):
-                txt_content += f"Position_{pos_num}={fail_desc}\n"
+        # Clean up existing old judgement text files so only 1 single file exists for machine reading
+        for old_file in os.listdir(JUDGEMENT_DIR):
+            if old_file.endswith(".txt"):
+                try:
+                    os.remove(os.path.join(JUDGEMENT_DIR, old_file))
+                except Exception:
+                    pass
+
+        # Write ONLY the 8-digit fail/pass mask code string
+        txt_content = mask8_str
 
         with open(txt_judgement_path, "w", encoding="utf-8") as f:
             f.write(txt_content)
             
-        print(f"🏁 [BATCH END] Generated Summary Judgement TXT: {txt_filename}")
+        print(f"🏁 [BATCH END] Generated Single Machine Judgement TXT: {txt_filename} (Content: {mask8_str})")
         current_batch_records.clear()
 
     save_inspection_to_db(record)
@@ -860,7 +864,19 @@ async def startup_event():
             from run_unet_tflite_folder import ModelRunner
             tflite_runner = ModelRunner(_model)
             tflite_model_path = _model
-            print(f"[BOOT] ✅ TFLite model and VX Delegate pre-loaded & warmed up in main thread: {_model}")
+            
+            # Auto detect classes from model output tensor shape or filename
+            out_details = tflite_runner.get_output_details()
+            if out_details and len(out_details) > 0 and 'shape' in out_details[0]:
+                shape = list(out_details[0]['shape'])
+                if shape[-1] in (2, 3, 4):
+                    active_class_mode = int(shape[-1])
+                elif len(shape) >= 2 and shape[1] in (2, 3, 4):
+                    active_class_mode = int(shape[1])
+            if "2class" in os.path.basename(_model).lower():
+                active_class_mode = 2
+
+            print(f"[BOOT] ✅ TFLite model pre-loaded ({active_class_mode}-Class mode): {_model}")
         except Exception as e:
             print(f"[BOOT] ❌ TFLite pre-load failed: {e}")
     else:
@@ -995,24 +1011,23 @@ async def trigger_end_signal():
     txt_filename = f"{batch_decision}_{mask8_str}_{prober_name}_{t_stamp}.txt"
     txt_judgement_path = os.path.join(JUDGEMENT_DIR, txt_filename)
     
-    txt_content = (
-        f"RESULT={batch_decision}\n"
-        f"FAILURE_MODE_MASK={mask8_str}\n"
-        f"PROBER_NAME={prober_name}\n"
-        f"TIMESTAMP={now}\n"
-        f"TOTAL_IMAGES_IN_SESSION={len(current_batch_records)}\n"
-    )
-    if batch_decision == "FAIL":
-        txt_content += "FAILURES_DETECTED:\n"
-        for pos_num, fail_desc in sorted(fail_summary.items()):
-            txt_content += f"Position_{pos_num}={fail_desc}\n"
+    # Clean up existing old judgement text files so only 1 single file exists for machine reading
+    for old_file in os.listdir(JUDGEMENT_DIR):
+        if old_file.endswith(".txt"):
+            try:
+                os.remove(os.path.join(JUDGEMENT_DIR, old_file))
+            except Exception:
+                pass
+
+    # Write ONLY the 8-digit fail/pass mask code string
+    txt_content = mask8_str
 
     with open(txt_judgement_path, "w", encoding="utf-8") as f:
         f.write(txt_content)
         
     count = len(current_batch_records)
     current_batch_records.clear()
-    print(f"🏁 [SIMULATION END] Generated Summary Judgement TXT: {txt_filename} for {count} records")
+    print(f"🏁 [SIMULATION END] Generated Single Machine Judgement TXT: {txt_filename} (Content: {mask8_str}) for {count} records")
     return {
         "status": "success",
         "filename": txt_filename,
@@ -1039,7 +1054,7 @@ async def get_models():
             continue
         try:
             for fname in os.listdir(s_dir):
-                if fname.lower().endswith((".tflite", ".onnx", ".pth")) and fname not in seen and "quant" not in fname.lower():
+                if fname.lower().endswith((".tflite", ".onnx", ".pth", ".pt")) and fname not in seen and "quant" not in fname.lower():
                     fpath = os.path.join(s_dir, fname)
                     if os.path.isfile(fpath):
                         seen.add(fname)
@@ -1080,8 +1095,8 @@ async def get_models():
 
 @app.post("/api/models/upload")
 async def upload_model(file: UploadFile = File(...), classes: int = 3):
-    if not file.filename.lower().endswith((".tflite", ".onnx", ".pth")):
-        raise HTTPException(status_code=400, detail="Invalid model file extension. Only .tflite, .onnx, and .pth files are supported.")
+    if not file.filename.lower().endswith((".tflite", ".onnx", ".pth", ".pt")):
+        raise HTTPException(status_code=400, detail="Invalid model file extension. Only .tflite, .onnx, .pth, and .pt files are supported.")
     
     target_path = os.path.join(MODELS_DIR, file.filename)
     try:
@@ -1128,33 +1143,65 @@ async def activate_model(payload: dict):
 
     with inference_lock:
         try:
-            from run_unet_tflite_folder import ModelRunner
             old_runner = tflite_runner
-            tflite_runner = ModelRunner(target_path)
             tflite_model_path = target_path
-            active_class_mode = req_classes
+            PATHS_CFG["model_path"] = target_path
+            if "ai" not in SYS_CONFIG: SYS_CONFIG["ai"] = {}
+            SYS_CONFIG["ai"]["model_path"] = target_path
+
+            # Auto-detect class count from filename hint first
+            det_classes = req_classes
+            fname_lower = os.path.basename(target_path).lower()
+            if "2class" in fname_lower: det_classes = 2
+            elif "4class" in fname_lower: det_classes = 4
+            elif "3class" in fname_lower: det_classes = 3
+
+            if target_path.lower().endswith((".tflite", ".onnx")):
+                from run_unet_tflite_folder import ModelRunner
+                tflite_runner = ModelRunner(target_path)
+                
+                # Check output tensor shape to auto-detect class count
+                try:
+                    out_details = tflite_runner.get_output_details()
+                    if out_details and len(out_details) > 0 and 'shape' in out_details[0]:
+                        shape = list(out_details[0]['shape'])
+                        if shape[-1] in (2, 3, 4):
+                            det_classes = int(shape[-1])
+                        elif len(shape) >= 2 and shape[1] in (2, 3, 4):
+                            det_classes = int(shape[1])
+                except Exception: pass
+
+                dummy_img = np.zeros((1, 640, 640, 3), dtype=np.float32)
+                try:
+                    _ = tflite_runner.infer(dummy_img)
+                except Exception:
+                    pass
+            else:
+                tflite_runner = None
+                if hasattr(app.state, "pytorch_unet"):
+                    app.state.pytorch_unet = None
+                if hasattr(app.state, "pytorch_model_path"):
+                    app.state.pytorch_model_path = None
+
+            active_class_mode = det_classes
+
             if old_runner:
                 del old_runner
                 
-            dummy_img = np.zeros((1, 640, 640, 3), dtype=np.float32)
-            try:
-                _ = tflite_runner.infer(dummy_img)
-            except Exception:
-                pass
-            print(f"⚡ [NPU HOT-SWAP] ✅ Activated new model: {model_name} ({req_classes} Classes) on NPU")
+            print(f"⚡ [NPU HOT-SWAP] ✅ Activated new model: {model_name} (Auto-detected: {active_class_mode} Classes) on NPU")
             
             # Broadcast WS event if main_loop is running
             if main_loop and main_loop.is_running():
                 asyncio.run_coroutine_threadsafe(manager.broadcast(json.dumps({
                     "event": "MODEL_ACTIVATED",
-                    "data": { "name": model_name, "classes": req_classes }
+                    "data": { "name": model_name, "classes": active_class_mode }
                 })), main_loop)
             
             return {
                 "status": "success",
                 "active_model": model_name,
-                "classes": req_classes,
-                "message": f"Successfully activated '{model_name}' on i.MX8 NPU Delegate!"
+                "classes": active_class_mode,
+                "message": f"Successfully activated '{model_name}' ({active_class_mode}-Class) on i.MX8 NPU!"
             }
         except Exception as err:
             print(f"❌ [NPU HOT-SWAP] Failed to activate model '{model_name}': {err}")

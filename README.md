@@ -7,9 +7,9 @@
 
 ระบบ **Edge AI Wafer Defect Inspection System** ถูกพัฒนาขึ้นสำหรับการตรวจจับตำหนิแบบเรียลไทม์บนแผ่นเวเฟอร์ (Semiconductor Wafer Inspection) ในกระบวนการผลิตสารกึ่งตัวนำ โดยใช้โมเดล Deep Learning (YOLOv8-Segmentation / UNet) ที่ถูกควอนไทซ์เป็น INT8 เพื่อประมวลผลบนหน่วยประมวลผล NPU (Neural Processing Unit) ของฮาร์ดแวร์ระดับอุตสาหกรรม **NXP i.MX8M Plus**
 
-ระบบประกอบด้วยหน้าจอแสดงผล **HMI (Human-Machine Interface)** สองโหมดการทำงาน:
-1. **Engineer Inspection Mode**: หน้าจอควบคุมละเอียดสำหรับวิศวกร (แสดงภาพถ่ายเปรียบเทียบ Overlay/Split, Telemetry ของ NPU, สถิติ Yield/Defect, การจัดการโมเดล AI และรายงาน Analytics)
-2. **Operator Mode**: หน้าจอแสดงผลขนาดใหญ่สำหรับพนักงานคุมเครื่อง (แสดงแบนเนอร์ PASS/WARNING/FAIL ตัวหนา 56px พร้อมระบบเปลี่ยนสีธีมทั้งหน้าจอเป็นสัญญาณไฟเตือนแบบ Full-Screen Color Beacon มองเห็นได้จากระยะไกล)
+ระบบประกอบด้วยหน้าจอแสดงผล **HMI (Human-Machine Interface)** สองรูปแบบหลัก (Dual-UI Architecture):
+1. **Local i.MX8 Native Python UI**: หน้าจอแสดงผลตรงบนบอร์ด i.MX8 (พัฒนาด้วย Python / Tkinter / PyQt) สำหรับผู้ควบคุมเครื่องจักรหน้างาน (Operator at Machine)
+2. **Central Web HMI Dashboard (React 19 + NestJS PC Node)**: หน้าเว็บศูนย์ควบคุมกลางสำหรับวิศวกรและผู้บริหาร (โหมด Engineer Inspection และ Operator Remote View ผ่าน Web Browser)
 
 ---
 
@@ -19,12 +19,15 @@
 
 ```mermaid
 graph TD
-    A[📷 Camera / Stream Input] -->|Raw Image Frame| B[🧠 NXP i.MX8 NPU Engine]
-    B -->|TFLite INT8 Inference| C[⚙️ FastAPI Backend Server]
-    C -->|SQL Query / Persistence| D[(🐘 PostgreSQL Database)]
-    C -->|Real-time WebSockets| E[💻 React 19 Frontend HMI]
-    E -->|Operator View| F[🔴🟡🟢 Full-Screen Color Beacon]
-    E -->|Engineer View| G[📊 Interactive Analytics & Model Manager]
+    A[📷 Camera / Machine Input] -->|Raw Image File| B[🧠 NXP i.MX8 Edge AI Node - FastAPI Port 8001]
+    B -->|Direct Local Display| C[🖥️ Local i.MX8 Native Python UI]
+    B -->|TFLite INT8 / NPU Inference| D[⚙️ i.MX8 Rule Engine & Local DB]
+    D -->|Single txt Judgement| E[📟 Prober Machine Output]
+    B -->|Async HTTP JSON Sync| F[🪺 PC Central Backend - NestJS Port 3000]
+    F -->|Central DB & Socket Gateway| G[🐘 PostgreSQL Central DB]
+    F -->|WebSocket & REST APIs| H[💻 Central Web HMI - React 19 Port 5173]
+    H -->|Operator Remote View| I[🔴🟡🟢 Full-Screen Color Beacon]
+    H -->|Engineer View| J[📊 Interactive Analytics & Model Manager]
 ```
 
 ### 💻 Frontend (Human-Machine Interface - HMI)
@@ -83,7 +86,7 @@ UIIU/
 ├── backend_imx8/             # 🧠 [Edge AI Node] FastAPI Backend บน NXP i.MX8
 │   ├── main.py               # Machine Shared Folder Pipeline, NPU AI & .txt Judgement Writer
 │   ├── config.yaml           # i.MX8 Edge Configuration
-│   └── start_imx8.sh         # Launcher Script สำหรับ i.MX8 Node (Port 8000)
+│   └── start_imx8.sh         # Launcher Script สำหรับ i.MX8 Node (Port 8001)
 ├── backend_pc/               # 🪺 [Central Server Node] NestJS Backend บน PC
 │   ├── src/                  # NestJS Modules, Controllers, Services & Socket.io Gateway
 │   ├── package.json          # NestJS Dependencies
@@ -118,10 +121,10 @@ sudo docker compose up -d
 เปิด **Terminal 1** ที่โฟลเดอร์ root ของโปรเจกต์:
 ```bash
 cd /home/nxp1/Desktop/PUNPUNJA/PROJECT/UIIU
-.venv/bin/python3 -m uvicorn backend.main:app --host 0.0.0.0 --port 8000
+.venv/bin/python3 -m uvicorn backend.main:app --host 0.0.0.0 --port 8001
 ```
-* Backend API จะรันที่ `http://localhost:8000` (Swagger UI: `http://localhost:8000/docs`)
-* WebSocket Streaming ที่ `ws://localhost:8000/ws`
+* Backend API จะรันที่ `http://localhost:8001` (Swagger UI: `http://localhost:8001/docs`)
+* WebSocket Streaming ที่ `ws://localhost:8001/ws`
 
 #### **3. เปิดใช้งาน Frontend HMI Dashboard (React 19 + Vite)**
 เปิด **Terminal 2**:
@@ -155,7 +158,7 @@ npm run dev
 ---
 
 ### 🔍 วิธีการตรวจสอบสถานะการทำงาน (Verification)
-- **เช็กระบบฐานข้อมูลและ HMI Backend**: เข้าไปที่ `http://localhost:8000/api/sys-stats` จะต้องคืนค่า JSON `"db": "PostgreSQL"`
+- **เช็กระบบฐานข้อมูลและ HMI Backend**: เข้าไปที่ `http://localhost:8001/api/sys-stats` จะต้องคืนค่า JSON `"db": "PostgreSQL"`
 - **เช็กสถานะการเชื่อมต่อสตรีมมิ่งสด**: ที่หน้าเว็บ `http://localhost:5173` มุมขวาบนต้องแสดงสถานะ **`DB: POSTGRESQL`** และ **`EDGE: ONLINE`** พร้อมแสดงผลการสแกนแผ่นเวเฟอร์สด 1:1 แบบ Frame-Perfect Sync
 
 ## 📡 6. รายการ API Endpoints ที่สำคัญ
