@@ -183,6 +183,11 @@ body.light-theme .header-nav {
   background: rgba(0, 0, 0, 0.02);
 }
 
+a {
+  text-decoration: none;
+  color: inherit;
+}
+
 .nav-tab {
   background: transparent;
   border: none;
@@ -194,34 +199,53 @@ body.light-theme .header-nav {
   padding: 6px 16px;
   border-radius: 6px;
   cursor: pointer;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   transition: all 0.2s ease;
 }
 
 .nav-tab:hover {
   color: var(--text-main);
+  text-decoration: none;
 }
 
 .nav-tab.active {
   color: #fff;
   background: rgba(255, 255, 255, 0.08);
+  text-decoration: none;
 }
 
 body.light-theme .nav-tab.active {
   color: #000;
   background: rgba(0, 0, 0, 0.04);
+  text-decoration: none;
 }
 
 /* TAB NAVIGATION CONTROLS */
 .tab-content {
-  display: none;
+  display: flex;
+  flex-direction: column;
   flex-grow: 1;
-  overflow: hidden;
-  height: calc(100% - var(--header-height));
+  overflow-y: auto;
+  height: calc(100vh - var(--header-height));
   width: 100%;
 }
 
 .tab-content.active-tab {
   display: flex;
+}
+
+#view-inspect.tab-content {
+  overflow: hidden;
+}
+
+#view-settings.tab-content,
+#view-history.tab-content,
+#view-analytics.tab-content,
+#view-models-validation.tab-content {
+  overflow-y: auto;
 }
 
 .status-indicator-group {

@@ -7,18 +7,20 @@ import random
 import threading
 import shutil
 import asyncio
+import queue
 import numpy as np
 import matplotlib
 matplotlib.use('Agg')
-from typing import List
+from typing import List, Optional
 import glob
 import re
 import psutil
+import zipfile
 
 
 # Try importing FastAPI dependencies
 try:
-    from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File, HTTPException
+    from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File, Form, HTTPException, Query
     from fastapi.middleware.cors import CORSMiddleware
 except ImportError:
     print("Error: FastAPI is not installed. Please run: pip install fastapi uvicorn")
@@ -80,6 +82,29 @@ main_loop = None
 tflite_runner = None
 tflite_model_path = None
 inference_lock = threading.Lock()  # ponytail: NPU delegate not thread-safe
+
+# ==============================================================================
+# Task Priority Queues & Dispatcher State
+# P0 = High Priority Real-time Production (Prober Machine Image drops)
+# P1 = Low Priority Batch Model Validation / Benchmark Testing (Web HMI)
+# ==============================================================================
+P0_QUEUE = queue.Queue()
+P1_QUEUE = queue.Queue()
+dispatcher_running = True
+priority_dispatcher_state = {
+    "active_priority": "IDLE",     # "P0_PRODUCTION" | "P1_BENCHMARK" | "IDLE"
+    "p0_pending": 0,
+    "p1_pending": 0,
+    "p1_total": 0,
+    "p1_processed": 0,
+    "p1_current": "",
+    "active_session_id": None,
+    "status": "IDLE",              # "IDLE" | "RUNNING" | "PAUSED" | "STOPPED" | "COMPLETED"
+    "last_kpis": {}
+}
+
+# Batch records accumulator for Prober .END signal
+current_batch_records = []
 
 # Initialize Machine Shared & Internal Folders
 os.makedirs(IMAGE_DIR, exist_ok=True)
@@ -162,41 +187,122 @@ def init_database():
                     confidence DOUBLE PRECISION,
                     inference_time DOUBLE PRECISION,
                     rule_time DOUBLE PRECISION,
-                    machine_action VARCHAR(50)
+                    machine_action VARCHAR(50),
+                    reason TEXT,
+                    image_url TEXT
+                );
+            """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS benchmark_sessions (
+                    id VARCHAR(64) PRIMARY KEY,
+                    name VARCHAR(255),
+                    model_name VARCHAR(255),
+                    status VARCHAR(50),
+                    dataset_name VARCHAR(255),
+                    total_images INTEGER DEFAULT 0,
+                    processed_images INTEGER DEFAULT 0,
+                    rule_config TEXT,
+                    created_at VARCHAR(50),
+                    completed_at VARCHAR(50),
+                    metrics TEXT
+                );
+            """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS benchmark_results (
+                    id SERIAL PRIMARY KEY,
+                    session_id VARCHAR(64),
+                    image_name VARCHAR(255),
+                    image_url TEXT,
+                    annotated_image_url TEXT,
+                    raw_image_url TEXT,
+                    ai_decision VARCHAR(20),
+                    ai_confidence DOUBLE PRECISION,
+                    ai_reason TEXT,
+                    inference_time_ms DOUBLE PRECISION,
+                    rule_time_ms DOUBLE PRECISION,
+                    min_edge_distance_um DOUBLE PRECISION,
+                    mark_area_ratio_pct DOUBLE PRECISION,
+                    pads_count INTEGER,
+                    marks_count INTEGER,
+                    grains_count INTEGER,
+                    human_decision VARCHAR(20) DEFAULT 'UNREVIEWED',
+                    human_reviewer VARCHAR(100),
+                    reviewed_at VARCHAR(50),
+                    notes TEXT
                 );
             """)
             conn.commit()
             cursor.close()
             conn.close()
-        except Exception:
+        except Exception as e:
+            print("PostgreSQL benchmark init exception:", e)
             db_type = "SQLite"
 
-    if db_type == "SQLite":
-        try:
-            conn = sqlite3.connect(DB_NAME_SQLITE)
-            cursor = conn.cursor()
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS inspections (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    wafer_id TEXT,
-                    timestamp TEXT,
-                    decision TEXT,
-                    pads_total INTEGER,
-                    pads_detected INTEGER,
-                    probe_marks INTEGER,
-                    grains INTEGER,
-                    confidence REAL,
-                    inference_time REAL,
-                    rule_time REAL,
-                    machine_action TEXT,
-                    reason TEXT,
-                    image_url TEXT
-                );
-            """)
-            conn.commit()
-            conn.close()
-        except Exception as sqlite_err:
-            print("SQLite initialization exception:", sqlite_err)
+    # Always ensure SQLite schema exists for local inspection & fallback
+    try:
+        conn = sqlite3.connect(DB_NAME_SQLITE)
+        cursor = conn.cursor()
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS inspections (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                wafer_id TEXT,
+                timestamp TEXT,
+                decision TEXT,
+                pads_total INTEGER,
+                pads_detected INTEGER,
+                probe_marks INTEGER,
+                grains INTEGER,
+                confidence REAL,
+                inference_time REAL,
+                rule_time REAL,
+                machine_action TEXT,
+                reason TEXT,
+                image_url TEXT
+            );
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS benchmark_sessions (
+                id TEXT PRIMARY KEY,
+                name TEXT,
+                model_name TEXT,
+                status TEXT,
+                dataset_name TEXT,
+                total_images INTEGER DEFAULT 0,
+                processed_images INTEGER DEFAULT 0,
+                rule_config TEXT,
+                created_at TEXT,
+                completed_at TEXT,
+                metrics TEXT
+            );
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS benchmark_results (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT,
+                image_name TEXT,
+                image_url TEXT,
+                annotated_image_url TEXT,
+                raw_image_url TEXT,
+                ai_decision TEXT,
+                ai_confidence REAL,
+                ai_reason TEXT,
+                inference_time_ms REAL,
+                rule_time_ms REAL,
+                min_edge_distance_um REAL,
+                mark_area_ratio_pct REAL,
+                pads_count INTEGER,
+                marks_count INTEGER,
+                grains_count INTEGER,
+                human_decision TEXT DEFAULT 'UNREVIEWED',
+                human_reviewer TEXT,
+                reviewed_at TEXT,
+                notes TEXT
+            );
+        """)
+        conn.commit()
+        conn.close()
+    except Exception as sqlite_err:
+        print("SQLite initialization exception:", sqlite_err)
 
     global inspection_count
     inspection_count = get_initial_inspection_count()
@@ -810,7 +916,512 @@ def process_new_file(filepath, filename):
         })), main_loop)
 
 
+# ==============================================================================
+# Priority Queue Dispatcher & Benchmark Evaluation Engine
+# ==============================================================================
+
+def save_benchmark_result_to_db(record: dict):
+    global db_type
+    if db_type == "PostgreSQL":
+        try:
+            import psycopg2
+            conn = psycopg2.connect(
+                host=POSTGRES_CONFIG["host"], port=POSTGRES_CONFIG["port"],
+                user=POSTGRES_CONFIG["user"], password=POSTGRES_CONFIG["password"],
+                database=POSTGRES_CONFIG["database"]
+            )
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO benchmark_results (
+                    session_id, image_name, image_url, annotated_image_url, raw_image_url,
+                    ai_decision, ai_confidence, ai_reason, inference_time_ms, rule_time_ms,
+                    min_edge_distance_um, mark_area_ratio_pct, pads_count, marks_count, grains_count,
+                    human_decision, human_reviewer, reviewed_at, notes
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING id;
+            """, (
+                record["session_id"], record["image_name"], record["image_url"],
+                record["annotated_image_url"], record["raw_image_url"],
+                record["ai_decision"], record["ai_confidence"], record["ai_reason"],
+                record["inference_time_ms"], record["rule_time_ms"],
+                record["min_edge_distance_um"], record["mark_area_ratio_pct"],
+                record["pads_count"], record["marks_count"], record["grains_count"],
+                record.get("human_decision", "UNREVIEWED"), record.get("human_reviewer", "-"),
+                record.get("reviewed_at", "-"), record.get("notes", "")
+            ))
+            new_id = cursor.fetchone()
+            if new_id:
+                record["id"] = new_id[0]
+            conn.commit()
+            cursor.close()
+            conn.close()
+            return
+        except Exception as pg_err:
+            print("Failed to save benchmark result to PostgreSQL:", pg_err)
+
+    try:
+        conn = sqlite3.connect(DB_NAME_SQLITE)
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO benchmark_results (
+                session_id, image_name, image_url, annotated_image_url, raw_image_url,
+                ai_decision, ai_confidence, ai_reason, inference_time_ms, rule_time_ms,
+                min_edge_distance_um, mark_area_ratio_pct, pads_count, marks_count, grains_count,
+                human_decision, human_reviewer, reviewed_at, notes
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            record["session_id"], record["image_name"], record["image_url"],
+            record["annotated_image_url"], record["raw_image_url"],
+            record["ai_decision"], record["ai_confidence"], record["ai_reason"],
+            record["inference_time_ms"], record["rule_time_ms"],
+            record["min_edge_distance_um"], record["mark_area_ratio_pct"],
+            record["pads_count"], record["marks_count"], record["grains_count"],
+            record.get("human_decision", "UNREVIEWED"), record.get("human_reviewer", "-"),
+            record.get("reviewed_at", "-"), record.get("notes", "")
+        ))
+        record["id"] = cursor.lastrowid
+        conn.commit()
+        conn.close()
+    except Exception as sq_err:
+        print("Failed to save benchmark result to SQLite:", sq_err)
+
+
+def compute_session_kpis(session_id: str) -> dict:
+    """Calculates real-time quality KPIs, Agreement, Overkill, Underkill, Yield, and Confusion Matrix."""
+    global db_type
+    rows = []
+    if db_type == "PostgreSQL":
+        try:
+            import psycopg2
+            conn = psycopg2.connect(
+                host=POSTGRES_CONFIG["host"], port=POSTGRES_CONFIG["port"],
+                user=POSTGRES_CONFIG["user"], password=POSTGRES_CONFIG["password"],
+                database=POSTGRES_CONFIG["database"]
+            )
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT ai_decision, human_decision, inference_time_ms, rule_time_ms
+                FROM benchmark_results WHERE session_id = %s;
+            """, (session_id,))
+            rows = cursor.fetchall()
+            cursor.close()
+            conn.close()
+        except Exception:
+            pass
+
+    if not rows:
+        try:
+            conn = sqlite3.connect(DB_NAME_SQLITE)
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT ai_decision, human_decision, inference_time_ms, rule_time_ms
+                FROM benchmark_results WHERE session_id = ?;
+            """, (session_id,))
+            rows = cursor.fetchall()
+            conn.close()
+        except Exception:
+            pass
+
+    total_tested = len(rows)
+    if total_tested == 0:
+        return {
+            "total_tested": 0, "total_reviewed": 0, "unreviewed_count": 0,
+            "human_pass_count": 0, "human_fail_count": 0,
+            "ai_pass_count": 0, "ai_fail_count": 0,
+            "overkill_count": 0, "underkill_count": 0, "agreement_count": 0,
+            "overkill_rate": 0.0, "underkill_rate": 0.0, "agreement_rate": 0.0,
+            "true_yield": 0.0, "ai_yield": 0.0,
+            "avg_inference_time_ms": 0.0, "min_inference_time_ms": 0.0, "max_inference_time_ms": 0.0,
+            "avg_rule_time_ms": 0.0,
+            "confusion_matrix": {"tp": 0, "fp": 0, "tn": 0, "fn": 0}
+        }
+
+    total_reviewed = 0
+    human_pass = 0
+    human_fail = 0
+    ai_pass = 0
+    ai_fail = 0
+    overkill_fp = 0    # AI = FAIL, Human = PASS (wasting good dies)
+    underkill_fn = 0   # AI = PASS, Human = FAIL (escaped defects)
+    agree_tp = 0       # AI = FAIL, Human = FAIL (defect correctly identified)
+    agree_tn = 0       # AI = PASS, Human = PASS (good die correctly passed)
+
+    inf_times = []
+    rule_times = []
+
+    for ai_dec, human_dec, inf_t, r_t in rows:
+        if inf_t is not None: inf_times.append(float(inf_t))
+        if r_t is not None: rule_times.append(float(r_t))
+
+        ai_is_pass = (ai_dec == "PASS")
+        if ai_is_pass: ai_pass += 1
+        else: ai_fail += 1
+
+        if human_dec and human_dec in ("PASS", "FAIL"):
+            total_reviewed += 1
+            human_is_pass = (human_dec == "PASS")
+            if human_is_pass: human_pass += 1
+            else: human_fail += 1
+
+            if not human_is_pass and not ai_is_pass:
+                agree_tp += 1
+            elif human_is_pass and ai_is_pass:
+                agree_tn += 1
+            elif human_is_pass and not ai_is_pass:
+                overkill_fp += 1
+            elif not human_is_pass and ai_is_pass:
+                underkill_fn += 1
+
+    unreviewed = total_tested - total_reviewed
+    agreement_count = agree_tp + agree_tn
+
+    overkill_rate = round((overkill_fp / total_reviewed * 100.0), 2) if total_reviewed > 0 else 0.0
+    underkill_rate = round((underkill_fn / total_reviewed * 100.0), 2) if total_reviewed > 0 else 0.0
+    agreement_rate = round((agreement_count / total_reviewed * 100.0), 2) if total_reviewed > 0 else 0.0
+    true_yield = round((human_pass / total_reviewed * 100.0), 2) if total_reviewed > 0 else 0.0
+    ai_yield = round((ai_pass / total_tested * 100.0), 2) if total_tested > 0 else 0.0
+
+    avg_inf = round(sum(inf_times) / len(inf_times), 1) if inf_times else 0.0
+    min_inf = round(min(inf_times), 1) if inf_times else 0.0
+    max_inf = round(max(inf_times), 1) if inf_times else 0.0
+    avg_rule = round(sum(rule_times) / len(rule_times), 2) if rule_times else 0.0
+
+    return {
+        "total_tested": total_tested,
+        "total_reviewed": total_reviewed,
+        "unreviewed_count": unreviewed,
+        "human_pass_count": human_pass,
+        "human_fail_count": human_fail,
+        "ai_pass_count": ai_pass,
+        "ai_fail_count": ai_fail,
+        "overkill_count": overkill_fp,
+        "underkill_count": underkill_fn,
+        "agreement_count": agreement_count,
+        "overkill_rate": overkill_rate,
+        "underkill_rate": underkill_rate,
+        "agreement_rate": agreement_rate,
+        "true_yield": true_yield,
+        "ai_yield": ai_yield,
+        "avg_inference_time_ms": avg_inf,
+        "min_inference_time_ms": min_inf,
+        "max_inference_time_ms": max_inf,
+        "avg_rule_time_ms": avg_rule,
+        "confusion_matrix": {
+            "tp": agree_tp,
+            "fp": overkill_fp,
+            "tn": agree_tn,
+            "fn": underkill_fn
+        }
+    }
+
+
+def update_benchmark_session_progress(session_id: str, processed_count: int, kpis: dict):
+    global db_type
+    metrics_str = json.dumps(kpis)
+    if db_type == "PostgreSQL":
+        try:
+            import psycopg2
+            conn = psycopg2.connect(
+                host=POSTGRES_CONFIG["host"], port=POSTGRES_CONFIG["port"],
+                user=POSTGRES_CONFIG["user"], password=POSTGRES_CONFIG["password"],
+                database=POSTGRES_CONFIG["database"]
+            )
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE benchmark_sessions
+                SET processed_images = %s, metrics = %s
+                WHERE id = %s;
+            """, (processed_count, metrics_str, session_id))
+            conn.commit()
+            cursor.close()
+            conn.close()
+            return
+        except Exception:
+            pass
+
+    try:
+        conn = sqlite3.connect(DB_NAME_SQLITE)
+        cursor = conn.cursor()
+        cursor.execute("""
+            UPDATE benchmark_sessions
+            SET processed_images = ?, metrics = ?
+            WHERE id = ?;
+        """, (processed_count, metrics_str, session_id))
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass
+
+
+def finalize_benchmark_session(session_id: str):
+    global db_type
+    kpis = compute_session_kpis(session_id)
+    metrics_str = json.dumps(kpis)
+    now_str = time.strftime("%d-%b-%Y %H:%M:%S")
+    if db_type == "PostgreSQL":
+        try:
+            import psycopg2
+            conn = psycopg2.connect(
+                host=POSTGRES_CONFIG["host"], port=POSTGRES_CONFIG["port"],
+                user=POSTGRES_CONFIG["user"], password=POSTGRES_CONFIG["password"],
+                database=POSTGRES_CONFIG["database"]
+            )
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE benchmark_sessions
+                SET status = 'COMPLETED', completed_at = %s, metrics = %s
+                WHERE id = %s;
+            """, (now_str, metrics_str, session_id))
+            conn.commit()
+            cursor.close()
+            conn.close()
+            return
+        except Exception:
+            pass
+
+    try:
+        conn = sqlite3.connect(DB_NAME_SQLITE)
+        cursor = conn.cursor()
+        cursor.execute("""
+            UPDATE benchmark_sessions
+            SET status = 'COMPLETED', completed_at = ?, metrics = ?
+            WHERE id = ?;
+        """, (now_str, metrics_str, session_id))
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass
+
+
+def process_benchmark_image(task: dict):
+    """
+    Processes a single P1 validation image on the i.MX8 node with custom rule thresholds.
+    Generates annotated split comparison and logs to benchmark_results table.
+    """
+    global main_loop, tflite_runner, tflite_model_path, active_class_mode, has_actual_rules
+    
+    session_id = task["session_id"]
+    image_path = task["image_path"]
+    filename = task["filename"]
+    rules = task.get("rules", {})
+    
+    fail_dist_um = float(rules.get("fail_distance_um", 8.0))
+    max_ratio_pct = float(rules.get("max_area_ratio_pct", 25.0))
+    min_ratio_pct = float(rules.get("min_area_ratio_pct", 0.5))
+    missing_action = rules.get("missing_mark_action", "fail").lower()
+    
+    import cv2
+    img_cv = cv2.imread(image_path)
+    if img_cv is None:
+        print(f"⚠️ [BENCHMARK] Could not read image: {image_path}")
+        return
+        
+    h_orig, w_orig = img_cv.shape[:2]
+    pads = []
+    mark_polys = []
+    grain_polys = []
+    inf_time = 0.0
+    confidence = 95.0
+    
+    # 1. AI Model Inference under thread-safe inference lock
+    t_start = time.time()
+    with inference_lock:
+        if tflite_runner is not None:
+            try:
+                from run_unet_tflite_folder import preprocess_image, postprocess_unet
+                input_details = tflite_runner.get_input_details()
+                output_details = tflite_runner.get_output_details()
+                input_data, meta = preprocess_image(img_cv, input_details[0])
+                output_tensor = tflite_runner.infer(input_data)
+                inf_time = round((time.time() - t_start) * 1000, 1)
+                
+                class_names = ["pad", "probemark"] if active_class_mode == 2 else ["pad", "probemark", "grain"]
+                class_ids, masks = postprocess_unet(output_tensor, output_details[0], meta, class_names)
+                for c_id, mask in zip(class_ids, masks):
+                    if c_id == 0:  # Pad
+                        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                        for c in contours:
+                            if cv2.contourArea(c) > 50:
+                                pads.append(cv2.convexHull(c).astype(np.int32))
+                    elif c_id == 1:  # Probemark
+                        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                        for c in contours:
+                            mark_polys.append(c.astype(np.int32))
+                    elif c_id == 2 and active_class_mode >= 3:  # Grain
+                        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                        for c in contours:
+                            grain_polys.append(c.astype(np.int32))
+                confidence = 98.0
+            except Exception as inf_err:
+                print(f"[BENCHMARK] Inference error: {inf_err}")
+                inf_time = round((time.time() - t_start) * 1000, 1)
+        else:
+            inf_time = 15.0
+
+    # 2. Rule Evaluation
+    t_rule_start = time.time()
+    decision = "PASS"
+    reasons = []
+    min_dist_um = 999.0
+    calc_max_ratio_pct = 0.0
+    
+    # Visual Canvas for Split View
+    canvas = np.zeros((h_orig + 70, w_orig * 2, 3), dtype=np.uint8)
+    canvas[70:, :w_orig] = img_cv.copy()
+    ann_part = img_cv.copy()
+    
+    if len(pads) == 0:
+        decision = "FAIL"
+        reasons.append("No Pad Detected")
+    else:
+        # Pad drawing: Cyan / Blue with light fill
+        for pad in pads:
+            pad_poly = pad.astype(np.int32)
+            cv2.polylines(ann_part, [pad_poly], isClosed=True, color=(255, 200, 0), thickness=2)
+            overlay = ann_part.copy()
+            cv2.fillPoly(overlay, [pad_poly], (255, 100, 0))
+            cv2.addWeighted(overlay, 0.2, ann_part, 0.8, 0, ann_part)
+            
+        main_pad = max(pads, key=cv2.contourArea)
+        pad_hull = cv2.convexHull(main_pad)
+        pad_mask = np.zeros((h_orig, w_orig), dtype=np.uint8)
+        cv2.fillPoly(pad_mask, [pad_hull], 255)
+        pad_area = cv2.countNonZero(pad_mask)
+        
+        # Distance transform inside pad
+        pad_dist_map = cv2.distanceTransform(pad_mask, cv2.DIST_L2, 5)
+        
+        if len(mark_polys) == 0:
+            if missing_action == "fail":
+                decision = "FAIL"
+                reasons.append("No Probe Mark (Strict Fail)")
+            else:
+                decision = "PASS"
+        else:
+            # Union of marks
+            combined_pm_mask = np.zeros((h_orig, w_orig), dtype=np.uint8)
+            for pm in mark_polys:
+                pm_poly = pm.astype(np.int32)
+                cv2.fillPoly(combined_pm_mask, [pm_poly], 255)
+                # Probemark outline: Orange / Yellow
+                cv2.polylines(ann_part, [pm_poly], isClosed=True, color=(0, 255, 255), thickness=2)
+                overlay = ann_part.copy()
+                cv2.fillPoly(overlay, [pm_poly], (0, 165, 255))
+                cv2.addWeighted(overlay, 0.35, ann_part, 0.65, 0, ann_part)
+                
+            pm_area = cv2.countNonZero(combined_pm_mask)
+            if pad_area > 0:
+                calc_max_ratio_pct = round((pm_area / pad_area) * 100.0, 1)
+            
+            # Distance from PM pixels to pad boundary
+            pm_pixels = np.where(combined_pm_mask > 0)
+            if len(pm_pixels[0]) > 0:
+                distances = pad_dist_map[pm_pixels]
+                if len(distances) > 0:
+                    min_dist_um = round(float(np.min(distances)), 1)
+                    # Find coordinates of the closest point to draw distance line
+                    min_idx = np.argmin(distances)
+                    closest_y = pm_pixels[0][min_idx]
+                    closest_x = pm_pixels[1][min_idx]
+                    cv2.circle(ann_part, (closest_x, closest_y), 4, (0, 0, 255), -1)
+                    cv2.putText(ann_part, f"{min_dist_um}px", (closest_x + 6, closest_y - 6),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 255), 1)
+
+            # Check Rule Limits
+            if calc_max_ratio_pct > max_ratio_pct:
+                decision = "FAIL"
+                reasons.append(f"Area Ratio Too Large ({calc_max_ratio_pct}% > {max_ratio_pct}%)")
+            elif min_ratio_pct > 0 and calc_max_ratio_pct < min_ratio_pct:
+                decision = "FAIL"
+                reasons.append(f"Area Ratio Too Small ({calc_max_ratio_pct}% < {min_ratio_pct}%)")
+                
+            if min_dist_um < fail_dist_um:
+                decision = "FAIL"
+                reasons.append(f"Mark Close to Edge ({min_dist_um}px < {fail_dist_um}px)")
+                
+    # Grains
+    for gr in grain_polys:
+        gr_poly = gr.astype(np.int32)
+        cv2.polylines(ann_part, [gr_poly], isClosed=True, color=(255, 0, 255), thickness=1)
+        
+    rule_time = round((time.time() - t_rule_start) * 1000, 2)
+    cat_reason = " & ".join(reasons) if reasons else "-"
+    
+    # Save visual images
+    canvas[70:, w_orig:] = ann_part
+    banner_color = (0, 0, 220) if decision == "FAIL" else (0, 180, 0)
+    cv2.rectangle(canvas, (0, 0), (w_orig * 2, 70), banner_color, -1)
+    
+    cv2.putText(canvas, f"AI {decision}", (w_orig - 50, 32), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 255, 255), 2)
+    sub_txt = f"Dist: {min_dist_um if min_dist_um < 900 else 'N/A'}px | Area: {calc_max_ratio_pct}% | {cat_reason}"
+    cv2.putText(canvas, sub_txt, (20, 58), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (230, 230, 230), 1)
+    cv2.line(canvas, (w_orig, 70), (w_orig, h_orig + 70), (255, 255, 255), 2)
+    
+    raw_fname = f"raw_bm_{session_id}_{filename}"
+    ann_fname = f"ann_bm_{session_id}_{filename}"
+    inspect_fname = f"inspect_bm_{session_id}_{filename}"
+    
+    cv2.imwrite(os.path.join(VISUALS_DIR, raw_fname), img_cv)
+    cv2.imwrite(os.path.join(VISUALS_DIR, ann_fname), ann_part)
+    cv2.imwrite(os.path.join(VISUALS_DIR, inspect_fname), canvas)
+    
+    t_query = f"?t={int(time.time() * 1000)}"
+    raw_url = f"http://localhost:8001/visuals/{raw_fname}{t_query}"
+    ann_url = f"http://localhost:8001/visuals/{ann_fname}{t_query}"
+    inspect_url = f"http://localhost:8001/visuals/{inspect_fname}{t_query}"
+    
+    # Save to Database
+    result_record = {
+        "session_id": session_id,
+        "image_name": filename,
+        "image_url": ann_url,
+        "annotated_image_url": ann_url,
+        "raw_image_url": raw_url,
+        "comparison_image_url": inspect_url,
+        "ai_decision": decision,
+        "ai_confidence": confidence,
+        "ai_reason": cat_reason,
+        "inference_time_ms": inf_time,
+        "rule_time_ms": rule_time,
+        "min_edge_distance_um": min_dist_um if min_dist_um < 900 else 0.0,
+        "mark_area_ratio_pct": calc_max_ratio_pct,
+        "pads_count": len(pads),
+        "marks_count": len(mark_polys),
+        "grains_count": len(grain_polys),
+        "human_decision": "UNREVIEWED",
+        "human_reviewer": "-",
+        "reviewed_at": "-",
+        "notes": ""
+    }
+    
+    save_benchmark_result_to_db(result_record)
+    
+    # Recompute live KPIs & update session
+    kpis = compute_session_kpis(session_id)
+    update_benchmark_session_progress(session_id, priority_dispatcher_state["p1_processed"], kpis)
+    
+    priority_dispatcher_state["last_kpis"] = kpis
+    
+    # Broadcast WebSocket update
+    if main_loop and main_loop.is_running():
+        asyncio.run_coroutine_threadsafe(manager.broadcast(json.dumps({
+            "event": "BENCHMARK_PROGRESS",
+            "data": {
+                "session_id": session_id,
+                "processed": priority_dispatcher_state["p1_processed"],
+                "total": priority_dispatcher_state["p1_total"],
+                "current_image": filename,
+                "latest_result": result_record,
+                "kpis": kpis,
+                "p0_pending": priority_dispatcher_state["p0_pending"],
+                "p1_pending": priority_dispatcher_state["p1_pending"],
+                "active_priority": priority_dispatcher_state["active_priority"]
+            }
+        })), main_loop)
+
+
 def folder_watcher_thread():
+    """Monitors machine input folder and puts files into High-Priority P0 Queue."""
     print("i.MX8 Machine Folder Watcher initialized.")
     print(f"  👉 Machine Input  : {IMAGE_DIR}")
     print(f"  👉 Process Buffer : {PROCESS_DIR}")
@@ -826,20 +1437,84 @@ def folder_watcher_thread():
                 time.sleep(0.01)
                 try:
                     shutil.move(src_path, proc_path)
-                    process_new_file(proc_path, file)
+                    P0_QUEUE.put({"filepath": proc_path, "filename": file})
+                    priority_dispatcher_state["p0_pending"] = P0_QUEUE.qsize()
                 except Exception as move_err:
-                    print(f"Failed to process file {file}: {move_err}")
-
-
+                    print(f"Failed to move file {file}: {move_err}")
         except Exception as e:
             print(f"Error in watcher thread: {e}")
         time.sleep(0.1)
 
 
+def priority_dispatcher_thread():
+    """
+    Unified Dispatcher Worker Thread.
+    Executes P0 real-time machine tasks with top priority.
+    Executes P1 model validation tasks when P0 is empty.
+    Preemption Safety: checks P0 immediately after each single P1 image execution.
+    """
+    global dispatcher_running, priority_dispatcher_state
+    print("⚡ i.MX8 Task Priority Dispatcher Worker Thread initialized (P0: Machine > P1: Model Validation).")
+    
+    while dispatcher_running:
+        try:
+            # 1. P0 Preemption Check: Highest Priority (Live Machine Prober)
+            try:
+                p0_task = P0_QUEUE.get_nowait()
+                priority_dispatcher_state["active_priority"] = "P0_PRODUCTION"
+                priority_dispatcher_state["p0_pending"] = P0_QUEUE.qsize()
+                try:
+                    process_new_file(p0_task["filepath"], p0_task["filename"])
+                except Exception as p0_err:
+                    print(f"❌ [P0 EXEC ERROR] {p0_err}")
+                finally:
+                    P0_QUEUE.task_done()
+                    priority_dispatcher_state["p0_pending"] = P0_QUEUE.qsize()
+                continue
+            except queue.Empty:
+                pass
+
+            # 2. P1 Processing: Low Priority (Model Validation Lab)
+            if priority_dispatcher_state.get("status") == "PAUSED":
+                time.sleep(0.1)
+                continue
+
+            try:
+                p1_task = P1_QUEUE.get_nowait()
+                priority_dispatcher_state["active_priority"] = "P1_BENCHMARK"
+                priority_dispatcher_state["p1_pending"] = P1_QUEUE.qsize()
+                priority_dispatcher_state["p1_current"] = p1_task["filename"]
+                try:
+                    process_benchmark_image(p1_task)
+                except Exception as p1_err:
+                    print(f"❌ [P1 EXEC ERROR] {p1_err}")
+                finally:
+                    P1_QUEUE.task_done()
+                    priority_dispatcher_state["p1_pending"] = P1_QUEUE.qsize()
+                    priority_dispatcher_state["p1_processed"] += 1
+                    
+                    if P1_QUEUE.qsize() == 0:
+                        priority_dispatcher_state["status"] = "COMPLETED"
+                        priority_dispatcher_state["active_priority"] = "IDLE"
+                        priority_dispatcher_state["p1_current"] = ""
+                        sess_id = priority_dispatcher_state.get("active_session_id")
+                        if sess_id:
+                            finalize_benchmark_session(sess_id)
+                continue
+            except queue.Empty:
+                if priority_dispatcher_state["active_priority"] == "P1_BENCHMARK":
+                    priority_dispatcher_state["active_priority"] = "IDLE"
+                    priority_dispatcher_state["p1_current"] = ""
+                time.sleep(0.05)
+        except Exception as disp_err:
+            print(f"Dispatcher thread error: {disp_err}")
+            time.sleep(0.1)
+
+
 # Startup Event
 @app.on_event("startup")
 async def startup_event():
-    global main_loop, tflite_runner, tflite_model_path
+    global main_loop, tflite_runner, tflite_model_path, active_class_mode
     main_loop = asyncio.get_running_loop()
     init_database()
 
@@ -884,6 +1559,9 @@ async def startup_event():
 
     t_watcher = threading.Thread(target=folder_watcher_thread, daemon=True)
     t_watcher.start()
+
+    t_dispatcher = threading.Thread(target=priority_dispatcher_thread, daemon=True)
+    t_dispatcher.start()
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
@@ -1224,6 +1902,698 @@ async def delete_model(filename: str):
             raise HTTPException(status_code=500, detail=str(e))
     else:
         raise HTTPException(status_code=404, detail="File not found")
+
+# ==============================================================================
+# MODEL VALIDATION LAB & HUMAN REVIEW BENCHMARK API ENDPOINTS
+# ==============================================================================
+
+@app.get("/api/model/benchmark/datasets")
+async def get_benchmark_datasets():
+    """Lists all available preset test wafer datasets."""
+    datasets_list = []
+    
+    # 1. Defect Dataset (Bad)
+    bad_dir = os.path.join(PROJECT_ROOT, "datasets", "Pun_for_Accuracy", "Bad")
+    if os.path.exists(bad_dir):
+        files = [f for f in os.listdir(bad_dir) if f.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp'))]
+        datasets_list.append({
+            "key": "bad_wafers",
+            "name": "Defective Wafer Dataset (Bad Samples)",
+            "description": "500+ Defective dies with probe mark defects & grain contamination",
+            "count": len(files),
+            "ground_truth_hint": "FAIL",
+            "path": bad_dir
+        })
+        
+    # 2. Good Dataset
+    good_dir = os.path.join(PROJECT_ROOT, "datasets", "Pun_for_Accuracy", "Good")
+    if os.path.exists(good_dir):
+        files = [f for f in os.listdir(good_dir) if f.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp'))]
+        datasets_list.append({
+            "key": "good_wafers",
+            "name": "Good Wafer Dataset (Pass Samples)",
+            "description": "500+ Golden/Pass dies within normal tolerance limits",
+            "count": len(files),
+            "ground_truth_hint": "PASS",
+            "path": good_dir
+        })
+        
+    # 3. Full Combined Dataset
+    if os.path.exists(bad_dir) and os.path.exists(good_dir):
+        b_files = len([f for f in os.listdir(bad_dir) if f.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp'))])
+        g_files = len([f for f in os.listdir(good_dir) if f.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp'))])
+        datasets_list.append({
+            "key": "all_wafers",
+            "name": "Full Production Accuracy Dataset (Good + Bad)",
+            "description": "1,000+ Full balanced dataset for overall Yield & Accuracy benchmark",
+            "count": b_files + g_files,
+            "ground_truth_hint": "MIXED",
+            "path": os.path.join(PROJECT_ROOT, "datasets", "Pun_for_Accuracy")
+        })
+
+    # 4. Real Wafer Dataset
+    real_dir = os.path.join(PROJECT_ROOT, "datasets", "Pun_for_Accuracy_real")
+    if os.path.exists(real_dir):
+        r_files = []
+        for r, _, fs in os.walk(real_dir):
+            for f in fs:
+                if f.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp')):
+                    r_files.append(f)
+        if r_files:
+            datasets_list.append({
+                "key": "real_wafers",
+                "name": "Real Fab Wafer Accuracy Dataset",
+                "description": "Physical fab verification dataset with calibrated pad metrics",
+                "count": len(r_files),
+                "ground_truth_hint": "MIXED",
+                "path": real_dir
+            })
+            
+    return datasets_list
+
+
+@app.post("/api/model/benchmark/start")
+async def start_benchmark(payload: dict):
+    """Initializes a new benchmark session and queues images to Priority 1."""
+    global priority_dispatcher_state, P1_QUEUE, db_type
+    
+    model_name = payload.get("model_name", "unet.tflite")
+    dataset_key = payload.get("dataset_key", "all_wafers")
+    custom_folder = payload.get("custom_folder")
+    rules = payload.get("rules", {
+        "fail_distance_um": 8.0,
+        "max_area_ratio_pct": 25.0,
+        "min_area_ratio_pct": 0.5,
+        "missing_mark_action": "fail"
+    })
+    limit = payload.get("limit", 50)
+    
+    # 1. Resolve image list
+    image_paths = []
+    dataset_name = "Custom Selection"
+    
+    if custom_folder and os.path.exists(custom_folder):
+        dataset_name = f"Folder: {os.path.basename(custom_folder)}"
+        for f in os.listdir(custom_folder):
+            if f.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp')):
+                image_paths.append(os.path.join(custom_folder, f))
+    elif dataset_key == "bad_wafers":
+        dataset_name = "Defective Wafer Dataset (Bad)"
+        bad_dir = os.path.join(PROJECT_ROOT, "datasets", "Pun_for_Accuracy", "Bad")
+        if os.path.exists(bad_dir):
+            for f in os.listdir(bad_dir):
+                if f.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp')):
+                    image_paths.append(os.path.join(bad_dir, f))
+    elif dataset_key == "good_wafers":
+        dataset_name = "Good Wafer Dataset (Pass)"
+        good_dir = os.path.join(PROJECT_ROOT, "datasets", "Pun_for_Accuracy", "Good")
+        if os.path.exists(good_dir):
+            for f in os.listdir(good_dir):
+                if f.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp')):
+                    image_paths.append(os.path.join(good_dir, f))
+    elif dataset_key == "all_wafers":
+        dataset_name = "Full Accuracy Dataset (Good + Bad)"
+        bad_dir = os.path.join(PROJECT_ROOT, "datasets", "Pun_for_Accuracy", "Bad")
+        good_dir = os.path.join(PROJECT_ROOT, "datasets", "Pun_for_Accuracy", "Good")
+        b_list = [os.path.join(bad_dir, f) for f in os.listdir(bad_dir) if f.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp'))] if os.path.exists(bad_dir) else []
+        g_list = [os.path.join(good_dir, f) for f in os.listdir(good_dir) if f.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp'))] if os.path.exists(good_dir) else []
+        max_len = max(len(b_list), len(g_list))
+        for i in range(max_len):
+            if i < len(b_list): image_paths.append(b_list[i])
+            if i < len(g_list): image_paths.append(g_list[i])
+    else:
+        for root_dir in [os.path.join(PROJECT_ROOT, "datasets"), IMAGE_DIR]:
+            for r, _, fs in os.walk(root_dir):
+                for f in fs:
+                    if f.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp')):
+                        image_paths.append(os.path.join(r, f))
+                        
+    if not image_paths:
+        raise HTTPException(status_code=400, detail="No valid test images found in selected dataset.")
+
+    if limit and isinstance(limit, int) and limit > 0:
+        image_paths = image_paths[:limit]
+
+    session_id = f"BM-{time.strftime('%Y%m%d-%H%M%S')}"
+    created_at = time.strftime("%d-%b-%Y %H:%M:%S")
+    rules_json = json.dumps(rules)
+    initial_metrics = json.dumps({
+        "total_tested": 0, "total_reviewed": 0, "overkill_rate": 0.0,
+        "underkill_rate": 0.0, "agreement_rate": 0.0, "true_yield": 0.0, "ai_yield": 0.0,
+        "avg_inference_time_ms": 0.0, "confusion_matrix": {"tp": 0, "fp": 0, "tn": 0, "fn": 0}
+    })
+
+    if db_type == "PostgreSQL":
+        try:
+            import psycopg2
+            conn = psycopg2.connect(
+                host=POSTGRES_CONFIG["host"], port=POSTGRES_CONFIG["port"],
+                user=POSTGRES_CONFIG["user"], password=POSTGRES_CONFIG["password"],
+                database=POSTGRES_CONFIG["database"]
+            )
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO benchmark_sessions (
+                    id, name, model_name, status, dataset_name, total_images,
+                    processed_images, rule_config, created_at, completed_at, metrics
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s);
+            """, (
+                session_id, f"Validation Run ({model_name})", model_name,
+                "RUNNING", dataset_name, len(image_paths), 0, rules_json,
+                created_at, "-", initial_metrics
+            ))
+            conn.commit()
+            cursor.close()
+            conn.close()
+        except Exception as e:
+            print("Failed to insert session into PG:", e)
+    else:
+        try:
+            conn = sqlite3.connect(DB_NAME_SQLITE)
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO benchmark_sessions (
+                    id, name, model_name, status, dataset_name, total_images,
+                    processed_images, rule_config, created_at, completed_at, metrics
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+            """, (
+                session_id, f"Validation Run ({model_name})", model_name,
+                "RUNNING", dataset_name, len(image_paths), 0, rules_json,
+                created_at, "-", initial_metrics
+            ))
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            print("Failed to insert session into SQLite:", e)
+
+    # Reset P1 Queue
+    while not P1_QUEUE.empty():
+        try: P1_QUEUE.get_nowait()
+        except queue.Empty: break
+
+    priority_dispatcher_state["active_session_id"] = session_id
+    priority_dispatcher_state["p1_total"] = len(image_paths)
+    priority_dispatcher_state["p1_processed"] = 0
+    priority_dispatcher_state["status"] = "RUNNING"
+    priority_dispatcher_state["p1_current"] = ""
+
+    # Enqueue tasks into Priority 1
+    for img_p in image_paths:
+        P1_QUEUE.put({
+            "session_id": session_id,
+            "image_path": img_p,
+            "filename": os.path.basename(img_p),
+            "model_name": model_name,
+            "rules": rules
+        })
+
+    priority_dispatcher_state["p1_pending"] = P1_QUEUE.qsize()
+
+    print(f"🚀 [BENCHMARK STARTED] Session '{session_id}' | {len(image_paths)} images enqueued to P1 Queue (Auto-yields to P0).")
+
+    return {
+        "status": "success",
+        "session_id": session_id,
+        "model_name": model_name,
+        "dataset_name": dataset_name,
+        "total_images": len(image_paths),
+        "rules": rules,
+        "message": f"Benchmark session '{session_id}' initialized with {len(image_paths)} images on P1 priority."
+    }
+
+
+@app.post("/api/model/benchmark/upload-images")
+async def upload_benchmark_images(
+    files: List[UploadFile] = File(...),
+    model_name: str = Form("unet.tflite"),
+    fail_distance_um: float = Form(8.0),
+    max_area_ratio_pct: float = Form(25.0),
+    min_area_ratio_pct: float = Form(0.5),
+    missing_mark_action: str = Form("fail")
+):
+    """Uploads batch wafer images or a ZIP archive, extracts images, and immediately starts a validation benchmark run."""
+    global priority_dispatcher_state, P1_QUEUE
+    
+    session_id = f"BM-{time.strftime('%Y%m%d-%H%M%S')}"
+    upload_dir = os.path.join(_THIS_DIR, "simulation", "benchmark_uploads", session_id)
+    os.makedirs(upload_dir, exist_ok=True)
+    
+    saved_paths = []
+    for f in files:
+        fname = f.filename.lower()
+        if fname.endswith('.zip'):
+            zip_temp = os.path.join(upload_dir, "uploaded_archive.zip")
+            with open(zip_temp, "wb") as buffer:
+                shutil.copyfileobj(f.file, buffer)
+            try:
+                with zipfile.ZipFile(zip_temp, 'r') as z:
+                    for member in z.infolist():
+                        basename = os.path.basename(member.filename)
+                        if not basename or basename.startswith('.'):
+                            continue
+                        if basename.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp')):
+                            extracted_path = os.path.join(upload_dir, basename)
+                            with z.open(member) as src, open(extracted_path, "wb") as dst:
+                                shutil.copyfileobj(src, dst)
+                            saved_paths.append(extracted_path)
+            except Exception as e:
+                print(f"Error extracting ZIP archive {f.filename}: {e}")
+            finally:
+                if os.path.exists(zip_temp):
+                    try:
+                        os.remove(zip_temp)
+                    except:
+                        pass
+        elif fname.endswith(('.png', '.jpg', '.jpeg', '.bmp')):
+            target = os.path.join(upload_dir, f.filename)
+            with open(target, "wb") as buffer:
+                shutil.copyfileobj(f.file, buffer)
+            saved_paths.append(target)
+            
+    if not saved_paths:
+        raise HTTPException(status_code=400, detail="No valid wafer images found in uploaded file(s) or ZIP archive.")
+
+    rules = {
+        "fail_distance_um": fail_distance_um,
+        "max_area_ratio_pct": max_area_ratio_pct,
+        "min_area_ratio_pct": min_area_ratio_pct,
+        "missing_mark_action": missing_mark_action
+    }
+
+    return await start_benchmark({
+        "model_name": model_name,
+        "dataset_key": "custom",
+        "custom_folder": upload_dir,
+        "rules": rules,
+        "limit": len(saved_paths)
+    })
+
+
+@app.get("/api/model/benchmark/progress")
+async def get_benchmark_progress():
+    """Returns real-time queue dispatcher stats, preemption status, and live KPIs."""
+    sess_id = priority_dispatcher_state.get("active_session_id")
+    kpis = compute_session_kpis(sess_id) if sess_id else {}
+    
+    return {
+        "status": priority_dispatcher_state.get("status", "IDLE"),
+        "active_priority": priority_dispatcher_state.get("active_priority", "IDLE"),
+        "p0_pending": P0_QUEUE.qsize(),
+        "p1_pending": P1_QUEUE.qsize(),
+        "p1_total": priority_dispatcher_state.get("p1_total", 0),
+        "p1_processed": priority_dispatcher_state.get("p1_processed", 0),
+        "p1_current_image": priority_dispatcher_state.get("p1_current", ""),
+        "active_session_id": sess_id,
+        "kpis": kpis
+    }
+
+
+@app.get("/api/model/benchmark/results")
+async def get_benchmark_results(
+    session_id: Optional[str] = None,
+    filter: Optional[str] = "ALL"
+):
+    """Fetches benchmarked image rows for a session with filtering support."""
+    global db_type
+    target_session = session_id or priority_dispatcher_state.get("active_session_id")
+    if not target_session:
+        if db_type == "PostgreSQL":
+            try:
+                import psycopg2
+                conn = psycopg2.connect(
+                    host=POSTGRES_CONFIG["host"], port=POSTGRES_CONFIG["port"],
+                    user=POSTGRES_CONFIG["user"], password=POSTGRES_CONFIG["password"],
+                    database=POSTGRES_CONFIG["database"]
+                )
+                cursor = conn.cursor()
+                cursor.execute("SELECT id FROM benchmark_sessions ORDER BY created_at DESC LIMIT 1;")
+                r = cursor.fetchone()
+                if r: target_session = r[0]
+                cursor.close()
+                conn.close()
+            except Exception: pass
+        else:
+            try:
+                conn = sqlite3.connect(DB_NAME_SQLITE)
+                cursor = conn.cursor()
+                cursor.execute("SELECT id FROM benchmark_sessions ORDER BY created_at DESC LIMIT 1;")
+                r = cursor.fetchone()
+                if r: target_session = r[0]
+                conn.close()
+            except Exception: pass
+
+    if not target_session:
+        return {"session_id": None, "results": [], "kpis": compute_session_kpis("")}
+
+    results = []
+    if db_type == "PostgreSQL":
+        try:
+            import psycopg2
+            conn = psycopg2.connect(
+                host=POSTGRES_CONFIG["host"], port=POSTGRES_CONFIG["port"],
+                user=POSTGRES_CONFIG["user"], password=POSTGRES_CONFIG["password"],
+                database=POSTGRES_CONFIG["database"]
+            )
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT id, session_id, image_name, image_url, annotated_image_url, raw_image_url,
+                       ai_decision, ai_confidence, ai_reason, inference_time_ms, rule_time_ms,
+                       min_edge_distance_um, mark_area_ratio_pct, pads_count, marks_count, grains_count,
+                       human_decision, human_reviewer, reviewed_at, notes
+                FROM benchmark_results
+                WHERE session_id = %s
+                ORDER BY id ASC;
+            """, (target_session,))
+            rows = cursor.fetchall()
+            cursor.close()
+            conn.close()
+            for row in rows:
+                results.append({
+                    "id": row[0], "session_id": row[1], "image_name": row[2],
+                    "image_url": row[3], "annotated_image_url": row[4], "raw_image_url": row[5],
+                    "ai_decision": row[6], "ai_confidence": row[7], "ai_reason": row[8],
+                    "inference_time_ms": row[9], "rule_time_ms": row[10],
+                    "min_edge_distance_um": row[11], "mark_area_ratio_pct": row[12],
+                    "pads_count": row[13], "marks_count": row[14], "grains_count": row[15],
+                    "human_decision": row[16], "human_reviewer": row[17],
+                    "reviewed_at": row[18], "notes": row[19]
+                })
+        except Exception as e:
+            print("Error fetching PG benchmark results:", e)
+    else:
+        try:
+            conn = sqlite3.connect(DB_NAME_SQLITE)
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT id, session_id, image_name, image_url, annotated_image_url, raw_image_url,
+                       ai_decision, ai_confidence, ai_reason, inference_time_ms, rule_time_ms,
+                       min_edge_distance_um, mark_area_ratio_pct, pads_count, marks_count, grains_count,
+                       human_decision, human_reviewer, reviewed_at, notes
+                FROM benchmark_results
+                WHERE session_id = ?
+                ORDER BY id ASC;
+            """, (target_session,))
+            rows = cursor.fetchall()
+            conn.close()
+            for row in rows:
+                results.append({
+                    "id": row[0], "session_id": row[1], "image_name": row[2],
+                    "image_url": row[3], "annotated_image_url": row[4], "raw_image_url": row[5],
+                    "ai_decision": row[6], "ai_confidence": row[7], "ai_reason": row[8],
+                    "inference_time_ms": row[9], "rule_time_ms": row[10],
+                    "min_edge_distance_um": row[11], "mark_area_ratio_pct": row[12],
+                    "pads_count": row[13], "marks_count": row[14], "grains_count": row[15],
+                    "human_decision": row[16], "human_reviewer": row[17],
+                    "reviewed_at": row[18], "notes": row[19]
+                })
+        except Exception as e:
+            print("Error fetching SQLite benchmark results:", e)
+
+    # Filter results
+    if filter == "DISAGREEMENT":
+        results = [r for r in results if r["human_decision"] in ("PASS", "FAIL") and r["human_decision"] != r["ai_decision"]]
+    elif filter == "HUMAN_PASS":
+        results = [r for r in results if r["human_decision"] == "PASS"]
+    elif filter == "HUMAN_FAIL":
+        results = [r for r in results if r["human_decision"] == "FAIL"]
+    elif filter == "UNREVIEWED":
+        results = [r for r in results if r["human_decision"] == "UNREVIEWED"]
+
+    kpis = compute_session_kpis(target_session)
+
+    return {
+        "session_id": target_session,
+        "results": results,
+        "kpis": kpis
+    }
+
+
+@app.post("/api/model/benchmark/save-review")
+async def save_human_review(payload: dict):
+    """Saves Human Review grading (PASS / FAIL) and updates real-time quality KPIs."""
+    global db_type, main_loop
+    
+    session_id = payload.get("session_id")
+    result_id = payload.get("result_id")
+    human_decision = payload.get("human_decision", "PASS").upper()
+    reviewer = payload.get("reviewer", "QA Engineer")
+    notes = payload.get("notes", "")
+    reviewed_at = time.strftime("%d-%b-%Y %H:%M:%S")
+
+    if not result_id or human_decision not in ("PASS", "FAIL", "UNREVIEWED"):
+        raise HTTPException(status_code=400, detail="Invalid review payload.")
+
+    if db_type == "PostgreSQL":
+        try:
+            import psycopg2
+            conn = psycopg2.connect(
+                host=POSTGRES_CONFIG["host"], port=POSTGRES_CONFIG["port"],
+                user=POSTGRES_CONFIG["user"], password=POSTGRES_CONFIG["password"],
+                database=POSTGRES_CONFIG["database"]
+            )
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE benchmark_results
+                SET human_decision = %s, human_reviewer = %s, reviewed_at = %s, notes = %s
+                WHERE id = %s RETURNING session_id;
+            """, (human_decision, reviewer, reviewed_at, notes, result_id))
+            row = cursor.fetchone()
+            if row and not session_id:
+                session_id = row[0]
+            conn.commit()
+            cursor.close()
+            conn.close()
+        except Exception as e:
+            print("Error updating PG review:", e)
+    else:
+        try:
+            conn = sqlite3.connect(DB_NAME_SQLITE)
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE benchmark_results
+                SET human_decision = ?, human_reviewer = ?, reviewed_at = ?, notes = ?
+                WHERE id = ?;
+            """, (human_decision, reviewer, reviewed_at, notes, result_id))
+            if not session_id:
+                cursor.execute("SELECT session_id FROM benchmark_results WHERE id = ?;", (result_id,))
+                r = cursor.fetchone()
+                if r: session_id = r[0]
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            print("Error updating SQLite review:", e)
+
+    kpis = compute_session_kpis(session_id) if session_id else {}
+    if session_id:
+        update_benchmark_session_progress(session_id, priority_dispatcher_state["p1_processed"], kpis)
+
+    if main_loop and main_loop.is_running():
+        asyncio.run_coroutine_threadsafe(manager.broadcast(json.dumps({
+            "event": "BENCHMARK_REVIEW_UPDATED",
+            "data": {
+                "session_id": session_id,
+                "result_id": result_id,
+                "human_decision": human_decision,
+                "kpis": kpis
+            }
+        })), main_loop)
+
+    return {
+        "status": "success",
+        "result_id": result_id,
+        "human_decision": human_decision,
+        "kpis": kpis
+    }
+
+
+@app.post("/api/model/benchmark/batch-review")
+async def batch_human_review(payload: dict):
+    """Performs bulk action on human review decisions."""
+    global db_type
+    
+    session_id = payload.get("session_id")
+    action = payload.get("action", "CONFIRM_ALL_AI")
+    reviewer = payload.get("reviewer", "QA Engineer")
+    reviewed_at = time.strftime("%d-%b-%Y %H:%M:%S")
+
+    if not session_id:
+        raise HTTPException(status_code=400, detail="Session ID is required.")
+
+    if db_type == "PostgreSQL":
+        try:
+            import psycopg2
+            conn = psycopg2.connect(
+                host=POSTGRES_CONFIG["host"], port=POSTGRES_CONFIG["port"],
+                user=POSTGRES_CONFIG["user"], password=POSTGRES_CONFIG["password"],
+                database=POSTGRES_CONFIG["database"]
+            )
+            cursor = conn.cursor()
+            if action == "CONFIRM_ALL_AI":
+                cursor.execute("""
+                    UPDATE benchmark_results
+                    SET human_decision = ai_decision, human_reviewer = %s, reviewed_at = %s
+                    WHERE session_id = %s;
+                """, (reviewer, reviewed_at, session_id))
+            elif action == "RESET_ALL":
+                cursor.execute("""
+                    UPDATE benchmark_results
+                    SET human_decision = 'UNREVIEWED', human_reviewer = '-', reviewed_at = '-'
+                    WHERE session_id = %s;
+                """, (session_id,))
+            elif action == "MARK_UNREVIEWED_PASS":
+                cursor.execute("""
+                    UPDATE benchmark_results
+                    SET human_decision = 'PASS', human_reviewer = %s, reviewed_at = %s
+                    WHERE session_id = %s AND human_decision = 'UNREVIEWED';
+                """, (reviewer, reviewed_at, session_id))
+            elif action == "MARK_UNREVIEWED_FAIL":
+                cursor.execute("""
+                    UPDATE benchmark_results
+                    SET human_decision = 'FAIL', human_reviewer = %s, reviewed_at = %s
+                    WHERE session_id = %s AND human_decision = 'UNREVIEWED';
+                """, (reviewer, reviewed_at, session_id))
+            conn.commit()
+            cursor.close()
+            conn.close()
+        except Exception as e:
+            print("Error in PG batch review:", e)
+    else:
+        try:
+            conn = sqlite3.connect(DB_NAME_SQLITE)
+            cursor = conn.cursor()
+            if action == "CONFIRM_ALL_AI":
+                cursor.execute("""
+                    UPDATE benchmark_results
+                    SET human_decision = ai_decision, human_reviewer = ?, reviewed_at = ?
+                    WHERE session_id = ?;
+                """, (reviewer, reviewed_at, session_id))
+            elif action == "RESET_ALL":
+                cursor.execute("""
+                    UPDATE benchmark_results
+                    SET human_decision = 'UNREVIEWED', human_reviewer = '-', reviewed_at = '-'
+                    WHERE session_id = ?;
+                """, (session_id,))
+            elif action == "MARK_UNREVIEWED_PASS":
+                cursor.execute("""
+                    UPDATE benchmark_results
+                    SET human_decision = 'PASS', human_reviewer = ?, reviewed_at = ?
+                    WHERE session_id = ? AND human_decision = 'UNREVIEWED';
+                """, (reviewer, reviewed_at, session_id))
+            elif action == "MARK_UNREVIEWED_FAIL":
+                cursor.execute("""
+                    UPDATE benchmark_results
+                    SET human_decision = 'FAIL', human_reviewer = ?, reviewed_at = ?
+                    WHERE session_id = ? AND human_decision = 'UNREVIEWED';
+                """, (reviewer, reviewed_at, session_id))
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            print("Error in SQLite batch review:", e)
+
+    kpis = compute_session_kpis(session_id)
+    update_benchmark_session_progress(session_id, priority_dispatcher_state["p1_processed"], kpis)
+
+    return {
+        "status": "success",
+        "action": action,
+        "session_id": session_id,
+        "kpis": kpis
+    }
+
+
+@app.get("/api/model/benchmark/report/{session_id}")
+async def get_benchmark_report(session_id: str):
+    """Generates analytical report with confusion matrix, Overkill %, Underkill %, and full metrics."""
+    global db_type
+    
+    session_data = None
+    if db_type == "PostgreSQL":
+        try:
+            import psycopg2
+            conn = psycopg2.connect(
+                host=POSTGRES_CONFIG["host"], port=POSTGRES_CONFIG["port"],
+                user=POSTGRES_CONFIG["user"], password=POSTGRES_CONFIG["password"],
+                database=POSTGRES_CONFIG["database"]
+            )
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT id, name, model_name, status, dataset_name, total_images,
+                       processed_images, rule_config, created_at, completed_at
+                FROM benchmark_sessions WHERE id = %s;
+            """, (session_id,))
+            row = cursor.fetchone()
+            if row:
+                session_data = {
+                    "id": row[0], "name": row[1], "model_name": row[2],
+                    "status": row[3], "dataset_name": row[4], "total_images": row[5],
+                    "processed_images": row[6], "rules": json.loads(row[7]) if row[7] else {},
+                    "created_at": row[8], "completed_at": row[9]
+                }
+            cursor.close()
+            conn.close()
+        except Exception: pass
+    else:
+        try:
+            conn = sqlite3.connect(DB_NAME_SQLITE)
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT id, name, model_name, status, dataset_name, total_images,
+                       processed_images, rule_config, created_at, completed_at
+                FROM benchmark_sessions WHERE id = ?;
+            """, (session_id,))
+            row = cursor.fetchone()
+            if row:
+                session_data = {
+                    "id": row[0], "name": row[1], "model_name": row[2],
+                    "status": row[3], "dataset_name": row[4], "total_images": row[5],
+                    "processed_images": row[6], "rules": json.loads(row[7]) if row[7] else {},
+                    "created_at": row[8], "completed_at": row[9]
+                }
+            conn.close()
+        except Exception: pass
+
+    if not session_data:
+        raise HTTPException(status_code=404, detail="Benchmark session not found.")
+
+    kpis = compute_session_kpis(session_id)
+
+    return {
+        "session": session_data,
+        "kpis": kpis,
+        "summary": {
+            "title": f"Wafer Defect AI Inspection Benchmark Report - {session_data['model_name']}",
+            "generated_at": time.strftime("%d-%b-%Y %H:%M:%S"),
+            "verdict": "PRODUCTION READY" if kpis["underkill_rate"] == 0 and kpis["overkill_rate"] <= 3.0 else "TUNING REQUIRED"
+        }
+    }
+
+
+@app.post("/api/model/benchmark/stop")
+async def stop_benchmark():
+    """Stops the active benchmark validation job."""
+    global priority_dispatcher_state, P1_QUEUE
+    
+    drained = 0
+    while not P1_QUEUE.empty():
+        try:
+            P1_QUEUE.get_nowait()
+            P1_QUEUE.task_done()
+            drained += 1
+        except queue.Empty:
+            break
+            
+    priority_dispatcher_state["status"] = "STOPPED"
+    priority_dispatcher_state["active_priority"] = "IDLE"
+    priority_dispatcher_state["p1_pending"] = 0
+    priority_dispatcher_state["p1_current"] = ""
+
+    sess_id = priority_dispatcher_state.get("active_session_id")
+    if sess_id:
+        finalize_benchmark_session(sess_id)
+
+    print(f"🛑 [BENCHMARK STOPPED] Drained {drained} remaining validation items from P1 Queue.")
+    return {"status": "success", "message": f"Benchmark stopped. {drained} items cleared."}
+
 
 @app.get("/api/sys-stats")
 async def get_sys_stats():

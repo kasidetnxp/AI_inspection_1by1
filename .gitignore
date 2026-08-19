@@ -39,3 +39,9 @@ confuse/
 simulation/
 Pun_for_Accuracy/
 *.bmp
+*.zip
+
+# Agent & IDE caches
+.agents/
+.codegraph/
+

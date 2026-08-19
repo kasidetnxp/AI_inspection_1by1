@@ -166,30 +166,324 @@ export default function App() {
     }
   };
 
-  useEffect(() => {
-    if (!selectedModalItem) return;
-    const handleKeyDown = (e) => {
-      if (e.key === "ArrowLeft") {
-        handlePrevModalItem(e);
-      } else if (e.key === "ArrowRight") {
-        handleNextModalItem(e);
-      } else if (e.key === "Escape") {
-        closeModal();
-      }
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [selectedModalItem, selectedModalIndex, history, activeTab, analyticsFilter, analyticsBatchFilter, analyticsMachineFilter, filterSearch]);
-
-  // Drag and drop uploading state
+  // ==============================================================================
+  // MODEL VALIDATION LAB & HUMAN REVIEW STATE
+  // ==============================================================================
   const fileInputRef = useRef(null);
+  const benchmarkFileInputRef = useRef(null);
   const [isDragging, setIsDragging] = useState(false);
+  const [isBenchmarkDragging, setIsBenchmarkDragging] = useState(false);
   const [loadedImage, setLoadedImage] = useState(null);
   const [loadedRawImage, setLoadedRawImage] = useState(null);
   const [selectedClasses, setSelectedClasses] = useState(3);
   const [uploadClassCount, setUploadClassCount] = useState(3);
   const [modelFilter, setModelFilter] = useState("ALL");
   const [modelsList, setModelsList] = useState([]);
+
+  const [benchmarkActiveSubTab, setBenchmarkActiveSubTab] = useState("hub"); // "hub" | "validation" | "registry"
+  const [benchmarkModel, setBenchmarkModel] = useState("unet.tflite");
+  const [benchmarkZipFile, setBenchmarkZipFile] = useState(null);
+  const [benchmarkDataset, setBenchmarkDataset] = useState("all_wafers");
+  const [benchmarkDatasetsList, setBenchmarkDatasetsList] = useState([]);
+  const [benchmarkLimit, setBenchmarkLimit] = useState(50);
+  const [benchmarkRules, setBenchmarkRules] = useState({
+    fail_distance_um: 8.0,
+    max_area_ratio_pct: 25.0,
+    min_area_ratio_pct: 0.5,
+    missing_mark_action: "fail"
+  });
+  const [benchmarkProgress, setBenchmarkProgress] = useState({
+    status: "IDLE",
+    active_priority: "IDLE",
+    p0_pending: 0,
+    p1_pending: 0,
+    p1_total: 0,
+    p1_processed: 0,
+    p1_current_image: "",
+    active_session_id: null
+  });
+  const [benchmarkResults, setBenchmarkResults] = useState([]);
+  const [benchmarkKpis, setBenchmarkKpis] = useState({
+    total_tested: 0,
+    total_reviewed: 0,
+    unreviewed_count: 0,
+    human_pass_count: 0,
+    human_fail_count: 0,
+    ai_pass_count: 0,
+    ai_fail_count: 0,
+    overkill_count: 0,
+    underkill_count: 0,
+    agreement_count: 0,
+    overkill_rate: 0.0,
+    underkill_rate: 0.0,
+    agreement_rate: 0.0,
+    true_yield: 0.0,
+    ai_yield: 0.0,
+    avg_inference_time_ms: 0.0,
+    min_inference_time_ms: 0.0,
+    max_inference_time_ms: 0.0,
+    avg_rule_time_ms: 0.0,
+    confusion_matrix: { tp: 0, fp: 0, tn: 0, fn: 0 }
+  });
+
+  const priority_dispatcher_status_color = (status) => {
+    if (status === "P0_PRODUCTION") return "#ef4444";
+    if (status === "P1_BENCHMARK") return "#0ea5e9";
+    return "var(--text-muted)";
+  };
+
+  const [benchmarkFilter, setBenchmarkFilter] = useState("ALL");
+  const [benchmarkSearch, setBenchmarkSearch] = useState("");
+  const [benchmarkSplitModalItem, setBenchmarkSplitModalItem] = useState(null);
+  const [benchmarkSplitModalIndex, setBenchmarkSplitModalIndex] = useState(0);
+  const [benchmarkReportModalOpen, setBenchmarkReportModalOpen] = useState(false);
+  const [benchmarkReportData, setBenchmarkReportData] = useState(null);
+  const [isBenchmarkStarting, setIsBenchmarkStarting] = useState(false);
+
+  const handlePrevBenchmarkItem = () => {
+    if (!benchmarkResults || benchmarkResults.length === 0) return;
+    const curIdx = benchmarkSplitModalIndex >= 0 ? benchmarkSplitModalIndex : 0;
+    const prevIdx = (curIdx - 1 + benchmarkResults.length) % benchmarkResults.length;
+    setBenchmarkSplitModalIndex(prevIdx);
+    setBenchmarkSplitModalItem(benchmarkResults[prevIdx]);
+  };
+
+  const handleNextBenchmarkItem = () => {
+    if (!benchmarkResults || benchmarkResults.length === 0) return;
+    const curIdx = benchmarkSplitModalIndex >= 0 ? benchmarkSplitModalIndex : 0;
+    const nextIdx = (curIdx + 1) % benchmarkResults.length;
+    setBenchmarkSplitModalIndex(nextIdx);
+    setBenchmarkSplitModalItem(benchmarkResults[nextIdx]);
+  };
+
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      // 1. Hotkeys for Historical Inspection Modal
+      if (selectedModalItem) {
+        if (e.key === "ArrowLeft") {
+          handlePrevModalItem(e);
+        } else if (e.key === "ArrowRight") {
+          handleNextModalItem(e);
+        } else if (e.key === "Escape") {
+          closeModal();
+        }
+      }
+
+      // 2. Hotkeys for Benchmark Split-View Modal
+      if (benchmarkSplitModalItem) {
+        if (e.key === "p" || e.key === "P") {
+          e.preventDefault();
+          handleSaveHumanReview(benchmarkSplitModalItem, "PASS");
+        } else if (e.key === "f" || e.key === "F") {
+          e.preventDefault();
+          handleSaveHumanReview(benchmarkSplitModalItem, "FAIL");
+        } else if (e.key === "ArrowLeft") {
+          e.preventDefault();
+          handlePrevBenchmarkItem();
+        } else if (e.key === "ArrowRight") {
+          e.preventDefault();
+          handleNextBenchmarkItem();
+        } else if (e.key === "Escape") {
+          setBenchmarkSplitModalItem(null);
+        }
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [selectedModalItem, selectedModalIndex, benchmarkSplitModalItem, benchmarkSplitModalIndex, benchmarkResults, history, activeTab, analyticsFilter, analyticsBatchFilter, analyticsMachineFilter, filterSearch]);
+
+  const fetchBenchmarkDatasets = () => {
+    fetch(`${apiBase}/api/model/benchmark/datasets`)
+      .then(res => res.ok ? res.json() : [])
+      .then(data => {
+        if (Array.isArray(data) && data.length > 0) {
+          setBenchmarkDatasetsList(data);
+          if (!benchmarkDataset || benchmarkDataset === "all_wafers") {
+            setBenchmarkDataset(data[0].key || "all_wafers");
+          }
+        }
+      })
+      .catch(err => console.error("Error fetching datasets:", err));
+  };
+
+  const fetchBenchmarkProgress = () => {
+    fetch(`${apiBase}/api/model/benchmark/progress`)
+      .then(res => res.ok ? res.json() : null)
+      .then(data => {
+        if (data) {
+          setBenchmarkProgress(data);
+          if (data.kpis && data.kpis.total_tested > 0) setBenchmarkKpis(data.kpis);
+        }
+      })
+      .catch(err => console.error("Error fetching benchmark progress:", err));
+  };
+
+  const fetchBenchmarkResults = (sessionId, filter = "ALL") => {
+    const query = new URLSearchParams();
+    if (sessionId) query.append("session_id", sessionId);
+    if (filter) query.append("filter", filter);
+
+    fetch(`${apiBase}/api/model/benchmark/results?${query.toString()}`)
+      .then(res => res.ok ? res.json() : { results: [], kpis: null })
+      .then(data => {
+        if (data.results) setBenchmarkResults(data.results);
+        if (data.kpis) setBenchmarkKpis(data.kpis);
+      })
+      .catch(err => console.error("Error fetching benchmark results:", err));
+  };
+
+  const handleStartBenchmark = () => {
+    if (!benchmarkZipFile) {
+      if (benchmarkFileInputRef.current) {
+        benchmarkFileInputRef.current.click();
+      }
+      return;
+    }
+    handleCustomBenchmarkUpload([benchmarkZipFile]);
+  };
+
+  const handleStopBenchmark = () => {
+    fetch(`${apiBase}/api/model/benchmark/stop`, { method: "POST" })
+      .then(res => res.json())
+      .then(data => {
+        fetchBenchmarkProgress();
+      })
+      .catch(err => console.error("Error stopping benchmark:", err));
+  };
+
+  const handleSaveHumanReview = (item, decision, notes = "") => {
+    if (!item) return;
+    fetch(`${apiBase}/api/model/benchmark/save-review`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        session_id: item.session_id,
+        result_id: item.id,
+        human_decision: decision,
+        reviewer: "QA Engineer",
+        notes: notes
+      })
+    })
+      .then(res => res.json())
+      .then(data => {
+        if (data.kpis) setBenchmarkKpis(data.kpis);
+        setBenchmarkResults(prev => prev.map(r => r.id === item.id ? { ...r, human_decision: decision } : r));
+        if (benchmarkSplitModalItem && benchmarkSplitModalItem.id === item.id) {
+          setBenchmarkSplitModalItem(prev => ({ ...prev, human_decision: decision }));
+        }
+      })
+      .catch(err => console.error("Error saving review:", err));
+  };
+
+  const handleBatchReview = (action) => {
+    const sessId = benchmarkProgress.active_session_id || (benchmarkResults[0] && benchmarkResults[0].session_id);
+    if (!sessId) {
+      alert("No active benchmark session found.");
+      return;
+    }
+    fetch(`${apiBase}/api/model/benchmark/batch-review`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        session_id: sessId,
+        action: action,
+        reviewer: "QA Lead"
+      })
+    })
+      .then(res => res.json())
+      .then(data => {
+        if (data.kpis) setBenchmarkKpis(data.kpis);
+        fetchBenchmarkResults(sessId, benchmarkFilter);
+      })
+      .catch(err => console.error("Batch review error:", err));
+  };
+
+  const handleCustomBenchmarkUpload = (filesList) => {
+    if (!filesList || filesList.length === 0) return;
+    const formData = new FormData();
+    for (let i = 0; i < filesList.length; i++) {
+      formData.append("files", filesList[i]);
+    }
+    formData.append("model_name", benchmarkModel);
+    formData.append("fail_distance_um", benchmarkRules.fail_distance_um);
+    formData.append("max_area_ratio_pct", benchmarkRules.max_area_ratio_pct);
+    formData.append("min_area_ratio_pct", benchmarkRules.min_area_ratio_pct);
+    formData.append("missing_mark_action", benchmarkRules.missing_mark_action);
+
+    setIsBenchmarkStarting(true);
+    fetch(`${apiBase}/api/model/benchmark/upload-images`, {
+      method: "POST",
+      body: formData
+    })
+      .then(res => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.json();
+      })
+      .then(data => {
+        setIsBenchmarkStarting(false);
+        setBenchmarkResults([]);
+        fetchBenchmarkProgress();
+      })
+      .catch(err => {
+        setIsBenchmarkStarting(false);
+        console.error("Custom benchmark upload error:", err);
+        alert(`Failed to upload images: ${err.message}`);
+      });
+  };
+
+  const handleViewReport = () => {
+    const sessId = benchmarkProgress.active_session_id || (benchmarkResults[0] && benchmarkResults[0].session_id);
+    if (!sessId) {
+      alert("No benchmark session available for report generation.");
+      return;
+    }
+    fetch(`${apiBase}/api/model/benchmark/report/${sessId}`)
+      .then(res => res.ok ? res.json() : null)
+      .then(data => {
+        if (data) {
+          setBenchmarkReportData(data);
+          setBenchmarkReportModalOpen(true);
+        }
+      })
+      .catch(err => console.error("Error fetching report:", err));
+  };
+
+  const handleExportBenchmarkCSV = () => {
+    if (benchmarkResults.length === 0) {
+      alert("No benchmark data to export.");
+      return;
+    }
+    const headers = [
+      "Image Name", "AI Decision", "Human Review", "Agreement",
+      "Confidence (%)", "Inference Time (ms)", "Rule Time (ms)",
+      "Min Edge Distance (um)", "Mark Area Ratio (%)", "Pads Count", "Marks Count", "AI Reason"
+    ];
+    const rows = benchmarkResults.map(r => {
+      const isAgree = r.human_decision === "UNREVIEWED" ? "PENDING" : (r.ai_decision === r.human_decision ? "AGREE" : "DISAGREE");
+      return [
+        `"${r.image_name}"`,
+        r.ai_decision,
+        r.human_decision,
+        isAgree,
+        r.ai_confidence,
+        r.inference_time_ms,
+        r.rule_time_ms,
+        r.min_edge_distance_um,
+        r.mark_area_ratio_pct,
+        r.pads_count,
+        r.marks_count,
+        `"${(r.ai_reason || '-').replace(/"/g, '""')}"`
+      ].join(",");
+    });
+    const csvContent = "data:text/csv;charset=utf-8," + [headers.join(","), ...rows].join("\n");
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement("a");
+    link.setAttribute("href", encodedUri);
+    link.setAttribute("download", `Wafer_Model_Benchmark_${benchmarkModel}_${new Date().toISOString().slice(0, 10)}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
 
   const handleUploadFile = (file) => {
     if (!file) return;
@@ -380,6 +674,11 @@ export default function App() {
           })
           .catch(e => console.error(e));
 
+        // Fetch benchmark datasets & progress
+        fetchBenchmarkDatasets();
+        fetchBenchmarkProgress();
+        fetchBenchmarkResults();
+
         // Fallback polling loop if real-time hardware WS is inactive
         pollStats = setInterval(() => {
           fetch(`${apiBase}/api/sys-stats`)
@@ -395,7 +694,9 @@ export default function App() {
               setDbType(stats.db);
             })
             .catch(e => console.error(e));
-        }, 3000);
+
+          fetchBenchmarkProgress();
+        }, 2500);
       };
 
       ws.onmessage = (event) => {
@@ -413,6 +714,22 @@ export default function App() {
               return true;
             });
           });
+        } else if (payload.event === "BENCHMARK_PROGRESS" && payload.data) {
+          setBenchmarkProgress(payload.data);
+          if (payload.data.kpis && payload.data.kpis.total_tested > 0) {
+            setBenchmarkKpis(payload.data.kpis);
+          }
+          if (payload.data.latest_result) {
+            setBenchmarkResults(prev => {
+              const list = Array.isArray(prev) ? prev : [];
+              const exists = list.some(r => r.id === payload.data.latest_result.id);
+              if (exists) return list.map(r => r.id === payload.data.latest_result.id ? payload.data.latest_result : r);
+              return [payload.data.latest_result, ...list];
+            });
+          }
+        } else if (payload.event === "BENCHMARK_REVIEW_UPDATED" && payload.data) {
+          if (payload.data.kpis) setBenchmarkKpis(payload.data.kpis);
+          setBenchmarkResults(prev => (Array.isArray(prev) ? prev : []).map(r => r.id === payload.data.result_id ? { ...r, human_decision: payload.data.human_decision } : r));
         }
       };
 
@@ -1102,7 +1419,7 @@ export default function App() {
           <nav className="header-nav">
             <button className={`nav-tab ${activeTab === "inspect" ? "active" : ""}`} onClick={() => setActiveTab("inspect")}>INSPECT</button>
             <button className={`nav-tab ${activeTab === "analytics" ? "active" : ""}`} onClick={() => setActiveTab("analytics")}>ANALYTICS</button>
-            <button className={`nav-tab ${activeTab === "models" ? "active" : ""}`} onClick={() => setActiveTab("models")}>MODELS</button>
+            <button className={`nav-tab ${activeTab === "models" ? "active" : ""}`} onClick={() => { setActiveTab("models"); setBenchmarkActiveSubTab("hub"); }}>MODELS</button>
           </nav>
 
           <div className="header-center">
@@ -1557,181 +1874,1130 @@ export default function App() {
         )}
 
         {/* ==========================================
-            TAB CONTENT 3: AI MODEL MANAGER
+            TAB CONTENT 3: AI MODELS (HUB, UPLOAD & TEST)
             ========================================== */}
         {activeTab === "models" && (
-          <div className="tab-content active-tab" id="view-models">
-            <main className="models-layout">
-              <div className="models-grid">
+          <div className="tab-content active-tab" id="view-models-validation">
+            <main className="validation-lab-layout">
 
-                {/* Drag and drop upload */}
-                <div className="models-left-panel">
-                  <div className="hmi-card uploader-card">
-                    <div className="card-header">
-                      <h3>UPLOAD AI DETECTOR</h3>
+              {/* -------------------------------------------------------------
+                  MODE 0: MODELS HUB (DEFAULT LANDING VIEW)
+                  ------------------------------------------------------------- */}
+              {benchmarkActiveSubTab === "hub" && (
+                <div className="models-hub-view">
+                  <div className="models-hub-header">
+                    <div>
+                      <h2 className="models-hub-title">MODELS</h2>
                     </div>
-                    <div className="card-body">
-                      {/* Target Class Selector for Imported Model */}
-                      <div style={{ marginBottom: "14px", display: "flex", flexDirection: "column", gap: "6px" }}>
-                        <label style={{ fontSize: "11px", fontWeight: "600", color: "var(--text-muted)", textTransform: "uppercase" }}>Model Class Architecture:</label>
-                        <div style={{ display: "flex", gap: "6px" }}>
-                          <button
-                            type="button"
-                            className={`compare-btn ${uploadClassCount === 2 ? "active" : ""}`}
-                            onClick={() => setUploadClassCount(2)}
-                            style={{ flex: 1, padding: "5px 8px", fontSize: "11px", borderRadius: "4px" }}
-                          >
-                            2 Classes (Pad + Mark)
-                          </button>
-                          <button
-                            type="button"
-                            className={`compare-btn ${uploadClassCount === 3 ? "active" : ""}`}
-                            onClick={() => setUploadClassCount(3)}
-                            style={{ flex: 1, padding: "5px 8px", fontSize: "11px", borderRadius: "4px" }}
-                          >
-                            3 Classes (Pad + Mark + Grain)
-                          </button>
-                        </div>
-                      </div>
+                    <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                      <span style={{ fontSize: "11px", color: "var(--text-muted)", fontWeight: "600" }}>ACTIVE NPU:</span>
+                      <span className="badge-result pass font-mono" style={{ fontSize: "11px", fontWeight: "700" }}>
+                        {benchmarkModel || "unet.tflite"} ({selectedClasses}C)
+                      </span>
+                    </div>
+                  </div>
 
-                      <input
-                        type="file"
-                        ref={fileInputRef}
-                        accept=".tflite,.onnx,.pth"
-                        style={{ display: "none" }}
-                        onChange={(e) => {
-                          if (e.target.files && e.target.files.length > 0) {
-                            handleUploadFile(e.target.files[0]);
-                          }
-                        }}
-                      />
-                      <div
-                        className={`upload-drop-zone ${isDragging ? "active-drag" : ""}`}
-                        id="upload-zone"
-                        onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
-                        onDragLeave={() => setIsDragging(false)}
-                        onDrop={(e) => {
-                          e.preventDefault();
-                          setIsDragging(false);
-                          const files = e.dataTransfer.files;
-                          if (files.length > 0) {
-                            handleUploadFile(files[0]);
-                          }
-                        }}
-                      >
-                        <div className="upload-icon-box"></div>
-                        <p className="upload-main-text">Drag & Drop model file here</p>
-                        <p className="upload-sub-text">Imports as {uploadClassCount}-Class Model (.onnx, .tflite)</p>
-                        <button className="select-file-btn" id="btn-select-file" onClick={() => fileInputRef.current && fileInputRef.current.click()}>Select File</button>
+                  <div className="models-hub-grid">
+                    {/* CARD 1: UPLOAD */}
+                    <div className="hmi-card models-hub-card simple-hub-card" onClick={() => setBenchmarkActiveSubTab("registry")}>
+                      <div className="simple-hub-card-content">
+                        <h2 className="simple-hub-card-title">UPLOAD</h2>
+                      </div>
+                    </div>
+
+                    {/* CARD 2: TEST */}
+                    <div className="hmi-card models-hub-card simple-hub-card" onClick={() => setBenchmarkActiveSubTab("validation")}>
+                      <div className="simple-hub-card-content">
+                        <h2 className="simple-hub-card-title">TEST</h2>
                       </div>
                     </div>
                   </div>
                 </div>
+              )}
 
-                {/* Models table list */}
-                <div className="models-right-panel">
-                  <div className="hmi-card models-list-card">
-                    <div className="card-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "10px" }}>
-                      <div>
-                        <h3>REGISTERED AI MODELS</h3>
-                        <span style={{ fontSize: "10px", color: "var(--text-muted)" }}>Active System Mode: <strong style={{ color: "var(--color-info)" }}>{selectedClasses} Classes</strong></span>
+              {/* Sub-Tab Navigation Header for inner views */}
+              {benchmarkActiveSubTab !== "hub" && (
+                <div className="tab-subnav">
+                  <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                    <button
+                      className="subnav-back-icon-btn"
+                      onClick={() => setBenchmarkActiveSubTab("hub")}
+                      title="Back"
+                    >
+                      ←
+                    </button>
+                    <span className="subnav-current-title">
+                      {benchmarkActiveSubTab === "registry" ? "UPLOAD" : "TEST"}
+                    </span>
+                  </div>
+                  <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                    <span style={{ fontSize: "11px", color: "var(--text-muted)", fontWeight: "600" }}>ACTIVE NPU:</span>
+                    <span className="badge-result pass font-mono" style={{ fontSize: "11px", fontWeight: "700" }}>
+                      {benchmarkModel || "unet.tflite"} ({selectedClasses}C)
+                    </span>
+                  </div>
+                </div>
+              )}
+
+              {/* -------------------------------------------------------------
+                  VIEW A: VALIDATION & HUMAN REVIEW LAB
+                  ------------------------------------------------------------- */}
+              {benchmarkActiveSubTab === "validation" && (
+                <>
+                  {/* 1. TOP QUALITY KPI DASHBOARD */}
+                  <div className="kpi-dashboard-grid">
+                    {/* Overkill Rate */}
+                    <div className={`kpi-card ${benchmarkKpis.overkill_rate > 3 ? "alert-warning" : "highlight-info"}`}>
+                      <div className="kpi-header">
+                        <span className="kpi-title">Overkill Rate (FP)</span>
+                        <span className="kpi-badge-hint badge-warn">AI Fail / Human Pass</span>
                       </div>
-                      <div className="model-class-toggle" style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-                        <span style={{ fontSize: "11px", fontWeight: "600", color: "var(--text-muted)", textTransform: "uppercase" }}>Filter View:</span>
-                        <button
-                          className={`compare-btn ${modelFilter === "ALL" ? "active" : ""}`}
-                          onClick={() => setModelFilter("ALL")}
-                          style={{ padding: "3px 8px", fontSize: "10px", borderRadius: "4px" }}
-                        >
-                          All
-                        </button>
-                        <button
-                          className={`compare-btn ${modelFilter === "2" ? "active" : ""}`}
-                          onClick={() => setModelFilter("2")}
-                          style={{ padding: "3px 8px", fontSize: "10px", borderRadius: "4px" }}
-                        >
-                          2 Classes Only
-                        </button>
-                        <button
-                          className={`compare-btn ${modelFilter === "3" ? "active" : ""}`}
-                          onClick={() => setModelFilter("3")}
-                          style={{ padding: "3px 8px", fontSize: "10px", borderRadius: "4px" }}
-                        >
-                          3 Classes Only
-                        </button>
+                      <div className="kpi-value-row">
+                        <span className="kpi-main-val" style={{ color: benchmarkKpis.overkill_rate > 3 ? "var(--color-warn)" : "inherit" }}>
+                          {benchmarkKpis.overkill_rate.toFixed(1)}%
+                        </span>
+                        <span className="kpi-sub-text">({benchmarkKpis.overkill_count} dies wasted)</span>
                       </div>
-                      <span className="pill-id">EDGE MEMORY</span>
+                      <div className="kpi-sub-text">Target: &lt; 3.0% (Minimizes false scrap)</div>
                     </div>
-                    <div className="card-body table-container">
-                      <table className="history-table models-table">
-                        <thead>
-                          <tr>
-                            <th>Model Name</th>
-                            <th>Version</th>
-                            <th>Engine</th>
-                            <th>Size</th>
-                            <th>Supported Classes</th>
-                            <th>Accuracy</th>
-                            <th>Status</th>
-                            <th>Action</th>
-                          </tr>
-                        </thead>
-                        <tbody id="models-table-body">
-                          {modelsList
-                            .filter(m => modelFilter === "ALL" || String(m.classes || 3) === modelFilter)
-                            .map((model, idx) => {
-                              return (
-                                <tr key={idx} className={model.active ? "row-active-model" : ""}>
-                                  <td className="font-mono">{model.name}</td>
-                                  <td className="font-mono">{model.version || "v1.0.0"}</td>
-                                  <td className="font-mono">{model.engine || "TFLite / NPU"}</td>
-                                  <td className="font-mono">{model.size || "-"}</td>
-                                  <td>
-                                    <span
-                                      className="badge-result"
-                                      style={{
-                                        fontSize: "10px",
-                                        background: model.classes === 2 ? "rgba(14, 165, 233, 0.15)" : "rgba(139, 92, 246, 0.15)",
-                                        color: model.classes === 2 ? "#0ea5e9" : "#a855f7",
-                                        border: `1px solid ${model.classes === 2 ? "rgba(14, 165, 233, 0.4)" : "rgba(139, 92, 246, 0.4)"}`
-                                      }}
-                                    >
-                                      {model.classes || 3} Classes {model.classes === 2 ? "(Pad+Mark)" : "(Pad+Mark+Grain)"}
-                                    </span>
-                                  </td>
-                                  <td className="font-mono">{model.accuracy || "97.5%"}</td>
-                                  <td>
-                                    <span className={`badge-result ${model.active ? "pass" : "warn"}`}>
-                                      {model.active ? `ACTIVE RUNNING (${model.classes || 3}C)` : "INACTIVE"}
-                                    </span>
-                                  </td>
-                                  <td>
-                                    {model.active ? (
-                                      <button className="action-btn-sm active-green" disabled>IN USE</button>
-                                    ) : (
-                                      <div style={{ display: "flex", gap: "6px" }}>
-                                        <button
-                                          className="action-btn-sm"
-                                          onClick={() => handleActivateModel(model)}
-                                          title={`Activate model on i.MX8 NPU and switch system mode to ${model.classes || 3} Classes`}
-                                        >
-                                          ACTIVATE ({model.classes || 3}C)
-                                        </button>
-                                        <button className="action-btn-sm delete-red" onClick={() => handleDeleteModel(model)}>DELETE</button>
-                                      </div>
-                                    )}
-                                  </td>
-                                </tr>
-                              );
-                            })}
-                        </tbody>
-                      </table>
+
+                    {/* Underkill / Escape Rate */}
+                    <div className={`kpi-card ${benchmarkKpis.underkill_rate > 0 ? "alert-danger" : "highlight-success"}`}>
+                      <div className="kpi-header">
+                        <span className="kpi-title">Underkill / Escape (FN)</span>
+                        <span className={`kpi-badge-hint ${benchmarkKpis.underkill_rate > 0 ? "badge-fail" : "badge-pass"}`}>
+                          {benchmarkKpis.underkill_rate > 0 ? "CRITICAL RISK" : "ZERO ESCAPE"}
+                        </span>
+                      </div>
+                      <div className="kpi-value-row">
+                        <span className="kpi-main-val" style={{ color: benchmarkKpis.underkill_rate > 0 ? "var(--color-fail)" : "var(--color-pass)" }}>
+                          {benchmarkKpis.underkill_rate.toFixed(1)}%
+                        </span>
+                        <span className="kpi-sub-text">({benchmarkKpis.underkill_count} defect escapes)</span>
+                      </div>
+                      <div className="kpi-sub-text">Target: 0.0% (Zero defect leakage)</div>
+                    </div>
+
+                    {/* AI-Human Agreement */}
+                    <div className="kpi-card highlight-info">
+                      <div className="kpi-header">
+                        <span className="kpi-title">AI Agreement</span>
+                        <span className="kpi-badge-hint badge-info">Ground Truth Match</span>
+                      </div>
+                      <div className="kpi-value-row">
+                        <span className="kpi-main-val">{benchmarkKpis.agreement_rate.toFixed(1)}%</span>
+                        <span className="kpi-sub-text">({benchmarkKpis.agreement_count} / {benchmarkKpis.total_reviewed || 0})</span>
+                      </div>
+                      <div className="kpi-sub-text">Reviewed: {benchmarkKpis.total_reviewed} / {benchmarkKpis.total_tested} items</div>
+                    </div>
+
+                    {/* True Yield vs AI Yield */}
+                    <div className="kpi-card">
+                      <div className="kpi-header">
+                        <span className="kpi-title">Yield Benchmark</span>
+                        <span className="kpi-badge-hint badge-neutral">Pass Ratio</span>
+                      </div>
+                      <div className="kpi-value-row">
+                        <span className="kpi-main-val">{benchmarkKpis.true_yield.toFixed(1)}%</span>
+                        <span className="kpi-sub-text">(AI: {benchmarkKpis.ai_yield.toFixed(1)}%)</span>
+                      </div>
+                      <div className="kpi-sub-text">Pass: {benchmarkKpis.human_pass_count} | Fail: {benchmarkKpis.human_fail_count}</div>
+                    </div>
+
+                    {/* NPU Latency */}
+                    <div className="kpi-card">
+                      <div className="kpi-header">
+                        <span className="kpi-title">NPU Latency</span>
+                        <span className="kpi-badge-hint badge-pass">i.MX8 NPU</span>
+                      </div>
+                      <div className="kpi-value-row">
+                        <span className="kpi-main-val">{benchmarkKpis.avg_inference_time_ms.toFixed(1)} <small style={{ fontSize: "13px" }}>ms</small></span>
+                      </div>
+                      <div className="kpi-sub-text">Rule Eval: {benchmarkKpis.avg_rule_time_ms.toFixed(2)} ms</div>
+                    </div>
+
+                    {/* Interactive Confusion Matrix */}
+                    <div className="confusion-matrix-card">
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                        <span className="kpi-title" style={{ fontSize: "10px" }}>Confusion Matrix</span>
+                        <span style={{ fontSize: "9px", color: "var(--text-muted)" }}>H: Ground Truth</span>
+                      </div>
+                      <div className="matrix-grid">
+                        <div className="matrix-cell tp" title="True Positive: AI FAIL and Human FAIL (Confirmed Defect)">
+                          <span className="matrix-lbl">TP (Defect)</span>
+                          <span className="matrix-num" style={{ color: "#10b981" }}>{benchmarkKpis.confusion_matrix.tp}</span>
+                        </div>
+                        <div className="matrix-cell fp" title="False Positive / Overkill: AI FAIL but Human PASS (Wasted Good Die)">
+                          <span className="matrix-lbl">FP (Overkill)</span>
+                          <span className="matrix-num" style={{ color: "#f59e0b" }}>{benchmarkKpis.confusion_matrix.fp}</span>
+                        </div>
+                        <div className="matrix-cell fn" title="False Negative / Escape: AI PASS but Human FAIL (Defect Escaped)">
+                          <span className="matrix-lbl">FN (Escape)</span>
+                          <span className="matrix-num" style={{ color: "#ef4444" }}>{benchmarkKpis.confusion_matrix.fn}</span>
+                        </div>
+                        <div className="matrix-cell tn" title="True Negative: AI PASS and Human PASS (Confirmed Good Die)">
+                          <span className="matrix-lbl">TN (Good)</span>
+                          <span className="matrix-num" style={{ color: "#0ea5e9" }}>{benchmarkKpis.confusion_matrix.tn}</span>
+                        </div>
+                      </div>
                     </div>
                   </div>
+
+                  {/* 2. TWO-COLUMN MAIN WORKSPACE */}
+                  <div className="validation-main-grid">
+
+                    {/* LEFT COLUMN: SETUP & PRIORITY QUEUE PANEL */}
+                    <div className="validation-setup-panel">
+                      <div className="hmi-card">
+                        <div className="card-header">
+                          <h3>TEST SETUP & ENGINE RULES</h3>
+                          <span className="pill-id">CONFIG</span>
+                        </div>
+                        <div className="card-body" style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+                          
+                          {/* Model Selector */}
+                          <div className="form-group-lab">
+                            <label>Target AI Model</label>
+                            <select
+                              className="lab-select"
+                              value={benchmarkModel}
+                              onChange={(e) => setBenchmarkModel(e.target.value)}
+                            >
+                              {modelsList.map((m, idx) => (
+                                <option key={idx} value={m.name}>
+                                  {m.name} ({m.classes || 3} Classes - {m.engine || "TFLite"})
+                                </option>
+                              ))}
+                              {modelsList.length === 0 && (
+                                <option value="unet.tflite">unet.tflite (3 Classes - TFLite NPU)</option>
+                              )}
+                            </select>
+                          </div>
+
+                          {/* Test Dataset (ZIP Upload) */}
+                          <div className="form-group-lab">
+                            <label>Upload Test Dataset (.zip)</label>
+                            <input
+                              type="file"
+                              ref={benchmarkFileInputRef}
+                              accept=".zip,image/*"
+                              style={{ display: "none" }}
+                              onChange={(e) => {
+                                if (e.target.files && e.target.files.length > 0) {
+                                  setBenchmarkZipFile(e.target.files[0]);
+                                }
+                              }}
+                            />
+
+                            {!benchmarkZipFile ? (
+                              <div
+                                className={`benchmark-zip-dropzone ${isBenchmarkDragging ? "active-drag" : ""}`}
+                                onDragOver={(e) => { e.preventDefault(); setIsBenchmarkDragging(true); }}
+                                onDragLeave={() => setIsBenchmarkDragging(false)}
+                                onDrop={(e) => {
+                                  e.preventDefault();
+                                  setIsBenchmarkDragging(false);
+                                  if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+                                    setBenchmarkZipFile(e.dataTransfer.files[0]);
+                                  }
+                                }}
+                                onClick={() => benchmarkFileInputRef.current && benchmarkFileInputRef.current.click()}
+                              >
+                                <p className="upload-main-text" style={{ fontSize: "12px", margin: 0, fontWeight: "600" }}>
+                                  Drop .ZIP file or click to browse
+                                </p>
+                                <p className="upload-sub-text" style={{ fontSize: "10px", margin: "4px 0 0 0" }}>
+                                  Raw wafer images archive (.zip)
+                                </p>
+                              </div>
+                            ) : (
+                              <div className="selected-zip-box">
+                                <div className="zip-file-info">
+                                  <span className="zip-file-name" title={benchmarkZipFile.name}>{benchmarkZipFile.name}</span>
+                                  <span className="zip-file-meta">
+                                    {(benchmarkZipFile.size / (1024 * 1024)).toFixed(2)} MB • Ready to benchmark
+                                  </span>
+                                </div>
+                                <button
+                                  className="zip-remove-btn"
+                                  title="Remove and select another file"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setBenchmarkZipFile(null);
+                                    if (benchmarkFileInputRef.current) benchmarkFileInputRef.current.value = "";
+                                  }}
+                                >
+                                  ✕
+                                </button>
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Rule Limit Sliders */}
+                          <div className="form-group-lab">
+                            <label>
+                              <span>Min Edge Distance</span>
+                              <span className="slider-val-badge">{benchmarkRules.fail_distance_um.toFixed(1)} µm</span>
+                            </label>
+                            <div className="lab-slider-row">
+                              <input
+                                type="range"
+                                min="1.0"
+                                max="25.0"
+                                step="0.5"
+                                className="lab-slider"
+                                value={benchmarkRules.fail_distance_um}
+                                onChange={(e) => setBenchmarkRules(prev => ({ ...prev, fail_distance_um: parseFloat(e.target.value) }))}
+                              />
+                            </div>
+                            <span style={{ fontSize: "10px", color: "var(--text-muted)" }}>Mark &lt; {benchmarkRules.fail_distance_um} µm from pad boundary triggers FAIL</span>
+                          </div>
+
+                          <div className="form-group-lab">
+                            <label>
+                              <span>Max Area Ratio</span>
+                              <span className="slider-val-badge">{benchmarkRules.max_area_ratio_pct.toFixed(0)}%</span>
+                            </label>
+                            <div className="lab-slider-row">
+                              <input
+                                type="range"
+                                min="5"
+                                max="60"
+                                step="1"
+                                className="lab-slider"
+                                value={benchmarkRules.max_area_ratio_pct}
+                                onChange={(e) => setBenchmarkRules(prev => ({ ...prev, max_area_ratio_pct: parseFloat(e.target.value) }))}
+                              />
+                            </div>
+                          </div>
+
+                          <div className="form-group-lab">
+                            <label>Missing Probe Mark</label>
+                            <select
+                              className="lab-select"
+                              value={benchmarkRules.missing_mark_action}
+                              onChange={(e) => setBenchmarkRules(prev => ({ ...prev, missing_mark_action: e.target.value }))}
+                            >
+                              <option value="fail">Strict: Trigger FAIL (Requires Probe Mark)</option>
+                              <option value="pass">Tolerant: Allow PASS (Untouched Pad)</option>
+                            </select>
+                          </div>
+
+                          {/* Priority Queue Status Monitor */}
+                          <div className="priority-queue-card">
+                            <div className="priority-header">
+                              <span>TASK PRIORITY QUEUE</span>
+                              <span style={{ fontSize: "10px", color: "var(--text-muted)" }}>
+                                Active: <strong style={{ color: priority_dispatcher_status_color(benchmarkProgress.active_priority) }}>{benchmarkProgress.active_priority}</strong>
+                              </span>
+                            </div>
+                            <div style={{ display: "flex", justifyContent: "space-between", fontSize: "10px", marginTop: "2px" }}>
+                              <span className="priority-badge-p0">P0 (Prober): {benchmarkProgress.p0_pending} in queue</span>
+                              <span className="priority-badge-p1">P1 (Validation): {benchmarkProgress.p1_pending} pending</span>
+                            </div>
+                            
+                            <div className="priority-progress-bar" style={{ marginTop: "4px" }}>
+                              <div
+                                className="priority-progress-fill"
+                                style={{
+                                  width: `${benchmarkProgress.p1_total > 0 ? (benchmarkProgress.p1_processed / benchmarkProgress.p1_total) * 100 : 0}%`
+                                }}
+                              ></div>
+                            </div>
+                            <div style={{ display: "flex", justifyContent: "space-between", fontSize: "9.5px", color: "var(--text-muted)" }}>
+                              <span>Progress: {benchmarkProgress.p1_processed} / {benchmarkProgress.p1_total} Images ({benchmarkProgress.p1_total > 0 ? Math.round((benchmarkProgress.p1_processed / benchmarkProgress.p1_total) * 100) : 0}%)</span>
+                              <span style={{ color: benchmarkProgress.status === "RUNNING" ? "#38bdf8" : "inherit" }}>
+                                {benchmarkProgress.status}
+                              </span>
+                            </div>
+                          </div>
+
+                          {/* Action Buttons */}
+                          <div style={{ display: "flex", gap: "8px", marginTop: "6px" }}>
+                            <button
+                              type="button"
+                              className="btn-start-benchmark"
+                              style={{ flex: 1 }}
+                              disabled={isBenchmarkStarting || benchmarkProgress.status === "RUNNING"}
+                              onClick={handleStartBenchmark}
+                            >
+                              {benchmarkProgress.status === "RUNNING" ? "BENCHMARK RUNNING..." : "START BENCHMARK ON i.MX8"}
+                            </button>
+                            {benchmarkProgress.status === "RUNNING" && (
+                              <button
+                                type="button"
+                                className="btn-stop-benchmark"
+                                onClick={handleStopBenchmark}
+                              >
+                                STOP
+                              </button>
+                            )}
+                          </div>
+
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* RIGHT COLUMN: HUMAN REVIEW STATION */}
+                    <div className="human-review-panel">
+                      <div className="hmi-card" style={{ height: "100%", display: "flex", flexDirection: "column" }}>
+                        <div className="card-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "8px" }}>
+                          <div>
+                            <h3>HUMAN REVIEW STATION</h3>
+                            <span style={{ fontSize: "10px", color: "var(--text-muted)" }}>
+                              Compare AI Decision vs QA Ground Truth ({benchmarkResults.length} Items)
+                            </span>
+                          </div>
+                          <div style={{ display: "flex", gap: "6px" }}>
+                            <button className="review-action-btn" onClick={handleExportBenchmarkCSV} title="Export CSV summary report">
+                              EXPORT CSV
+                            </button>
+                            <button className="review-action-btn" onClick={handleViewReport} title="Open analytical validation report card">
+                              VIEW REPORT
+                            </button>
+                          </div>
+                        </div>
+
+                        <div className="card-body" style={{ display: "flex", flexDirection: "column", gap: "10px", flex: 1, overflow: "hidden" }}>
+                          
+                          {/* Review Toolbar & Filter Tabs */}
+                          <div className="review-toolbar">
+                            <div className="review-filter-group">
+                              <button
+                                className={`review-filter-btn ${benchmarkFilter === "ALL" ? "active" : ""}`}
+                                onClick={() => { setBenchmarkFilter("ALL"); fetchBenchmarkResults(benchmarkProgress.active_session_id, "ALL"); }}
+                              >
+                                All ({benchmarkResults.length})
+                              </button>
+                              <button
+                                className={`review-filter-btn warn ${benchmarkFilter === "DISAGREEMENT" ? "active" : ""}`}
+                                onClick={() => { setBenchmarkFilter("DISAGREEMENT"); fetchBenchmarkResults(benchmarkProgress.active_session_id, "DISAGREEMENT"); }}
+                              >
+                                Disagreements ({benchmarkKpis.overkill_count + benchmarkKpis.underkill_count})
+                              </button>
+                              <button
+                                className={`review-filter-btn ${benchmarkFilter === "UNREVIEWED" ? "active" : ""}`}
+                                onClick={() => { setBenchmarkFilter("UNREVIEWED"); fetchBenchmarkResults(benchmarkProgress.active_session_id, "UNREVIEWED"); }}
+                              >
+                                Pending Review ({benchmarkKpis.unreviewed_count})
+                              </button>
+                              <button
+                                className={`review-filter-btn ${benchmarkFilter === "HUMAN_PASS" ? "active" : ""}`}
+                                onClick={() => { setBenchmarkFilter("HUMAN_PASS"); fetchBenchmarkResults(benchmarkProgress.active_session_id, "HUMAN_PASS"); }}
+                              >
+                                Human PASS ({benchmarkKpis.human_pass_count})
+                              </button>
+                              <button
+                                className={`review-filter-btn ${benchmarkFilter === "HUMAN_FAIL" ? "active" : ""}`}
+                                onClick={() => { setBenchmarkFilter("HUMAN_FAIL"); fetchBenchmarkResults(benchmarkProgress.active_session_id, "HUMAN_FAIL"); }}
+                              >
+                                Human FAIL ({benchmarkKpis.human_fail_count})
+                              </button>
+                            </div>
+
+                            {/* Batch Action Helpers */}
+                            <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
+                              <button
+                                className="review-action-btn"
+                                style={{ fontSize: "10.5px" }}
+                                onClick={() => handleBatchReview("CONFIRM_ALL_AI")}
+                                title="Auto-fill human decision to match AI prediction for all unreviewed items"
+                              >
+                                Auto-Confirm AI
+                              </button>
+                              <button
+                                className="review-action-btn"
+                                style={{ fontSize: "10.5px" }}
+                                onClick={() => handleBatchReview("MARK_UNREVIEWED_PASS")}
+                                title="Set all unreviewed items to PASS"
+                              >
+                                Mark All PASS
+                              </button>
+                              <button
+                                className="review-action-btn"
+                                style={{ fontSize: "10.5px" }}
+                                onClick={() => handleBatchReview("MARK_UNREVIEWED_FAIL")}
+                                title="Set all unreviewed items to FAIL"
+                              >
+                                Mark All FAIL
+                              </button>
+                              <button
+                                className="review-action-btn"
+                                style={{ fontSize: "10.5px" }}
+                                onClick={() => handleBatchReview("RESET_ALL")}
+                                title="Reset all reviews back to UNREVIEWED"
+                              >
+                                Reset
+                              </button>
+                            </div>
+                          </div>
+
+                          {/* Results Table */}
+                          <div className="table-container" style={{ flex: 1, overflowY: "auto" }}>
+                            <table className="history-table">
+                              <thead>
+                                <tr>
+                                  <th style={{ width: "60px" }}>Visual</th>
+                                  <th>Sample / Wafer ID</th>
+                                  <th>AI Decision</th>
+                                  <th>Violations / Reason</th>
+                                  <th>Min Edge</th>
+                                  <th>Area %</th>
+                                  <th>Latency</th>
+                                  <th>Human Review</th>
+                                  <th style={{ textAlign: "center", width: "150px" }}>Grade Action</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {benchmarkResults.length === 0 ? (
+                                  <tr>
+                                    <td colSpan={9} style={{ textAlign: "center", padding: "30px", color: "var(--text-muted)" }}>
+                                      {benchmarkProgress.status === "RUNNING"
+                                        ? "Processing benchmark images on i.MX8 NPU... Results will stream in real-time."
+                                        : "No benchmark validation results found. Select a dataset and click 'START BENCHMARK ON i.MX8' to begin."}
+                                    </td>
+                                  </tr>
+                                ) : (
+                                  benchmarkResults
+                                    .filter(r => !benchmarkSearch || r.image_name.toLowerCase().includes(benchmarkSearch.toLowerCase()))
+                                    .map((item, idx) => {
+                                      const isDisagreement = item.human_decision !== "UNREVIEWED" && item.human_decision !== item.ai_decision;
+                                      const isOverkill = item.ai_decision === "FAIL" && item.human_decision === "PASS";
+                                      const isUnderkill = item.ai_decision === "PASS" && item.human_decision === "FAIL";
+
+                                      return (
+                                        <tr
+                                          key={item.id || idx}
+                                          style={{
+                                            background: isUnderkill
+                                              ? "rgba(239, 68, 68, 0.08)"
+                                              : isOverkill
+                                              ? "rgba(245, 158, 11, 0.08)"
+                                              : "inherit"
+                                          }}
+                                        >
+                                          {/* Thumbnail */}
+                                          <td>
+                                            <div
+                                              style={{
+                                                width: "44px",
+                                                height: "44px",
+                                                borderRadius: "4px",
+                                                overflow: "hidden",
+                                                cursor: "pointer",
+                                                border: "1px solid var(--border-color)",
+                                                background: "#000"
+                                              }}
+                                              onClick={() => {
+                                                setBenchmarkSplitModalItem(item);
+                                                setBenchmarkSplitModalIndex(idx);
+                                              }}
+                                              title="Click to open Split View Inspection"
+                                            >
+                                              <img
+                                                src={resolveImageUrl(item.annotated_image_url || item.image_url)}
+                                                alt={item.image_name}
+                                                style={{ width: "100%", height: "100%", objectFit: "cover" }}
+                                                onError={(e) => {
+                                                  e.target.src = resolveImageUrl(item.raw_image_url || item.image_url);
+                                                }}
+                                              />
+                                            </div>
+                                          </td>
+
+                                          {/* Sample Name */}
+                                          <td>
+                                            <div
+                                              style={{ cursor: "pointer", fontWeight: "600" }}
+                                              onClick={() => {
+                                                setBenchmarkSplitModalItem(item);
+                                                setBenchmarkSplitModalIndex(idx);
+                                              }}
+                                            >
+                                              <span className="font-mono" style={{ fontSize: "11px" }}>{item.image_name}</span>
+                                            </div>
+                                          </td>
+
+                                          {/* AI Decision */}
+                                          <td>
+                                            <span className={`badge-result ${item.ai_decision.toLowerCase()}`}>
+                                              {item.ai_decision}
+                                            </span>
+                                          </td>
+
+                                          {/* Violation / Reason */}
+                                          <td style={{ fontSize: "11px", color: "var(--text-muted)", maxWidth: "200px" }}>
+                                            <span title={item.ai_reason}>{item.ai_reason || "-"}</span>
+                                          </td>
+
+                                          {/* Min Edge Distance */}
+                                          <td className="font-mono" style={{ fontSize: "11px" }}>
+                                            <span style={{ color: item.min_edge_distance_um < benchmarkRules.fail_distance_um ? "#ef4444" : "inherit" }}>
+                                              {item.min_edge_distance_um ? `${item.min_edge_distance_um.toFixed(1)} µm` : "-"}
+                                            </span>
+                                          </td>
+
+                                          {/* Mark Area Ratio */}
+                                          <td className="font-mono" style={{ fontSize: "11px" }}>
+                                            {item.mark_area_ratio_pct ? `${item.mark_area_ratio_pct.toFixed(1)}%` : "-"}
+                                          </td>
+
+                                          {/* NPU Latency */}
+                                          <td className="font-mono" style={{ fontSize: "11px" }}>
+                                            {item.inference_time_ms ? `${item.inference_time_ms.toFixed(1)} ms` : "-"}
+                                          </td>
+
+                                          {/* Human Decision Badge */}
+                                          <td>
+                                            {item.human_decision === "PASS" && (
+                                              <span className="badge-result pass" style={{ fontSize: "10px" }}>PASS</span>
+                                            )}
+                                            {item.human_decision === "FAIL" && (
+                                              <span className="badge-result fail" style={{ fontSize: "10px" }}>FAIL</span>
+                                            )}
+                                            {item.human_decision === "UNREVIEWED" && (
+                                              <span className="badge-result warn" style={{ fontSize: "10px", opacity: 0.7 }}>UNREVIEWED</span>
+                                            )}
+                                            {isDisagreement && (
+                                              <span style={{ marginLeft: "4px", fontSize: "9px", color: isUnderkill ? "#ef4444" : "#f59e0b", fontWeight: "bold" }}>
+                                                {isUnderkill ? "[ESCAPE]" : "[OVERKILL]"}
+                                              </span>
+                                            )}
+                                          </td>
+
+                                          {/* Quick Grade Action Buttons */}
+                                          <td>
+                                            <div style={{ display: "flex", gap: "4px", justifyContent: "center" }}>
+                                              <button
+                                                className={`btn-human-pass ${item.human_decision === "PASS" ? "active" : ""}`}
+                                                onClick={() => handleSaveHumanReview(item, "PASS")}
+                                                title="Mark this sample as Human PASS"
+                                              >
+                                                PASS
+                                              </button>
+                                              <button
+                                                className={`btn-human-fail ${item.human_decision === "FAIL" ? "active" : ""}`}
+                                                onClick={() => handleSaveHumanReview(item, "FAIL")}
+                                                title="Mark this sample as Human FAIL"
+                                              >
+                                                FAIL
+                                              </button>
+                                              <button
+                                                className="action-btn-sm"
+                                                style={{ padding: "4px 8px", fontSize: "10px", fontWeight: "700" }}
+                                                onClick={() => {
+                                                  setBenchmarkSplitModalItem(item);
+                                                  setBenchmarkSplitModalIndex(idx);
+                                                }}
+                                                title="Open High-Resolution Split View"
+                                              >
+                                                VIEW
+                                              </button>
+                                            </div>
+                                          </td>
+                                        </tr>
+                                      );
+                                    })
+                                )}
+                              </tbody>
+                            </table>
+                          </div>
+
+                        </div>
+                      </div>
+                    </div>
+
+                  </div>
+                </>
+              )}
+
+              {/* -------------------------------------------------------------
+                  VIEW B: MODEL REGISTRY & NPU HOT-SWAP (STANDARD VIEW)
+                  ------------------------------------------------------------- */}
+              {benchmarkActiveSubTab === "registry" && (
+                <div className="models-grid">
+
+                  {/* Drag and drop upload */}
+                  <div className="models-left-panel">
+                    <div className="hmi-card uploader-card">
+                      <div className="card-header">
+                        <h3>UPLOAD AI DETECTOR</h3>
+                      </div>
+                      <div className="card-body">
+                        {/* Target Class Selector for Imported Model */}
+                        <div style={{ marginBottom: "14px", display: "flex", flexDirection: "column", gap: "6px" }}>
+                          <label style={{ fontSize: "11px", fontWeight: "600", color: "var(--text-muted)", textTransform: "uppercase" }}>Model Class Architecture:</label>
+                          <div style={{ display: "flex", gap: "6px" }}>
+                            <button
+                              type="button"
+                              className={`compare-btn ${uploadClassCount === 2 ? "active" : ""}`}
+                              onClick={() => setUploadClassCount(2)}
+                              style={{ flex: 1, padding: "5px 8px", fontSize: "11px", borderRadius: "4px" }}
+                            >
+                              2 Classes (Pad + Mark)
+                            </button>
+                            <button
+                              type="button"
+                              className={`compare-btn ${uploadClassCount === 3 ? "active" : ""}`}
+                              onClick={() => setUploadClassCount(3)}
+                              style={{ flex: 1, padding: "5px 8px", fontSize: "11px", borderRadius: "4px" }}
+                            >
+                              3 Classes (Pad + Mark + Grain)
+                            </button>
+                          </div>
+                        </div>
+
+                        <input
+                          type="file"
+                          ref={fileInputRef}
+                          accept=".tflite,.onnx,.pth"
+                          style={{ display: "none" }}
+                          onChange={(e) => {
+                            if (e.target.files && e.target.files.length > 0) {
+                              handleUploadFile(e.target.files[0]);
+                            }
+                          }}
+                        />
+                        <div
+                          className={`upload-drop-zone ${isDragging ? "active-drag" : ""}`}
+                          id="upload-zone"
+                          onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
+                          onDragLeave={() => setIsDragging(false)}
+                          onDrop={(e) => {
+                            e.preventDefault();
+                            setIsDragging(false);
+                            const files = e.dataTransfer.files;
+                            if (files.length > 0) {
+                              handleUploadFile(files[0]);
+                            }
+                          }}
+                        >
+                          <div className="upload-icon-box"></div>
+                          <p className="upload-main-text">Drag & Drop model file here</p>
+                          <p className="upload-sub-text">Imports as {uploadClassCount}-Class Model (.onnx, .tflite)</p>
+                          <button className="select-file-btn" id="btn-select-file" onClick={() => fileInputRef.current && fileInputRef.current.click()}>Select File</button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Models table list */}
+                  <div className="models-right-panel">
+                    <div className="hmi-card models-list-card">
+                      <div className="card-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "10px" }}>
+                        <div>
+                          <h3>REGISTERED AI MODELS</h3>
+                          <span style={{ fontSize: "10px", color: "var(--text-muted)" }}>Active System Mode: <strong style={{ color: "var(--color-info)" }}>{selectedClasses} Classes</strong></span>
+                        </div>
+                        <div className="model-class-toggle" style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                          <span style={{ fontSize: "11px", fontWeight: "600", color: "var(--text-muted)", textTransform: "uppercase" }}>Filter View:</span>
+                          <button
+                            className={`compare-btn ${modelFilter === "ALL" ? "active" : ""}`}
+                            onClick={() => setModelFilter("ALL")}
+                            style={{ padding: "3px 8px", fontSize: "10px", borderRadius: "4px" }}
+                          >
+                            All
+                          </button>
+                          <button
+                            className={`compare-btn ${modelFilter === "2" ? "active" : ""}`}
+                            onClick={() => setModelFilter("2")}
+                            style={{ padding: "3px 8px", fontSize: "10px", borderRadius: "4px" }}
+                          >
+                            2 Classes Only
+                          </button>
+                          <button
+                            className={`compare-btn ${modelFilter === "3" ? "active" : ""}`}
+                            onClick={() => setModelFilter("3")}
+                            style={{ padding: "3px 8px", fontSize: "10px", borderRadius: "4px" }}
+                          >
+                            3 Classes Only
+                          </button>
+                        </div>
+                        <span className="pill-id">EDGE MEMORY</span>
+                      </div>
+                      <div className="card-body table-container">
+                        <table className="history-table models-table">
+                          <thead>
+                            <tr>
+                              <th>Model Name</th>
+                              <th>Version</th>
+                              <th>Engine</th>
+                              <th>Size</th>
+                              <th>Supported Classes</th>
+                              <th>Accuracy</th>
+                              <th>Status</th>
+                              <th>Action</th>
+                            </tr>
+                          </thead>
+                          <tbody id="models-table-body">
+                            {modelsList
+                              .filter(m => modelFilter === "ALL" || String(m.classes || 3) === modelFilter)
+                              .map((model, idx) => {
+                                return (
+                                  <tr key={idx} className={model.active ? "row-active-model" : ""}>
+                                    <td className="font-mono">{model.name}</td>
+                                    <td className="font-mono">{model.version || "v1.0.0"}</td>
+                                    <td className="font-mono">{model.engine || "TFLite / NPU"}</td>
+                                    <td className="font-mono">{model.size || "-"}</td>
+                                    <td>
+                                      <span
+                                        className="badge-result"
+                                        style={{
+                                          fontSize: "10px",
+                                          background: model.classes === 2 ? "rgba(14, 165, 233, 0.15)" : "rgba(139, 92, 246, 0.15)",
+                                          color: model.classes === 2 ? "#0ea5e9" : "#a855f7",
+                                          border: `1px solid ${model.classes === 2 ? "rgba(14, 165, 233, 0.4)" : "rgba(139, 92, 246, 0.4)"}`
+                                        }}
+                                      >
+                                        {model.classes || 3} Classes {model.classes === 2 ? "(Pad+Mark)" : "(Pad+Mark+Grain)"}
+                                      </span>
+                                    </td>
+                                    <td className="font-mono">{model.accuracy || "97.5%"}</td>
+                                    <td>
+                                      <span className={`badge-result ${model.active ? "pass" : "warn"}`}>
+                                        {model.active ? `ACTIVE RUNNING (${model.classes || 3}C)` : "INACTIVE"}
+                                      </span>
+                                    </td>
+                                    <td>
+                                      {model.active ? (
+                                        <button className="action-btn-sm active-green" disabled>IN USE</button>
+                                      ) : (
+                                        <div style={{ display: "flex", gap: "6px" }}>
+                                          <button
+                                            className="action-btn-sm"
+                                            onClick={() => handleActivateModel(model)}
+                                            title={`Activate model on i.MX8 NPU and switch system mode to ${model.classes || 3} Classes`}
+                                          >
+                                            ACTIVATE ({model.classes || 3}C)
+                                          </button>
+                                          <button className="action-btn-sm delete-red" onClick={() => handleDeleteModel(model)}>DELETE</button>
+                                        </div>
+                                      )}
+                                    </td>
+                                  </tr>
+                                );
+                              })}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  </div>
+
+                </div>
+              )}
+
+            </main>
+          </div>
+        )}
+
+        {/* ==============================================================================
+            SPLIT VIEW INSPECTION & HUMAN GRADING MODAL
+            ============================================================================== */}
+        {benchmarkSplitModalItem && (
+          <div className="split-view-modal-backdrop" onClick={() => setBenchmarkSplitModalItem(null)}>
+            <div className="split-view-modal-content" onClick={(e) => e.stopPropagation()}>
+              
+              {/* Modal Header */}
+              <div className="split-view-header">
+                <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                  <h3 style={{ margin: 0, fontSize: "14px", fontWeight: "700" }}>
+                    SPLIT VIEW INSPECTION — {benchmarkSplitModalItem.image_name}
+                  </h3>
+                  <span className={`badge-result ${benchmarkSplitModalItem.ai_decision.toLowerCase()}`}>
+                    AI: {benchmarkSplitModalItem.ai_decision}
+                  </span>
+                  {benchmarkSplitModalItem.human_decision !== "UNREVIEWED" && (
+                    <span className={`badge-result ${benchmarkSplitModalItem.human_decision.toLowerCase()}`}>
+                      HUMAN: {benchmarkSplitModalItem.human_decision}
+                    </span>
+                  )}
+                </div>
+
+                <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                  <button className="modal-nav-btn" onClick={handlePrevBenchmarkItem} title="Previous Image (Left Arrow)">
+                    ◀ PREV <span className="hotkey-pill">←</span>
+                  </button>
+                  <span className="modal-counter-badge">
+                    {benchmarkSplitModalIndex + 1} / {benchmarkResults.length}
+                  </span>
+                  <button className="modal-nav-btn" onClick={handleNextBenchmarkItem} title="Next Image (Right Arrow)">
+                    NEXT ▶ <span className="hotkey-pill">→</span>
+                  </button>
+                  <button className="close-btn" onClick={() => setBenchmarkSplitModalItem(null)}>✕</button>
+                </div>
+              </div>
+
+              {/* Modal Body: Split View Images + Diagnostic Specs */}
+              <div className="split-view-body">
+                
+                {/* 1. RAW ORIGINAL IMAGE */}
+                <div className="split-image-box">
+                  <span className="split-image-tag">1. RAW OPTICAL DIE</span>
+                  <img
+                    src={resolveImageUrl(benchmarkSplitModalItem.raw_image_url || benchmarkSplitModalItem.image_url)}
+                    alt="Raw Wafer"
+                  />
+                </div>
+
+                {/* 2. AI MASK OVERLAY & EDGE MEASUREMENT */}
+                <div className="split-image-box">
+                  <span className="split-image-tag">2. AI SEGMENTATION & DISTANCE RULE</span>
+                  <img
+                    src={resolveImageUrl(benchmarkSplitModalItem.annotated_image_url || benchmarkSplitModalItem.image_url)}
+                    alt="AI Annotated"
+                    onError={(e) => {
+                      e.target.src = resolveImageUrl(benchmarkSplitModalItem.raw_image_url || benchmarkSplitModalItem.image_url);
+                    }}
+                  />
+                </div>
+
+                {/* 3. DIAGNOSTIC SPECIFICATIONS & HUMAN GRADING SIDEBAR */}
+                <div className="split-sidebar">
+                  <div>
+                    <h4 style={{ fontSize: "11px", color: "var(--text-muted)", textTransform: "uppercase", marginBottom: "8px" }}>
+                      RULE ENGINE DIAGNOSTICS
+                    </h4>
+
+                    {/* Edge Distance */}
+                    <div style={{ background: "rgba(255, 255, 255, 0.03)", padding: "8px", borderRadius: "6px", marginBottom: "6px" }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", fontSize: "11px" }}>
+                        <span style={{ color: "var(--text-muted)" }}>Min Edge Distance:</span>
+                        <strong className="font-mono" style={{ color: benchmarkSplitModalItem.min_edge_distance_um < benchmarkRules.fail_distance_um ? "#ef4444" : "#10b981" }}>
+                          {benchmarkSplitModalItem.min_edge_distance_um ? `${benchmarkSplitModalItem.min_edge_distance_um.toFixed(1)} µm` : "-"}
+                        </strong>
+                      </div>
+                      <div style={{ fontSize: "9.5px", color: "var(--text-muted)", marginTop: "2px" }}>
+                        Limit: ≥ {benchmarkRules.fail_distance_um.toFixed(1)} µm ({benchmarkSplitModalItem.min_edge_distance_um < benchmarkRules.fail_distance_um ? "VIOLATION" : "PASSED"})
+                      </div>
+                    </div>
+
+                    {/* Mark Area Ratio */}
+                    <div style={{ background: "rgba(255, 255, 255, 0.03)", padding: "8px", borderRadius: "6px", marginBottom: "6px" }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", fontSize: "11px" }}>
+                        <span style={{ color: "var(--text-muted)" }}>Mark Area Ratio:</span>
+                        <strong className="font-mono">
+                          {benchmarkSplitModalItem.mark_area_ratio_pct ? `${benchmarkSplitModalItem.mark_area_ratio_pct.toFixed(1)}%` : "-"}
+                        </strong>
+                      </div>
+                      <div style={{ fontSize: "9.5px", color: "var(--text-muted)", marginTop: "2px" }}>
+                        Allowed Limit: {benchmarkRules.min_area_ratio_pct}% - {benchmarkRules.max_area_ratio_pct}%
+                      </div>
+                    </div>
+
+                    {/* Classes Count */}
+                    <div style={{ background: "rgba(255, 255, 255, 0.03)", padding: "8px", borderRadius: "6px", marginBottom: "6px", fontSize: "11px" }}>
+                      <div style={{ display: "flex", justifyContent: "space-between" }}>
+                        <span style={{ color: "var(--text-muted)" }}>Pads Detected:</span>
+                        <span className="font-mono">{benchmarkSplitModalItem.pads_count || 0}</span>
+                      </div>
+                      <div style={{ display: "flex", justifyContent: "space-between", marginTop: "2px" }}>
+                        <span style={{ color: "var(--text-muted)" }}>Probe Marks:</span>
+                        <span className="font-mono">{benchmarkSplitModalItem.marks_count || 0}</span>
+                      </div>
+                      <div style={{ display: "flex", justifyContent: "space-between", marginTop: "2px" }}>
+                        <span style={{ color: "var(--text-muted)" }}>Grains / Defects:</span>
+                        <span className="font-mono">{benchmarkSplitModalItem.grains_count || 0}</span>
+                      </div>
+                    </div>
+
+                    {/* AI Latency */}
+                    <div style={{ background: "rgba(255, 255, 255, 0.03)", padding: "8px", borderRadius: "6px", marginBottom: "6px", fontSize: "11px" }}>
+                      <div style={{ display: "flex", justifyContent: "space-between" }}>
+                        <span style={{ color: "var(--text-muted)" }}>NPU Inference:</span>
+                        <strong className="font-mono" style={{ color: "var(--color-info)" }}>
+                          {benchmarkSplitModalItem.inference_time_ms ? `${benchmarkSplitModalItem.inference_time_ms.toFixed(1)} ms` : "-"}
+                        </strong>
+                      </div>
+                      <div style={{ display: "flex", justifyContent: "space-between", marginTop: "2px" }}>
+                        <span style={{ color: "var(--text-muted)" }}>AI Confidence:</span>
+                        <span className="font-mono">{benchmarkSplitModalItem.ai_confidence ? `${benchmarkSplitModalItem.ai_confidence.toFixed(1)}%` : "-"}</span>
+                      </div>
+                    </div>
+
+                    {/* Violation Reason */}
+                    <div style={{ background: "rgba(239, 68, 68, 0.05)", border: "1px solid rgba(239, 68, 68, 0.2)", padding: "8px", borderRadius: "6px", marginBottom: "12px" }}>
+                      <div style={{ fontSize: "10px", color: "var(--text-muted)", textTransform: "uppercase" }}>AI Diagnosis:</div>
+                      <div style={{ fontSize: "11px", color: benchmarkSplitModalItem.ai_decision === "FAIL" ? "#ef4444" : "#10b981", fontWeight: "600", marginTop: "2px" }}>
+                        {benchmarkSplitModalItem.ai_reason || "Within Normal Inspection Tolerance"}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* HUMAN REVIEW ACTION BUTTONS & HOTKEYS */}
+                  <div>
+                    <h4 style={{ fontSize: "11px", color: "var(--text-muted)", textTransform: "uppercase", marginBottom: "8px" }}>
+                      HUMAN VERDICT (GROUND TRUTH)
+                    </h4>
+                    <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+                      <button
+                        className={`btn-human-pass ${benchmarkSplitModalItem.human_decision === "PASS" ? "active" : ""}`}
+                        style={{ padding: "10px", fontSize: "13px", display: "flex", justifyContent: "center", alignItems: "center" }}
+                        onClick={() => handleSaveHumanReview(benchmarkSplitModalItem, "PASS")}
+                      >
+                        <span>HUMAN PASS</span>
+                        <span className="hotkey-pill" style={{ background: "rgba(0,0,0,0.2)" }}>KEY: P</span>
+                      </button>
+                      <button
+                        className={`btn-human-fail ${benchmarkSplitModalItem.human_decision === "FAIL" ? "active" : ""}`}
+                        style={{ padding: "10px", fontSize: "13px", display: "flex", justifyContent: "center", alignItems: "center" }}
+                        onClick={() => handleSaveHumanReview(benchmarkSplitModalItem, "FAIL")}
+                      >
+                        <span>HUMAN FAIL</span>
+                        <span className="hotkey-pill" style={{ background: "rgba(0,0,0,0.2)" }}>KEY: F</span>
+                      </button>
+                    </div>
+
+                    <div style={{ fontSize: "9.5px", color: "var(--text-muted)", textAlign: "center", marginTop: "10px" }}>
+                      Hotkeys: <span className="hotkey-pill">P</span> Pass | <span className="hotkey-pill">F</span> Fail | <span className="hotkey-pill">←</span> Prev | <span className="hotkey-pill">→</span> Next | <span className="hotkey-pill">Esc</span> Close
+                    </div>
+                  </div>
+
                 </div>
 
               </div>
-            </main>
+
+            </div>
+          </div>
+        )}
+
+        {/* ==============================================================================
+            FULL ANALYTICAL BENCHMARK REPORT MODAL
+            ============================================================================== */}
+        {benchmarkReportModalOpen && benchmarkReportData && (
+          <div className="split-view-modal-backdrop" onClick={() => setBenchmarkReportModalOpen(false)}>
+            <div className="split-view-modal-content" style={{ maxWidth: "800px" }} onClick={(e) => e.stopPropagation()}>
+              <div className="split-view-header">
+                <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                  <h3 style={{ margin: 0, fontSize: "14px", fontWeight: "700" }}>
+                    MODEL VALIDATION ANALYTICAL REPORT
+                  </h3>
+                  <span
+                    className="badge-result"
+                    style={{
+                      background: benchmarkReportData.summary.verdict === "PRODUCTION READY" ? "rgba(16, 185, 129, 0.15)" : "rgba(245, 158, 11, 0.15)",
+                      color: benchmarkReportData.summary.verdict === "PRODUCTION READY" ? "#10b981" : "#f59e0b",
+                      border: `1px solid ${benchmarkReportData.summary.verdict === "PRODUCTION READY" ? "rgba(16, 185, 129, 0.4)" : "rgba(245, 158, 11, 0.4)"}`
+                    }}
+                  >
+                    {benchmarkReportData.summary.verdict}
+                  </span>
+                </div>
+                <button className="close-btn" onClick={() => setBenchmarkReportModalOpen(false)}>✕</button>
+              </div>
+
+              <div style={{ padding: "20px", overflowY: "auto", display: "flex", flexDirection: "column", gap: "16px" }}>
+                
+                {/* Meta info */}
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px", background: "rgba(255, 255, 255, 0.02)", padding: "12px", borderRadius: "8px", border: "1px solid var(--border-color)", fontSize: "12px" }}>
+                  <div><strong>Model:</strong> <span className="font-mono">{benchmarkReportData.session.model_name}</span></div>
+                  <div><strong>Dataset:</strong> {benchmarkReportData.session.dataset_name}</div>
+                  <div><strong>Total Samples:</strong> {benchmarkReportData.session.total_images} dies</div>
+                  <div><strong>Generated:</strong> {benchmarkReportData.summary.generated_at}</div>
+                </div>
+
+                {/* Metrics Table */}
+                <div>
+                  <h4 style={{ fontSize: "12px", color: "var(--text-muted)", textTransform: "uppercase", marginBottom: "8px" }}>
+                    KEY ACCURACY & RELIABILITY METRICS
+                  </h4>
+                  <table className="history-table">
+                    <thead>
+                      <tr>
+                        <th>Metric</th>
+                        <th>Measured Value</th>
+                        <th>Target Spec</th>
+                        <th>Status</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr>
+                        <td>Underkill / Defect Escape Rate (FN)</td>
+                        <td className="font-mono" style={{ fontWeight: "bold", color: benchmarkReportData.kpis.underkill_rate > 0 ? "#ef4444" : "#10b981" }}>
+                          {benchmarkReportData.kpis.underkill_rate.toFixed(2)}% ({benchmarkReportData.kpis.underkill_count} dies)
+                        </td>
+                        <td>0.00% (Zero Escape)</td>
+                        <td>
+                          <span className={`badge-result ${benchmarkReportData.kpis.underkill_rate === 0 ? "pass" : "fail"}`}>
+                            {benchmarkReportData.kpis.underkill_rate === 0 ? "PASS" : "FAIL"}
+                          </span>
+                        </td>
+                      </tr>
+                      <tr>
+                        <td>Overkill Rate (FP / False Scrap)</td>
+                        <td className="font-mono" style={{ fontWeight: "bold", color: benchmarkReportData.kpis.overkill_rate > 3.0 ? "#f59e0b" : "#10b981" }}>
+                          {benchmarkReportData.kpis.overkill_rate.toFixed(2)}% ({benchmarkReportData.kpis.overkill_count} dies)
+                        </td>
+                        <td>&lt; 3.00% (Yield Protection)</td>
+                        <td>
+                          <span className={`badge-result ${benchmarkReportData.kpis.overkill_rate <= 3.0 ? "pass" : "warn"}`}>
+                            {benchmarkReportData.kpis.overkill_rate <= 3.0 ? "PASS" : "WARN"}
+                          </span>
+                        </td>
+                      </tr>
+                      <tr>
+                        <td>AI-Human Decision Agreement</td>
+                        <td className="font-mono" style={{ fontWeight: "bold" }}>
+                          {benchmarkReportData.kpis.agreement_rate.toFixed(2)}%
+                        </td>
+                        <td>&gt; 95.00%</td>
+                        <td>
+                          <span className={`badge-result ${benchmarkReportData.kpis.agreement_rate >= 95.0 ? "pass" : "warn"}`}>
+                            {benchmarkReportData.kpis.agreement_rate >= 95.0 ? "PASS" : "WARN"}
+                          </span>
+                        </td>
+                      </tr>
+                      <tr>
+                        <td>Average i.MX8 NPU Latency</td>
+                        <td className="font-mono" style={{ fontWeight: "bold", color: "var(--color-info)" }}>
+                          {benchmarkReportData.kpis.avg_inference_time_ms.toFixed(1)} ms
+                        </td>
+                        <td>&lt; 50.0 ms per die</td>
+                        <td><span className="badge-result pass">PASS</span></td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* Confusion Matrix Table */}
+                <div>
+                  <h4 style={{ fontSize: "12px", color: "var(--text-muted)", textTransform: "uppercase", marginBottom: "8px" }}>
+                    CONFUSION MATRIX BREAKDOWN
+                  </h4>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px" }}>
+                    <div style={{ background: "rgba(16, 185, 129, 0.05)", border: "1px solid rgba(16, 185, 129, 0.3)", padding: "10px", borderRadius: "6px", textAlign: "center" }}>
+                      <div style={{ fontSize: "11px", color: "var(--text-muted)" }}>TRUE POSITIVE (Confirmed Defect)</div>
+                      <div style={{ fontSize: "22px", fontWeight: "bold", color: "#10b981", marginTop: "4px" }}>
+                        {benchmarkReportData.kpis.confusion_matrix.tp}
+                      </div>
+                    </div>
+                    <div style={{ background: "rgba(245, 158, 11, 0.05)", border: "1px solid rgba(245, 158, 11, 0.3)", padding: "10px", borderRadius: "6px", textAlign: "center" }}>
+                      <div style={{ fontSize: "11px", color: "var(--text-muted)" }}>FALSE POSITIVE (Overkill / Good Scrap)</div>
+                      <div style={{ fontSize: "22px", fontWeight: "bold", color: "#f59e0b", marginTop: "4px" }}>
+                        {benchmarkReportData.kpis.confusion_matrix.fp}
+                      </div>
+                    </div>
+                    <div style={{ background: "rgba(239, 68, 68, 0.05)", border: "1px solid rgba(239, 68, 68, 0.3)", padding: "10px", borderRadius: "6px", textAlign: "center" }}>
+                      <div style={{ fontSize: "11px", color: "var(--text-muted)" }}>FALSE NEGATIVE (Underkill / Defect Escape)</div>
+                      <div style={{ fontSize: "22px", fontWeight: "bold", color: "#ef4444", marginTop: "4px" }}>
+                        {benchmarkReportData.kpis.confusion_matrix.fn}
+                      </div>
+                    </div>
+                    <div style={{ background: "rgba(14, 165, 233, 0.05)", border: "1px solid rgba(14, 165, 233, 0.3)", padding: "10px", borderRadius: "6px", textAlign: "center" }}>
+                      <div style={{ fontSize: "11px", color: "var(--text-muted)" }}>TRUE NEGATIVE (Confirmed Golden Pass)</div>
+                      <div style={{ fontSize: "22px", fontWeight: "bold", color: "#0ea5e9", marginTop: "4px" }}>
+                        {benchmarkReportData.kpis.confusion_matrix.tn}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div style={{ display: "flex", justifyContent: "flex-end", gap: "8px", marginTop: "10px" }}>
+                  <button className="select-file-btn" onClick={() => window.print()}>PRINT REPORT</button>
+                  <button className="select-file-btn" style={{ background: "rgba(255, 255, 255, 0.1)" }} onClick={() => setBenchmarkReportModalOpen(false)}>CLOSE</button>
+                </div>
+
+              </div>
+            </div>
           </div>
         )}
 
