@@ -246,8 +246,101 @@ export default function App() {
   const [benchmarkSplitModalItem, setBenchmarkSplitModalItem] = useState(null);
   const [benchmarkSplitModalIndex, setBenchmarkSplitModalIndex] = useState(0);
   const [benchmarkReportModalOpen, setBenchmarkReportModalOpen] = useState(false);
-  const [benchmarkReportData, setBenchmarkReportData] = useState(null);
   const [isBenchmarkStarting, setIsBenchmarkStarting] = useState(false);
+
+  // Configuration Management State (Product_Settine & Machine_Setting)
+  const [activeConfig, setActiveConfig] = useState({
+    product: {},
+    machine: {},
+    computed: {}
+  });
+  const [configUploadStatus, setConfigUploadStatus] = useState("");
+  const [isUploadingProduct, setIsUploadingProduct] = useState(false);
+  const [isUploadingMachine, setIsUploadingMachine] = useState(false);
+
+  const fetchActiveConfig = async () => {
+    try {
+      const res = await fetch(`${apiBase}/api/config/active`);
+      if (res.ok) {
+        const data = await res.json();
+        setActiveConfig(data);
+      }
+    } catch (err) {
+      console.warn("Failed fetching active config:", err);
+    }
+  };
+
+  const handleProductUpload = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setIsUploadingProduct(true);
+    setConfigUploadStatus("Uploading Product Recipe...");
+    const formData = new FormData();
+    formData.append("file", file);
+    try {
+      const res = await fetch(`${apiBase}/api/config/upload-product`, {
+        method: "POST",
+        body: formData
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setConfigUploadStatus(data.message || "Product recipe updated");
+        fetchActiveConfig();
+      } else {
+        setConfigUploadStatus(data.message || "Upload failed");
+      }
+    } catch (err) {
+      setConfigUploadStatus(`Error: ${err.message}`);
+    } finally {
+      setIsUploadingProduct(false);
+    }
+  };
+
+  const handleMachineUpload = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setIsUploadingMachine(true);
+    setConfigUploadStatus("Uploading Machine Setting...");
+    const formData = new FormData();
+    formData.append("file", file);
+    try {
+      const res = await fetch(`${apiBase}/api/config/upload-machine`, {
+        method: "POST",
+        body: formData
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setConfigUploadStatus(data.message || "Machine setting updated");
+        fetchActiveConfig();
+      } else {
+        setConfigUploadStatus(data.message || "Upload failed");
+      }
+    } catch (err) {
+      setConfigUploadStatus(`Error: ${err.message}`);
+    } finally {
+      setIsUploadingMachine(false);
+    }
+  };
+
+  const handleApplyPreset = async (presetName) => {
+    try {
+      setConfigUploadStatus(`Applying preset '${presetName}'...`);
+      const res = await fetch(`${apiBase}/api/config/apply-preset`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ preset_name: presetName })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setConfigUploadStatus(data.message || "Preset applied");
+        fetchActiveConfig();
+      } else {
+        setConfigUploadStatus(`Failed applying preset: ${data.message}`);
+      }
+    } catch (err) {
+      setConfigUploadStatus(`Error: ${err.message}`);
+    }
+  };
 
   // Client-side filtering on master benchmarkResults for instant, glitch-free filtering & search
   const filteredBenchmarkResults = (benchmarkResults || []).filter(item => {
@@ -1503,6 +1596,7 @@ export default function App() {
             <button className={`nav-tab ${activeTab === "inspect" ? "active" : ""}`} onClick={() => setActiveTab("inspect")}>INSPECT</button>
             <button className={`nav-tab ${activeTab === "analytics" ? "active" : ""}`} onClick={() => setActiveTab("analytics")}>HISTORY</button>
             <button className={`nav-tab ${activeTab === "models" ? "active" : ""}`} onClick={() => { setActiveTab("models"); setBenchmarkActiveSubTab("hub"); }}>MODELS</button>
+            <button className={`nav-tab ${activeTab === "settings" ? "active" : ""}`} onClick={() => { setActiveTab("settings"); fetchActiveConfig(); }}>SETTINGS</button>
           </nav>
 
           <div className="header-center">
@@ -1850,7 +1944,7 @@ export default function App() {
                       title="Show Analytics Charts + Table"
                       style={{ fontSize: "13.5px", padding: "6px 12px" }}
                     >
-                      📊 DASHBOARD
+                      DASHBOARD
                     </button>
                     <button
                       className={`filter-pill ${historyViewMode === "table-full" ? "active" : ""}`}
@@ -1858,7 +1952,7 @@ export default function App() {
                       title="Expand to Full Width Data Table"
                       style={{ fontSize: "13.5px", padding: "6px 12px" }}
                     >
-                      📋 FULL TABLE
+                      FULL TABLE
                     </button>
                   </div>
 
@@ -3016,6 +3110,233 @@ export default function App() {
         )}
 
         {/* ==============================================================================
+            TAB CONTENT 4: CONFIGURATION & RECIPE STUDIO (Product_Settine & Machine_Setting)
+            ============================================================================== */}
+        {activeTab === "settings" && (
+          <div className="tab-content active-tab" id="view-settings" style={{ padding: "20px", overflowY: "auto", display: "flex", flexDirection: "column", gap: "20px" }}>
+            
+            {/* Header & Quick Action Toolbar */}
+            <div className="hmi-card" style={{ padding: "16px 20px", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "12px" }}>
+              <div>
+                <h2 style={{ fontSize: "20px", fontWeight: "800", letterSpacing: "0.5px", margin: 0, color: "var(--text-main)" }}>
+                  CONFIGURATION & RECIPE MANAGEMENT
+                </h2>
+                <div style={{ fontSize: "14px", color: "var(--text-muted)", marginTop: "4px" }}>
+                  Upload and manage factory parameters (<span className="font-mono" style={{ color: "var(--color-info)", fontWeight: "bold" }}>Product_Settine.txt</span> & <span className="font-mono" style={{ color: "var(--color-info)", fontWeight: "bold" }}>Machine_Setting.txt</span>) with instant live binding
+                </div>
+              </div>
+
+              <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                {configUploadStatus && (
+                  <div style={{ fontSize: "13.5px", fontWeight: "600", padding: "6px 14px", borderRadius: "6px", background: "rgba(14, 165, 233, 0.1)", border: "1px solid rgba(14, 165, 233, 0.25)", color: "var(--color-info)" }}>
+                    {configUploadStatus}
+                  </div>
+                )}
+                <button
+                  className="select-file-btn"
+                  onClick={fetchActiveConfig}
+                  style={{ fontSize: "14px", padding: "8px 16px" }}
+                >
+                  ↻ Refresh
+                </button>
+                <button
+                  className="select-file-btn"
+                  onClick={() => handleApplyPreset("default_factory")}
+                  style={{ fontSize: "14px", padding: "8px 16px", background: "rgba(16, 185, 129, 0.1)", borderColor: "rgba(16, 185, 129, 0.3)", color: "var(--color-pass)" }}
+                >
+                  Factory Default Preset
+                </button>
+              </div>
+            </div>
+
+            {/* Top Row: 2 Upload Dropzones */}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "20px" }}>
+              
+              {/* Dropzone 1: Product Recipe */}
+              <div className="hmi-card" style={{ padding: "20px", display: "flex", flexDirection: "column", gap: "14px", border: "1px solid var(--border-color)" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                    <h3 style={{ margin: 0, fontSize: "17px", fontWeight: "700" }}>PRODUCT RECIPE CONFIG</h3>
+                  </div>
+                  <span className="badge-result pass font-mono" style={{ fontSize: "12px" }}>Product_Settine.txt</span>
+                </div>
+
+                <div
+                  className="upload-drop-zone"
+                  style={{ height: "160px", background: "rgba(255, 255, 255, 0.01)", border: "2px dashed var(--border-color)", borderRadius: "8px", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", cursor: "pointer" }}
+                  onClick={() => document.getElementById("product-config-input").click()}
+                >
+                  <input
+                    id="product-config-input"
+                    type="file"
+                    accept=".txt,.json"
+                    style={{ display: "none" }}
+                    onChange={handleProductUpload}
+                  />
+                  <div style={{ fontSize: "16px", fontWeight: "700", color: "var(--text-main)" }}>
+                    {isUploadingProduct ? "Uploading..." : "Click or Drag Product_Settine.txt here"}
+                  </div>
+                  <div style={{ fontSize: "13px", color: "var(--text-muted)", marginTop: "4px" }}>
+                    Supports Product_Settine.txt or recipe JSON files
+                  </div>
+                </div>
+              </div>
+
+              {/* Dropzone 2: Machine Setting */}
+              <div className="hmi-card" style={{ padding: "20px", display: "flex", flexDirection: "column", gap: "14px", border: "1px solid var(--border-color)" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                    <h3 style={{ margin: 0, fontSize: "17px", fontWeight: "700" }}>MACHINE & STATION CONFIG</h3>
+                  </div>
+                  <span className="badge-result info font-mono" style={{ fontSize: "12px" }}>Machine_Setting.txt</span>
+                </div>
+
+                <div
+                  className="upload-drop-zone"
+                  style={{ height: "160px", background: "rgba(255, 255, 255, 0.01)", border: "2px dashed var(--border-color)", borderRadius: "8px", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", cursor: "pointer" }}
+                  onClick={() => document.getElementById("machine-config-input").click()}
+                >
+                  <input
+                    id="machine-config-input"
+                    type="file"
+                    accept=".txt,.json"
+                    style={{ display: "none" }}
+                    onChange={handleMachineUpload}
+                  />
+                  <div style={{ fontSize: "16px", fontWeight: "700", color: "var(--text-main)" }}>
+                    {isUploadingMachine ? "Uploading..." : "Click or Drag Machine_Setting.txt here"}
+                  </div>
+                  <div style={{ fontSize: "13px", color: "var(--text-muted)", marginTop: "4px" }}>
+                    Supports Machine_Setting.txt or station JSON files
+                  </div>
+                </div>
+              </div>
+
+            </div>
+
+            {/* Bottom Row: Active Parameters Visual Cards */}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "20px" }}>
+
+              {/* Card 1: Active Product Criteria */}
+              <div className="hmi-card" style={{ padding: "20px", display: "flex", flexDirection: "column", gap: "16px" }}>
+                <div className="card-header" style={{ padding: 0, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <h3 style={{ margin: 0, fontSize: "16px", fontWeight: "700", color: "var(--text-main)" }}>
+                    ACTIVE AI INSPECTION CRITERIA
+                  </h3>
+                  <span className="badge-result pass">LIVE</span>
+                </div>
+
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
+                  <div style={{ background: "rgba(255, 255, 255, 0.02)", padding: "12px", borderRadius: "6px", border: "1px solid var(--border-color)" }}>
+                    <div style={{ fontSize: "13px", color: "var(--text-muted)" }}>FAIL DISTANCE (EDGE)</div>
+                    <div style={{ fontSize: "22px", fontWeight: "800", color: "var(--color-fail)", marginTop: "4px" }} className="font-mono">
+                      {activeConfig?.computed?.failDistanceUm ?? 8.0} µm
+                    </div>
+                    <div style={{ fontSize: "11px", color: "var(--text-muted)", marginTop: "2px" }}>
+                      edgeThreshold: {activeConfig?.product?.edgeThreshold ?? 8} / factor: {activeConfig?.product?.edgeConversionFactor ?? 1}
+                    </div>
+                  </div>
+
+                  <div style={{ background: "rgba(255, 255, 255, 0.02)", padding: "12px", borderRadius: "6px", border: "1px solid var(--border-color)" }}>
+                    <div style={{ fontSize: "13px", color: "var(--text-muted)" }}>MAX PROBEMARK AREA</div>
+                    <div style={{ fontSize: "22px", fontWeight: "800", color: "var(--color-warn)", marginTop: "4px" }} className="font-mono">
+                      {activeConfig?.computed?.maxAreaRatioPct ?? 25.0} %
+                    </div>
+                    <div style={{ fontSize: "11px", color: "var(--text-muted)", marginTop: "2px" }}>
+                      areaRatioThreshold: {activeConfig?.product?.areaRatioThreshold ?? 25}%
+                    </div>
+                  </div>
+
+                  <div style={{ background: "rgba(255, 255, 255, 0.02)", padding: "12px", borderRadius: "6px", border: "1px solid var(--border-color)" }}>
+                    <div style={{ fontSize: "13px", color: "var(--text-muted)" }}>TARGET RESOLUTION</div>
+                    <div style={{ fontSize: "20px", fontWeight: "800", color: "var(--text-main)", marginTop: "4px" }} className="font-mono">
+                      {activeConfig?.computed?.targetWidth ?? 160} × {activeConfig?.computed?.targetHeight ?? 160} px
+                    </div>
+                    <div style={{ fontSize: "11px", color: "var(--text-muted)", marginTop: "2px" }}>
+                      Shape: {activeConfig?.product?.padShape ?? "rectangle"}
+                    </div>
+                  </div>
+
+                  <div style={{ background: "rgba(255, 255, 255, 0.02)", padding: "12px", borderRadius: "6px", border: "1px solid var(--border-color)" }}>
+                    <div style={{ fontSize: "13px", color: "var(--text-muted)" }}>INSPECTION ROI</div>
+                    <div style={{ fontSize: "20px", fontWeight: "800", color: "var(--color-info)", marginTop: "4px" }} className="font-mono">
+                      {((activeConfig?.computed?.hRoi ?? 0.7) * 100).toFixed(0)}% H × {((activeConfig?.computed?.vRoi ?? 0.7) * 100).toFixed(0)}% V
+                    </div>
+                    <div style={{ fontSize: "11px", color: "var(--text-muted)", marginTop: "2px" }}>
+                      Noise Filter: Pad {activeConfig?.computed?.minAreaSizes?.[0] ?? 300}px, PM {activeConfig?.computed?.minAreaSizes?.[1] ?? 10}px
+                    </div>
+                  </div>
+                </div>
+
+                {/* Devices */}
+                <div style={{ borderTop: "1px solid var(--border-color)", paddingTop: "12px" }}>
+                  <div style={{ fontSize: "13px", color: "var(--text-muted)", marginBottom: "8px", fontWeight: "600" }}>
+                    SUPPORTED PRODUCT DEVICES ({activeConfig?.product?.devices?.length || 0}):
+                  </div>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: "6px" }}>
+                    {(activeConfig?.product?.devices || ["T073C3BTAA-PL211", "T073C3BTAA-PL2-PS16-PT-1"]).map((dev, i) => (
+                      <span key={i} className="font-mono" style={{ fontSize: "12px", padding: "4px 8px", background: "rgba(14, 165, 233, 0.08)", border: "1px solid rgba(14, 165, 233, 0.2)", borderRadius: "4px", color: "var(--color-info)" }}>
+                        {dev}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              {/* Card 2: Active Machine & Filename Parsing Rules */}
+              <div className="hmi-card" style={{ padding: "20px", display: "flex", flexDirection: "column", gap: "16px" }}>
+                <div className="card-header" style={{ padding: 0, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <h3 style={{ margin: 0, fontSize: "16px", fontWeight: "700", color: "var(--text-main)" }}>
+                    ACTIVE MACHINE & I/O SIMULATION
+                  </h3>
+                  <span className="badge-result info">STATION</span>
+                </div>
+
+                <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+                  <div style={{ background: "rgba(255, 255, 255, 0.02)", padding: "12px", borderRadius: "6px", border: "1px solid var(--border-color)" }}>
+                    <div style={{ fontSize: "12.5px", color: "var(--text-muted)", fontWeight: "600" }}>PROBER SOURCE IMAGE FOLDER</div>
+                    <div className="font-mono" style={{ fontSize: "14px", color: "var(--color-info)", marginTop: "3px" }}>
+                      {activeConfig?.machine?.["lot.source.folder"] || "N:\\WP288\\PMI\\IMAGE"}
+                    </div>
+                    <div style={{ fontSize: "11px", color: "var(--text-muted)", marginTop: "2px" }}>
+                      Simulated on Linux: <span className="font-mono" style={{ color: "var(--text-main)" }}>{activeConfig?.computed?.simulatedSourceFolder || "/simulation/drive_N/WP288/PMI/IMAGE"}</span>
+                    </div>
+                  </div>
+
+                  <div style={{ background: "rgba(255, 255, 255, 0.02)", padding: "12px", borderRadius: "6px", border: "1px solid var(--border-color)" }}>
+                    <div style={{ fontSize: "12.5px", color: "var(--text-muted)", fontWeight: "600" }}>MACHINE RESULT JUDGE FOLDER & FORMAT</div>
+                    <div className="font-mono" style={{ fontSize: "14px", color: "var(--color-pass)", marginTop: "3px" }}>
+                      {activeConfig?.machine?.["machine.result.folder"] || "N:\\WP288\\PMI\\JUDGE"}
+                    </div>
+                    <div style={{ fontSize: "11px", color: "var(--text-muted)", marginTop: "2px" }}>
+                      Format: <span className="font-mono" style={{ color: "var(--text-main)" }}>{activeConfig?.machine?.["machine.result.fileFormat"] || "{output.result}_{output.code}_{output.machine}_{output.ts}.txt"}</span>
+                    </div>
+                  </div>
+
+                  {/* Filename Schema Indices */}
+                  <div style={{ background: "rgba(255, 255, 255, 0.02)", padding: "12px", borderRadius: "6px", border: "1px solid var(--border-color)" }}>
+                    <div style={{ fontSize: "12.5px", color: "var(--text-muted)", fontWeight: "600", marginBottom: "6px" }}>
+                      FILENAME INDEX SCHEMA MAPPING (UNDERSCORE DELIMITED)
+                    </div>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6px", fontSize: "12px" }} className="font-mono">
+                      <div>• Index 0: Process Time ({activeConfig?.machine?.["input.index.processTime"] ?? 0})</div>
+                      <div>• Index 1: Wafer ID ({activeConfig?.machine?.["input.index.waferId"] ?? 1})</div>
+                      <div>• Index 2: Die Coord ({activeConfig?.machine?.["input.index.siteCoordinate"] ?? 2})</div>
+                      <div>• Index 3: Probecard ({activeConfig?.machine?.["input.index.probecardSite"] ?? 3})</div>
+                      <div>• Index 4: Pad No ({activeConfig?.machine?.["input.index.padNo"] ?? 4})</div>
+                      <div>• Index 6: Device Setup ({activeConfig?.machine?.["input.index.device"] ?? 6})</div>
+                    </div>
+                  </div>
+                </div>
+
+              </div>
+
+            </div>
+
+          </div>
+        )}
+
+        {/* ==============================================================================
             SPLIT VIEW INSPECTION & HUMAN GRADING MODAL
             ============================================================================== */}
         {benchmarkSplitModalItem && (
@@ -3335,7 +3656,7 @@ export default function App() {
                   </div>
                   {benchmarkReportData.kpis.total_reviewed === 0 && (
                     <div className="no-print" style={{ fontSize: "11px", color: "var(--color-warn)", marginBottom: "8px", background: "rgba(245, 158, 11, 0.08)", padding: "8px 12px", borderRadius: "4px", border: "1px solid rgba(245, 158, 11, 0.25)" }}>
-                      💡 <strong>Audit Notice:</strong> Ground truth statistical metrics are derived upon QA grading of samples in the Human Review Station using the <strong>PASS (P)</strong> / <strong>FAIL (F)</strong> hotkeys.
+                      <strong>Audit Notice:</strong> Ground truth statistical metrics are derived upon QA grading of samples in the Human Review Station using the <strong>PASS (P)</strong> / <strong>FAIL (F)</strong> hotkeys.
                     </div>
                   )}
                   

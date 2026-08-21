@@ -20,8 +20,9 @@ import zipfile
 
 # Try importing FastAPI dependencies
 try:
-    from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File, Form, HTTPException, Query
+    from fastapi import FastAPI, WebSocket, WebSocketDisconnect, UploadFile, File, Form, HTTPException, Query, Body
     from fastapi.middleware.cors import CORSMiddleware
+    from fastapi.responses import JSONResponse
 except ImportError:
     print("Error: FastAPI is not installed. Please run: pip install fastapi uvicorn")
     sys.exit(1)
@@ -47,6 +48,8 @@ PROJECT_ROOT = os.path.abspath(os.path.join(_THIS_DIR, ".."))
 def _resolve_sim_path(p_str):
     if os.path.isabs(p_str):
         return p_str
+    if p_str.startswith("simulation"):
+        return os.path.abspath(os.path.join(PROJECT_ROOT, p_str))
     return os.path.abspath(os.path.join(_THIS_DIR, p_str))
 
 SYS_CONFIG = load_sys_config()
@@ -69,6 +72,117 @@ OUTPUT_DIR = _resolve_sim_path(PATHS_CFG.get("output_dir", "simulation/output"))
 JUDGEMENT_DIR = _resolve_sim_path(PATHS_CFG.get("judge_dir", "simulation/judgement"))
 VISUALS_DIR = _resolve_sim_path("simulation/output/inspection_visuals")
 MODELS_DIR = _resolve_sim_path("models")
+
+# ==============================================================================
+# Product & Machine Configuration State (Direct integration with Product_Settine.txt & Machine_Setting.txt)
+# ==============================================================================
+def resolve_windows_drive_path(raw_path: str, sim_root: str = None) -> str:
+    """
+    Simulates Windows factory network drives (N:, M:) on Linux/i.MX8 filesystem.
+    e.g. 'N:\\WP288\\PMI\\IMAGE' -> './simulation/drive_N/WP288/PMI/IMAGE'
+    """
+    if not raw_path:
+        return ""
+    if sim_root is None:
+        sim_root = os.path.join(PROJECT_ROOT, "simulation")
+    clean = raw_path.replace("\\", "/")
+    match = re.match(r"^([A-Za-z]):/(.*)$", clean)
+    if match:
+        drive = match.group(1).upper()
+        rest = match.group(2)
+        return os.path.abspath(os.path.join(sim_root, f"drive_{drive}", rest))
+    if os.path.isabs(clean):
+        return clean
+    return os.path.abspath(os.path.join(sim_root, clean.lstrip("/")))
+
+DEFAULT_PRODUCT_SETTING = {
+    "scriptName": "unet-inferencer.py",
+    "algorithm": "unet",
+    "classNames": ["pad", "probemark"],
+    "padShape": "rectangle",
+    "thingColors": ["#FF0000", "#00FF00"],
+    "minAreaSizes": [300, 10],
+    "targetWidth": 160,
+    "targetHeight": 160,
+    "badLabels": ["bad", "defect"],
+    "skipDevices": [],
+    "padIndex": 0,
+    "generateOutput": True,
+    "combineOutput": True,
+    "greyscaleThreshold": 0,
+    "verticalRoi": 0.7,
+    "horizontalRoi": 0.7,
+    "edgeThreshold": 8.0,
+    "edgeConversionFactor": 1.0,
+    "areaRatioThreshold": 25.0,
+    "devices": [
+        "T073C3BTAA-PL211",
+        "T073C3BTAA-PL2-PS16-PT-1",
+        "T073352TAG-PL2-PS16-PT-1",
+        "T073352TAH-PL2-PS16-PT-1",
+        "T073C3ATAD-PL2-PS16-PT-1"
+    ]
+}
+
+DEFAULT_MACHINE_SETTING = {
+    "input.index.machine": -1,
+    "input.index.lotNo": -1,
+    "input.index.processTime": 0,
+    "input.index.waferId": 1,
+    "input.index.siteCoordinate": 2,
+    "input.index.probecardSite": 3,
+    "input.index.padNo": 4,
+    "input.index.detailInfo": 5,
+    "input.index.device": 6,
+    "input.index.temperature": 7,
+    "machine.result.folder": "N:\\WP288\\PMI\\JUDGE",
+    "machine.result.fileFormat": "{output.result}_{output.code}_{output.machine}_{output.ts}.txt",
+    "process.end.timeout": 10000,
+    "lot.source.folder": "N:\\WP288\\PMI\\IMAGE",
+    "lot.input.folder": "M:\\WP288\\PMI\\PROCESSED\\{output.lotNo}",
+    "lot.output.folder": "M:\\WP288\\PMI\\OUTPUT\\{output.lotNo}",
+    "xadapter.url": "http://www.google.coxxxxx",
+    "postpad.enable": False,
+    "postwafer.enable": False,
+    "outputpad.enable": False,
+    "outputwafer.enable": True,
+    "hume.url": "http://twgkhhf5-eit01.tw-khh01.nxp.com/PMT/EIINquire.asmx",
+    "output.format": "jpg"
+}
+
+def load_initial_product_setting():
+    for candidate in [
+        os.path.join(PROJECT_ROOT, "Product_Settine.txt"),
+        os.path.join(_THIS_DIR, "active_product_setting.json"),
+        os.path.join(PROJECT_ROOT, "Product_Setting.txt"),
+    ]:
+        if os.path.exists(candidate):
+            try:
+                with open(candidate, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    print(f"[CONFIG] Loaded Product Recipe from: {candidate}")
+                    return data
+            except Exception as e:
+                print(f"[CONFIG] Warning loading {candidate}: {e}")
+    return DEFAULT_PRODUCT_SETTING.copy()
+
+def load_initial_machine_setting():
+    for candidate in [
+        os.path.join(PROJECT_ROOT, "Machine_Setting.txt"),
+        os.path.join(_THIS_DIR, "active_machine_setting.json"),
+    ]:
+        if os.path.exists(candidate):
+            try:
+                with open(candidate, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    print(f"[CONFIG] Loaded Machine Setting from: {candidate}")
+                    return data
+            except Exception as e:
+                print(f"[CONFIG] Warning loading {candidate}: {e}")
+    return DEFAULT_MACHINE_SETTING.copy()
+
+ACTIVE_PRODUCT_SETTING = load_initial_product_setting()
+ACTIVE_MACHINE_SETTING = load_initial_machine_setting()
 
 # Global Live States
 latest_inspection = {}
@@ -451,14 +565,24 @@ def parse_wafer_filename(filename: str, prober_default="PROBER01") -> dict:
         "temp": "-"
     }
     
-    if len(parts) >= 1 and len(parts[0]) == 14 and parts[0].isdigit():
-        dt = parts[0]
-        meta["dateTime"] = f"{dt[:4]}-{dt[4:6]}-{dt[6:8]} {dt[8:10]}:{dt[10:12]}:{dt[12:14]}"
-    elif len(parts) >= 1:
-        meta["dateTime"] = parts[0]
-        
-    if len(parts) >= 2:
-        bw = parts[1]
+    idx_time = ACTIVE_MACHINE_SETTING.get("input.index.processTime", 0)
+    idx_wafer = ACTIVE_MACHINE_SETTING.get("input.index.waferId", 1)
+    idx_coord = ACTIVE_MACHINE_SETTING.get("input.index.siteCoordinate", 2)
+    idx_site = ACTIVE_MACHINE_SETTING.get("input.index.probecardSite", 3)
+    idx_pad = ACTIVE_MACHINE_SETTING.get("input.index.padNo", 4)
+    idx_info = ACTIVE_MACHINE_SETTING.get("input.index.detailInfo", 5)
+    idx_dev = ACTIVE_MACHINE_SETTING.get("input.index.device", 6)
+    idx_temp = ACTIVE_MACHINE_SETTING.get("input.index.temperature", 7)
+    
+    if 0 <= idx_time < len(parts):
+        dt = parts[idx_time]
+        if len(dt) == 14 and dt.isdigit():
+            meta["dateTime"] = f"{dt[:4]}-{dt[4:6]}-{dt[6:8]} {dt[8:10]}:{dt[10:12]}:{dt[12:14]}"
+        else:
+            meta["dateTime"] = dt
+            
+    if 0 <= idx_wafer < len(parts):
+        bw = parts[idx_wafer]
         if "-" in bw:
             b_part, w_part = bw.split("-", 1)
             meta["batch"] = b_part
@@ -471,19 +595,19 @@ def parse_wafer_filename(filename: str, prober_default="PROBER01") -> dict:
             else:
                 meta["batch"] = bw
                 meta["waferNo"] = bw
-            
-    if len(parts) >= 3:
-        meta["xyCoord"] = parts[2]
-    if len(parts) >= 4:
-        meta["site"] = parts[3]
-    if len(parts) >= 5:
-        meta["pad"] = parts[4]
-    if len(parts) >= 6:
-        meta["processCode"] = parts[5]
-    if len(parts) >= 7:
-        meta["productSetup"] = parts[6]
-    if len(parts) >= 8:
-        raw_t = parts[7]
+                
+    if 0 <= idx_coord < len(parts):
+        meta["xyCoord"] = parts[idx_coord]
+    if 0 <= idx_site < len(parts):
+        meta["site"] = parts[idx_site]
+    if 0 <= idx_pad < len(parts):
+        meta["pad"] = parts[idx_pad]
+    if 0 <= idx_info < len(parts):
+        meta["processCode"] = parts[idx_info]
+    if 0 <= idx_dev < len(parts):
+        meta["productSetup"] = parts[idx_dev]
+    if 0 <= idx_temp < len(parts):
+        raw_t = parts[idx_temp]
         if raw_t.isdigit():
             meta["temp"] = f"{float(raw_t)/10.0:.1f}°C" if len(raw_t) >= 3 else f"{raw_t}°C"
         else:
@@ -537,6 +661,56 @@ def build_batch_judgement(batch_records: list) -> tuple:
             mask_chars.append("0")
 
     return "FAIL", "".join(mask_chars), fail_summary
+
+def generate_machine_judgement_file(batch_decision: str, mask8_str: str, prober_name: str, t_stamp: str) -> tuple:
+    """
+    Generates single 8-digit Machine Judgement text file e.g.
+    'FAIL_02000008_PROBER01_20260818112106.txt' (Content: '02000008\\n')
+    'PASS_00000000_PROBER01_20260818112106.txt' (Content: '00000000\\n')
+    
+    Adheres strictly to the 8-digit code format requested by factory specification.
+    Writes simultaneously to JUDGEMENT_DIR and simulated factory drive (e.g. simulation/drive_N/WP288/PMI/JUDGE).
+    """
+    if len(mask8_str) < 8:
+        mask8_str = mask8_str.ljust(8, "0")
+    elif len(mask8_str) > 8:
+        mask8_str = mask8_str[:8]
+
+    file_fmt = ACTIVE_MACHINE_SETTING.get("machine.result.fileFormat", "{output.result}_{output.code}_{output.machine}_{output.ts}.txt")
+    txt_filename = file_fmt.replace("{output.result}", batch_decision) \
+                           .replace("{output.code}", mask8_str) \
+                           .replace("{output.machine}", prober_name) \
+                           .replace("{output.ts}", t_stamp)
+    txt_content = f"{mask8_str}\n"
+
+    target_dirs = set()
+    if JUDGEMENT_DIR:
+        target_dirs.add(JUDGEMENT_DIR)
+    
+    sim_judge = resolve_windows_drive_path(ACTIVE_MACHINE_SETTING.get("machine.result.folder", ""))
+    if sim_judge:
+        target_dirs.add(sim_judge)
+
+    written_paths = []
+    for d in target_dirs:
+        try:
+            os.makedirs(d, exist_ok=True)
+            for old_file in os.listdir(d):
+                if old_file.endswith(".txt"):
+                    try:
+                        os.remove(os.path.join(d, old_file))
+                    except Exception:
+                        pass
+            out_file = os.path.join(d, txt_filename)
+            with open(out_file, "w", encoding="utf-8") as f:
+                f.write(txt_content)
+            written_paths.append(out_file)
+        except Exception as e:
+            print(f"[JUDGE] Warning writing judgement to {d}: {e}")
+
+    primary_path = written_paths[0] if written_paths else "-"
+    print(f"[JUDGE] Generated 8-digit Machine Judgement: {txt_filename} (Content: {mask8_str}) -> {written_paths}")
+    return txt_filename, primary_path
 
 current_batch_records = []
 
@@ -816,6 +990,23 @@ def process_new_file(filepath, filename):
     now = time.strftime("%d-%b-%Y %H:%M:%S")
     t_stamp = time.strftime("%Y%m%d%H%M%S")
     
+    # Save Split Compare & Annotated Visuals into Drive M: OUTPUT/{lotNo}
+    try:
+        raw_lot = parsed_meta.get("batch") or parsed_meta.get("waferNo") or "UNKNOWN_LOT"
+        lot_no_str = raw_lot.split("-")[0].strip() if raw_lot and raw_lot != "-" else "UNKNOWN_LOT"
+        out_tmpl = ACTIVE_MACHINE_SETTING.get("lot.output.folder", "M:\\WP288\\PMI\\OUTPUT\\{output.lotNo}")
+        output_lot_dir = resolve_windows_drive_path(out_tmpl.replace("{output.lotNo}", lot_no_str))
+        if output_lot_dir:
+            os.makedirs(output_lot_dir, exist_ok=True)
+            viz_src = os.path.join(VISUALS_DIR, f"inspect_{filename}")
+            if os.path.exists(viz_src):
+                shutil.copy2(viz_src, os.path.join(output_lot_dir, f"inspect_{filename}"))
+                shutil.copy2(viz_src, os.path.join(output_lot_dir, filename))
+            elif os.path.exists(os.path.join(VISUALS_DIR, f"annotated_{filename}")):
+                shutil.copy2(os.path.join(VISUALS_DIR, f"annotated_{filename}"), os.path.join(output_lot_dir, filename))
+    except Exception as out_err:
+        print(f"[OUTPUT] Warning saving visual to drive M: {out_err}")
+    
     # Format failure mode string for filename
     if decision == "PASS" or not cat_reason or cat_reason.strip() in ("-", "None", ""):
         fail_mode_str = "NONE"
@@ -869,24 +1060,7 @@ def process_new_file(filepath, filename):
     
     if is_end_signal:
         batch_decision, mask8_str, fail_summary = build_batch_judgement(current_batch_records)
-        txt_filename = f"{batch_decision}_{mask8_str}_{prober_name}_{t_stamp}.txt"
-        txt_judgement_path = os.path.join(JUDGEMENT_DIR, txt_filename)
-        
-        # Clean up existing old judgement text files so only 1 single file exists for machine reading
-        for old_file in os.listdir(JUDGEMENT_DIR):
-            if old_file.endswith(".txt"):
-                try:
-                    os.remove(os.path.join(JUDGEMENT_DIR, old_file))
-                except Exception:
-                    pass
-
-        # Write ONLY the 8-digit fail/pass mask code string
-        txt_content = mask8_str
-
-        with open(txt_judgement_path, "w", encoding="utf-8") as f:
-            f.write(txt_content)
-            
-        print(f"🏁 [BATCH END] Generated Single Machine Judgement TXT: {txt_filename} (Content: {mask8_str})")
+        txt_filename, txt_judgement_path = generate_machine_judgement_file(batch_decision, mask8_str, prober_name, t_stamp)
         current_batch_records.clear()
 
     save_inspection_to_db(record)
@@ -1468,7 +1642,14 @@ def process_benchmark_image(task: dict):
 
 
 def folder_watcher_thread():
-    """Monitors machine input folder and puts files into High-Priority P0 Queue."""
+    """
+    Monitors machine input folders (Drive N: IMAGE and local simulation/image).
+    When an image arrives:
+      1. Parses filename to extract lot/batch number ({output.lotNo}).
+      2. Creates target Drive M: PROCESSED/{output.lotNo} folder if it doesn't exist.
+      3. Moves the raw image to Drive M: PROCESSED/{output.lotNo}/ (raw file remains preserved).
+      4. Dispatches the image into High-Priority P0 Queue for AI inference.
+    """
     print("i.MX8 Machine Folder Watcher initialized.")
     print(f"  👉 Machine Input  : {IMAGE_DIR}")
     print(f"  👉 Process Buffer : {PROCESS_DIR}")
@@ -1477,17 +1658,51 @@ def folder_watcher_thread():
     
     while True:
         try:
-            image_files = [f for f in os.listdir(IMAGE_DIR) if f.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp'))]
-            for file in image_files:
-                src_path = os.path.join(IMAGE_DIR, file)
-                proc_path = os.path.join(PROCESS_DIR, file)
-                time.sleep(0.01)
+            source_dirs = set()
+            if IMAGE_DIR and os.path.exists(IMAGE_DIR):
+                source_dirs.add(IMAGE_DIR)
+            
+            sim_src = resolve_windows_drive_path(ACTIVE_MACHINE_SETTING.get("lot.source.folder", ""))
+            if sim_src:
+                os.makedirs(sim_src, exist_ok=True)
+                source_dirs.add(sim_src)
+
+            for s_dir in source_dirs:
                 try:
-                    shutil.move(src_path, proc_path)
-                    P0_QUEUE.put({"filepath": proc_path, "filename": file})
-                    priority_dispatcher_state["p0_pending"] = P0_QUEUE.qsize()
-                except Exception as move_err:
-                    print(f"Failed to move file {file}: {move_err}")
+                    image_files = [f for f in os.listdir(s_dir) if f.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp'))]
+                except Exception:
+                    image_files = []
+
+                for file in image_files:
+                    src_path = os.path.join(s_dir, file)
+                    time.sleep(0.01)
+                    try:
+                        meta = parse_wafer_filename(file)
+                        raw_lot = meta.get("batch") or meta.get("waferNo") or "UNKNOWN_LOT"
+                        lot_no_str = raw_lot.split("-")[0].strip() if raw_lot and raw_lot != "-" else "UNKNOWN_LOT"
+                        
+                        inp_tmpl = ACTIVE_MACHINE_SETTING.get("lot.input.folder", "M:\\WP288\\PMI\\PROCESSED\\{output.lotNo}")
+                        processed_lot_dir = resolve_windows_drive_path(inp_tmpl.replace("{output.lotNo}", lot_no_str))
+                        os.makedirs(processed_lot_dir, exist_ok=True)
+                        
+                        raw_preserved_path = os.path.join(processed_lot_dir, file)
+                        proc_work_path = os.path.join(PROCESS_DIR, file)
+                        
+                        # Move raw image to Drive M: PROCESSED/{lotNo} (stays preserved)
+                        shutil.move(src_path, raw_preserved_path)
+                        # Copy a working copy to PROCESS_DIR buffer for AI
+                        shutil.copy2(raw_preserved_path, proc_work_path)
+                        
+                        P0_QUEUE.put({
+                            "filepath": proc_work_path,
+                            "filename": file,
+                            "lot_no": lot_no_str,
+                            "raw_preserved_path": raw_preserved_path
+                        })
+                        priority_dispatcher_state["p0_pending"] = P0_QUEUE.qsize()
+                        print(f"[INGEST] Moved raw image to Drive M: {raw_preserved_path} -> Queued P0")
+                    except Exception as move_err:
+                        print(f"Failed to ingest file {file}: {move_err}")
         except Exception as e:
             print(f"Error in watcher thread: {e}")
         time.sleep(0.1)
@@ -1742,37 +1957,137 @@ async def trigger_end_signal():
         return {"status": "ignored", "message": "No active batch records in queue to summarize"}
     
     t_stamp = time.strftime("%Y%m%d%H%M%S")
-    now = time.strftime("%d-%b-%Y %H:%M:%S")
     prober_name = SYS_CONFIG.get("prober_name", "PROBER01")
     
     batch_decision, mask8_str, fail_summary = build_batch_judgement(current_batch_records)
-    txt_filename = f"{batch_decision}_{mask8_str}_{prober_name}_{t_stamp}.txt"
-    txt_judgement_path = os.path.join(JUDGEMENT_DIR, txt_filename)
-    
-    # Clean up existing old judgement text files so only 1 single file exists for machine reading
-    for old_file in os.listdir(JUDGEMENT_DIR):
-        if old_file.endswith(".txt"):
-            try:
-                os.remove(os.path.join(JUDGEMENT_DIR, old_file))
-            except Exception:
-                pass
-
-    # Write ONLY the 8-digit fail/pass mask code string
-    txt_content = mask8_str
-
-    with open(txt_judgement_path, "w", encoding="utf-8") as f:
-        f.write(txt_content)
+    txt_filename, txt_judgement_path = generate_machine_judgement_file(batch_decision, mask8_str, prober_name, t_stamp)
         
     count = len(current_batch_records)
     current_batch_records.clear()
-    print(f"🏁 [SIMULATION END] Generated Single Machine Judgement TXT: {txt_filename} (Content: {mask8_str}) for {count} records")
     return {
         "status": "success",
         "filename": txt_filename,
+        "path": txt_judgement_path,
         "decision": batch_decision,
         "mask": mask8_str,
         "totalImages": count
     }
+
+# ==============================================================================
+# Configuration Management Endpoints (Product_Settine & Machine_Setting)
+# ==============================================================================
+@app.get("/api/config/active")
+async def get_active_config():
+    global ACTIVE_PRODUCT_SETTING, ACTIVE_MACHINE_SETTING
+    
+    edge_thresh = float(ACTIVE_PRODUCT_SETTING.get("edgeThreshold", 8.0))
+    edge_factor = float(ACTIVE_PRODUCT_SETTING.get("edgeConversionFactor", 1.0))
+    fail_dist_um = edge_thresh / edge_factor if edge_factor > 0 else edge_thresh
+    max_area_ratio = float(ACTIVE_PRODUCT_SETTING.get("areaRatioThreshold", 25.0))
+    
+    sim_source = resolve_windows_drive_path(ACTIVE_MACHINE_SETTING.get("lot.source.folder", ""))
+    sim_judge = resolve_windows_drive_path(ACTIVE_MACHINE_SETTING.get("machine.result.folder", ""))
+    
+    return {
+        "status": "success",
+        "product": ACTIVE_PRODUCT_SETTING,
+        "machine": ACTIVE_MACHINE_SETTING,
+        "computed": {
+            "failDistanceUm": fail_dist_um,
+            "maxAreaRatioPct": max_area_ratio,
+            "targetWidth": ACTIVE_PRODUCT_SETTING.get("targetWidth", 160),
+            "targetHeight": ACTIVE_PRODUCT_SETTING.get("targetHeight", 160),
+            "minAreaSizes": ACTIVE_PRODUCT_SETTING.get("minAreaSizes", [300, 10]),
+            "hRoi": ACTIVE_PRODUCT_SETTING.get("horizontalRoi", 0.7),
+            "vRoi": ACTIVE_PRODUCT_SETTING.get("verticalRoi", 0.7),
+            "simulatedSourceFolder": sim_source,
+            "simulatedJudgeFolder": sim_judge,
+        }
+    }
+
+@app.post("/api/config/upload-product")
+async def upload_product_config(file: UploadFile = File(...)):
+    global ACTIVE_PRODUCT_SETTING
+    try:
+        content = await file.read()
+        parsed = json.loads(content.decode("utf-8"))
+        if not isinstance(parsed, dict):
+            raise ValueError("Config content must be a valid JSON object.")
+        
+        ACTIVE_PRODUCT_SETTING.update(parsed)
+        
+        # Save active copy
+        with open(os.path.join(_THIS_DIR, "active_product_setting.json"), "w", encoding="utf-8") as f:
+            json.dump(ACTIVE_PRODUCT_SETTING, f, indent=2)
+            
+        print(f"✅ [CONFIG] Uploaded and activated Product Recipe from '{file.filename}'")
+        return {
+            "status": "success",
+            "message": f"Successfully updated Product Recipe from {file.filename}",
+            "product": ACTIVE_PRODUCT_SETTING
+        }
+    except Exception as e:
+        print(f"❌ [CONFIG] Error uploading product config: {e}")
+        return JSONResponse(status_code=400, content={"status": "error", "message": str(e)})
+
+@app.post("/api/config/upload-machine")
+async def upload_machine_config(file: UploadFile = File(...)):
+    global ACTIVE_MACHINE_SETTING
+    try:
+        content = await file.read()
+        parsed = json.loads(content.decode("utf-8"))
+        if not isinstance(parsed, dict):
+            raise ValueError("Config content must be a valid JSON object.")
+        
+        ACTIVE_MACHINE_SETTING.update(parsed)
+        
+        with open(os.path.join(_THIS_DIR, "active_machine_setting.json"), "w", encoding="utf-8") as f:
+            json.dump(ACTIVE_MACHINE_SETTING, f, indent=2)
+            
+        for k in ["lot.source.folder", "machine.result.folder"]:
+            if k in ACTIVE_MACHINE_SETTING:
+                sim_path = resolve_windows_drive_path(ACTIVE_MACHINE_SETTING[k])
+                os.makedirs(sim_path, exist_ok=True)
+                
+        print(f"✅ [CONFIG] Uploaded and activated Machine Setting from '{file.filename}'")
+        return {
+            "status": "success",
+            "message": f"Successfully updated Machine Setting from {file.filename}",
+            "machine": ACTIVE_MACHINE_SETTING
+        }
+    except Exception as e:
+        print(f"❌ [CONFIG] Error uploading machine config: {e}")
+        return JSONResponse(status_code=400, content={"status": "error", "message": str(e)})
+
+@app.post("/api/config/apply-preset")
+async def apply_config_preset(preset_name: str = Body(..., embed=True)):
+    global ACTIVE_PRODUCT_SETTING, ACTIVE_MACHINE_SETTING
+    try:
+        if preset_name == "default_factory":
+            ACTIVE_PRODUCT_SETTING = load_initial_product_setting()
+            ACTIVE_MACHINE_SETTING = load_initial_machine_setting()
+        elif preset_name == "strict_quality":
+            ACTIVE_PRODUCT_SETTING.update({
+                "edgeThreshold": 10.0,
+                "areaRatioThreshold": 20.0,
+                "verticalRoi": 0.8,
+                "horizontalRoi": 0.8
+            })
+        elif preset_name == "relaxed_quality":
+            ACTIVE_PRODUCT_SETTING.update({
+                "edgeThreshold": 5.0,
+                "areaRatioThreshold": 35.0,
+                "verticalRoi": 0.6,
+                "horizontalRoi": 0.6
+            })
+        return {
+            "status": "success",
+            "message": f"Applied preset '{preset_name}'",
+            "product": ACTIVE_PRODUCT_SETTING,
+            "machine": ACTIVE_MACHINE_SETTING
+        }
+    except Exception as e:
+        return JSONResponse(status_code=400, content={"status": "error", "message": str(e)})
 
 @app.get("/api/models")
 async def get_models():

@@ -24,6 +24,104 @@ export default function SettingsPage() {
   const [pingResult, setPingResult] = useState(null);
   const [isPinging, setIsPinging] = useState(false);
 
+  // Configuration Management State (Product_Settine & Machine_Setting)
+  const [activeConfig, setActiveConfig] = useState({
+    product: {},
+    machine: {},
+    computed: {}
+  });
+  const [configUploadStatus, setConfigUploadStatus] = useState("");
+  const [isUploadingProduct, setIsUploadingProduct] = useState(false);
+  const [isUploadingMachine, setIsUploadingMachine] = useState(false);
+
+  const fetchActiveConfig = async () => {
+    try {
+      const res = await fetch(`http://${edgeIp}:8001/api/config/active`);
+      if (res.ok) {
+        const data = await res.json();
+        setActiveConfig(data);
+      }
+    } catch (err) {
+      console.warn("Failed fetching active config:", err);
+    }
+  };
+
+  React.useEffect(() => {
+    fetchActiveConfig();
+  }, [edgeIp]);
+
+  const handleProductUpload = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setIsUploadingProduct(true);
+    setConfigUploadStatus("Uploading Product Recipe...");
+    const formData = new FormData();
+    formData.append("file", file);
+    try {
+      const res = await fetch(`http://${edgeIp}:8001/api/config/upload-product`, {
+        method: "POST",
+        body: formData
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setConfigUploadStatus(data.message || "Product recipe updated");
+        fetchActiveConfig();
+      } else {
+        setConfigUploadStatus(data.message || "Upload failed");
+      }
+    } catch (err) {
+      setConfigUploadStatus(`Error: ${err.message}`);
+    } finally {
+      setIsUploadingProduct(false);
+    }
+  };
+
+  const handleMachineUpload = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setIsUploadingMachine(true);
+    setConfigUploadStatus("Uploading Machine Setting...");
+    const formData = new FormData();
+    formData.append("file", file);
+    try {
+      const res = await fetch(`http://${edgeIp}:8001/api/config/upload-machine`, {
+        method: "POST",
+        body: formData
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setConfigUploadStatus(data.message || "Machine setting updated");
+        fetchActiveConfig();
+      } else {
+        setConfigUploadStatus(data.message || "Upload failed");
+      }
+    } catch (err) {
+      setConfigUploadStatus(`Error: ${err.message}`);
+    } finally {
+      setIsUploadingMachine(false);
+    }
+  };
+
+  const handleApplyPreset = async (presetName) => {
+    try {
+      setConfigUploadStatus(`Applying preset '${presetName}'...`);
+      const res = await fetch(`http://${edgeIp}:8001/api/config/apply-preset`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ preset_name: presetName })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setConfigUploadStatus(data.message || "Preset applied");
+        fetchActiveConfig();
+      } else {
+        setConfigUploadStatus(`Failed applying preset: ${data.message}`);
+      }
+    } catch (err) {
+      setConfigUploadStatus(`Error: ${err.message}`);
+    }
+  };
+
   const handleSaveIp = (e) => {
     e.preventDefault();
     const sanitized = tempIp.trim();
@@ -277,27 +375,73 @@ export default function SettingsPage() {
                   />
                 </div>
               </div>
+            </div>
+          </div>
+        </div>
 
-              <div style={{ display: "flex", gap: "8px", marginTop: "6px" }}>
-                <button
-                  className="select-file-btn"
-                  style={{ flex: 1, padding: "8px", fontSize: "12px", borderRadius: "6px" }}
-                  onClick={() => runSingleOfflineInspection(false)}
-                >
-                  + Trigger Random Die
-                </button>
-                <button
-                  className="select-file-btn"
-                  style={{ flex: 1, padding: "8px", fontSize: "12px", background: "rgba(239, 68, 68, 0.2)", color: "#ef4444", border: "1px solid rgba(239, 68, 68, 0.4)", borderRadius: "6px" }}
-                  onClick={() => runSingleOfflineInspection(true)}
-                >
-                  + Force Defect
-                </button>
-              </div>
+        {/* CONFIG & RECIPE MANAGEMENT SECTION */}
+        <div className="hmi-card" style={{ padding: "20px", display: "flex", flexDirection: "column", gap: "20px" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "12px" }}>
+            <div>
+              <h3 style={{ margin: "0 0 4px 0", fontSize: "18px", fontWeight: "700" }}>CONFIGURATION & RECIPE STUDIO</h3>
+              <p style={{ margin: 0, fontSize: "13px", color: "var(--text-muted)" }}>
+                Upload and manage factory parameters (<span className="font-mono" style={{ color: "var(--color-info)" }}>Product_Settine.txt</span> & <span className="font-mono" style={{ color: "var(--color-info)" }}>Machine_Setting.txt</span>) with live binding
+              </p>
+            </div>
+            <div style={{ display: "flex", gap: "10px", alignItems: "center" }}>
+              {configUploadStatus && (
+                <div style={{ fontSize: "13px", fontWeight: "600", padding: "6px 12px", borderRadius: "6px", background: "rgba(14, 165, 233, 0.1)", border: "1px solid rgba(14, 165, 233, 0.25)", color: "var(--color-info)" }}>
+                  {configUploadStatus}
+                </div>
+              )}
+              <button className="select-file-btn" onClick={fetchActiveConfig} style={{ fontSize: "13px", padding: "6px 14px" }}>
+                Refresh
+              </button>
+              <button className="select-file-btn" onClick={() => handleApplyPreset("default_factory")} style={{ fontSize: "13px", padding: "6px 14px", background: "rgba(16, 185, 129, 0.1)", borderColor: "rgba(16, 185, 129, 0.3)", color: "var(--color-pass)" }}>
+                Factory Default Preset
+              </button>
+            </div>
+          </div>
+
+          {/* 2 Dropzones */}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px" }}>
+            {/* Product Recipe Dropzone */}
+            <div style={{ border: "2px dashed var(--border-color)", borderRadius: "8px", padding: "20px", textAlign: "center", cursor: "pointer", background: "rgba(255,255,255,0.01)" }} onClick={() => document.getElementById("remix-product-input").click()}>
+              <input id="remix-product-input" type="file" accept=".txt,.json" style={{ display: "none" }} onChange={handleProductUpload} />
+              <div style={{ fontSize: "15px", fontWeight: "700" }}>{isUploadingProduct ? "Uploading..." : "Click or Drag Product_Settine.txt here"}</div>
+              <div style={{ fontSize: "12px", color: "var(--text-muted)", marginTop: "4px" }}>Active: {activeConfig?.computed?.failDistanceUm ?? 8}µm Fail Dist, {activeConfig?.computed?.maxAreaRatioPct ?? 25}% Max Area</div>
+            </div>
+
+            {/* Machine Setting Dropzone */}
+            <div style={{ border: "2px dashed var(--border-color)", borderRadius: "8px", padding: "20px", textAlign: "center", cursor: "pointer", background: "rgba(255,255,255,0.01)" }} onClick={() => document.getElementById("remix-machine-input").click()}>
+              <input id="remix-machine-input" type="file" accept=".txt,.json" style={{ display: "none" }} onChange={handleMachineUpload} />
+              <div style={{ fontSize: "15px", fontWeight: "700" }}>{isUploadingMachine ? "Uploading..." : "Click or Drag Machine_Setting.txt here"}</div>
+              <div style={{ fontSize: "12px", color: "var(--text-muted)", marginTop: "4px" }}>Source: {activeConfig?.machine?.["lot.source.folder"] || "N:\\WP288\\PMI\\IMAGE"}</div>
+            </div>
+          </div>
+
+          {/* Computed Summary Badges */}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: "12px" }}>
+            <div style={{ background: "rgba(255,255,255,0.02)", padding: "12px", borderRadius: "6px", border: "1px solid var(--border-color)" }}>
+              <div style={{ fontSize: "12px", color: "var(--text-muted)" }}>FAIL DISTANCE THRESHOLD</div>
+              <div style={{ fontSize: "18px", fontWeight: "800", color: "var(--color-fail)" }} className="font-mono">{activeConfig?.computed?.failDistanceUm ?? 8.0} µm</div>
+            </div>
+            <div style={{ background: "rgba(255,255,255,0.02)", padding: "12px", borderRadius: "6px", border: "1px solid var(--border-color)" }}>
+              <div style={{ fontSize: "12px", color: "var(--text-muted)" }}>MAX PROBEMARK AREA</div>
+              <div style={{ fontSize: "18px", fontWeight: "800", color: "var(--color-warn)" }} className="font-mono">{activeConfig?.computed?.maxAreaRatioPct ?? 25.0} %</div>
+            </div>
+            <div style={{ background: "rgba(255,255,255,0.02)", padding: "12px", borderRadius: "6px", border: "1px solid var(--border-color)" }}>
+              <div style={{ fontSize: "12px", color: "var(--text-muted)" }}>TARGET RESOLUTION</div>
+              <div style={{ fontSize: "18px", fontWeight: "800", color: "var(--text-main)" }} className="font-mono">{activeConfig?.computed?.targetWidth ?? 160}x{activeConfig?.computed?.targetHeight ?? 160}</div>
+            </div>
+            <div style={{ background: "rgba(255,255,255,0.02)", padding: "12px", borderRadius: "6px", border: "1px solid var(--border-color)" }}>
+              <div style={{ fontSize: "12px", color: "var(--text-muted)" }}>INSPECTION ROI</div>
+              <div style={{ fontSize: "18px", fontWeight: "800", color: "var(--color-info)" }} className="font-mono">{((activeConfig?.computed?.hRoi ?? 0.7) * 100).toFixed(0)}% H x {((activeConfig?.computed?.vRoi ?? 0.7) * 100).toFixed(0)}% V</div>
             </div>
           </div>
 
         </div>
+
       </main>
     </div>
   );

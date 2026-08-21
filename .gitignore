@@ -37,9 +37,12 @@ confuse/
 
 # Datasets, raw images, and simulation outputs
 simulation/
+backend_imx8/simulation
+**/simulation/
 Pun_for_Accuracy/
 *.bmp
 *.zip
+backend_imx8/active_*.json
 
 # Agent & IDE caches
 .agents/
