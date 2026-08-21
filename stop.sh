@@ -3,11 +3,11 @@
 # Edge AI Semiconductor Wafer Defect Inspection System - One-Click Shutdown
 # ==============================================================================
 
-PROJECT_DIR="/home/nxp1/Desktop/PUNPUNJA/PROJECT/UIIU"
+PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$PROJECT_DIR" || exit 1
 
 echo "============================================================"
-echo "🛑 Stopping Wafer AI Inspection System (All Nodes)..."
+echo "Stopping Wafer AI Inspection System (All Nodes)..."
 echo "============================================================"
 
 # Stop i.MX8 Edge Backend

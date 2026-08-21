@@ -4,32 +4,43 @@
 # (Dual-Node: i.MX8 Edge Backend + NestJS PC Central Backend + React 19 HMI)
 # ==============================================================================
 
-PROJECT_DIR="/home/nxp1/Desktop/PUNPUNJA/PROJECT/UIIU"
+PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$PROJECT_DIR" || exit 1
 
 echo "============================================================"
-echo "🔬 Starting Edge AI Wafer Inspection System (Multi-Node)..."
+echo "Starting Edge AI Wafer Inspection System (Multi-Node)..."
 echo "============================================================"
+
+# Detect Python Executable
+if [ -f "$PROJECT_DIR/.venv/bin/python3" ]; then
+    PY_BIN="$PROJECT_DIR/.venv/bin/python3"
+elif [ -f "$PROJECT_DIR/venv/bin/python3" ]; then
+    PY_BIN="$PROJECT_DIR/venv/bin/python3"
+elif command -v python3 > /dev/null 2>&1; then
+    PY_BIN="python3"
+else
+    PY_BIN="python"
+fi
 
 # Start PostgreSQL & CloudBeaver Database Containers (Docker Compose)
 if command -v docker > /dev/null 2>&1 && [ -f "docker-compose.yml" ]; then
-    echo "🐘 Starting PostgreSQL Database Container via Docker Compose..."
+    echo "Starting PostgreSQL Database Container via Docker Compose..."
     docker compose up -d > /dev/null 2>&1 || sudo docker compose up -d > /dev/null 2>&1
     sleep 1
 else
-    echo "ℹ️ Docker not available. System will fallback to local SQLite database."
+    echo "Docker not available. System will fallback to local SQLite database."
 fi
 
 
 # 1. Start Edge AI Backend (FastAPI on Port 8001)
 if lsof -iTCP:8001 -sTCP:LISTEN > /dev/null 2>&1 || nc -z 127.0.0.1 8001 > /dev/null 2>&1; then
-    echo "⚙️ Edge AI Backend is already running on http://localhost:8001"
+    echo "Edge AI Backend is already running on http://localhost:8001"
 else
-    echo "🧠 Launching Edge AI Backend Server (FastAPI on PC)..."
+    echo "Launching Edge AI Backend Server (FastAPI on PC)..."
     
     # [Mode A: Local PC Execution - Active]
     cd "$PROJECT_DIR/backend_imx8" || exit 1
-    nohup setsid "$PROJECT_DIR/.venv/bin/python3" -m uvicorn main:app --host 0.0.0.0 --port 8001 < /dev/null > "$PROJECT_DIR/backend_imx8.log" 2>&1 &
+    nohup setsid "$PY_BIN" -m uvicorn main:app --host 0.0.0.0 --port 8001 < /dev/null > "$PROJECT_DIR/backend_imx8.log" 2>&1 &
     cd "$PROJECT_DIR" || exit 1
 
     # [Mode B: Physical i.MX8 Hardware Execution]
