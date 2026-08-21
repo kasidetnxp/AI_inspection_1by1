@@ -59,7 +59,7 @@ export default function WaferCanvas() {
       c.fillText("STANDBY • NO DIE LOADED", 300, 305);
 
       c.strokeStyle = isLight ? "rgba(0, 0, 0, 0.2)" : "rgba(255, 255, 255, 0.25)";
-      c.lineWidth = 1.5;
+      c.lineWidth = 1;
       const rl = 25, rPad = 15;
       c.beginPath(); c.moveTo(rPad, rPad + rl); c.lineTo(rPad, rPad); c.lineTo(rPad + rl, rPad); c.stroke();
       c.beginPath(); c.moveTo(600 - rPad, rPad + rl); c.lineTo(600 - rPad, rPad); c.lineTo(600 - rPad - rl, rPad); c.stroke();
@@ -71,7 +71,7 @@ export default function WaferCanvas() {
       drawDieContent(ctx, true);
     } else {
       ctx.strokeStyle = isLight ? "rgba(0, 0, 0, 0.1)" : "rgba(255, 255, 255, 0.1)";
-      ctx.lineWidth = 1.5;
+      ctx.lineWidth = 1;
       ctx.beginPath(); ctx.moveTo(300, 0); ctx.lineTo(300, 600); ctx.stroke();
 
       ctx.save();

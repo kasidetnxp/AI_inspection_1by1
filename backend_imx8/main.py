@@ -1261,109 +1261,153 @@ def process_benchmark_image(task: dict):
     # 2. Rule Evaluation
     t_rule_start = time.time()
     decision = "PASS"
-    reasons = []
+    cat_reason = "-"
     min_dist_um = 999.0
     calc_max_ratio_pct = 0.0
-    
-    # Visual Canvas for Split View
-    canvas = np.zeros((h_orig + 70, w_orig * 2, 3), dtype=np.uint8)
-    canvas[70:, :w_orig] = img_cv.copy()
-    ann_part = img_cv.copy()
-    
-    if len(pads) == 0:
-        decision = "FAIL"
-        reasons.append("No Pad Detected")
-    else:
-        # Pad drawing: Cyan / Blue with light fill
-        for pad in pads:
-            pad_poly = pad.astype(np.int32)
-            cv2.polylines(ann_part, [pad_poly], isClosed=True, color=(255, 200, 0), thickness=2)
-            overlay = ann_part.copy()
-            cv2.fillPoly(overlay, [pad_poly], (255, 100, 0))
-            cv2.addWeighted(overlay, 0.2, ann_part, 0.8, 0, ann_part)
-            
-        main_pad = max(pads, key=cv2.contourArea)
-        pad_hull = cv2.convexHull(main_pad)
-        pad_mask = np.zeros((h_orig, w_orig), dtype=np.uint8)
-        cv2.fillPoly(pad_mask, [pad_hull], 255)
-        pad_area = cv2.countNonZero(pad_mask)
-        
-        # Distance transform inside pad
-        pad_dist_map = cv2.distanceTransform(pad_mask, cv2.DIST_L2, 5)
-        
-        if len(mark_polys) == 0:
-            if missing_action == "fail":
-                decision = "FAIL"
-                reasons.append("No Probe Mark (Strict Fail)")
-            else:
-                decision = "PASS"
-        else:
-            # Union of marks
-            combined_pm_mask = np.zeros((h_orig, w_orig), dtype=np.uint8)
-            for pm in mark_polys:
-                pm_poly = pm.astype(np.int32)
-                cv2.fillPoly(combined_pm_mask, [pm_poly], 255)
-                # Probemark outline: Orange / Yellow
-                cv2.polylines(ann_part, [pm_poly], isClosed=True, color=(0, 255, 255), thickness=2)
-                overlay = ann_part.copy()
-                cv2.fillPoly(overlay, [pm_poly], (0, 165, 255))
-                cv2.addWeighted(overlay, 0.35, ann_part, 0.65, 0, ann_part)
-                
-            pm_area = cv2.countNonZero(combined_pm_mask)
-            if pad_area > 0:
-                calc_max_ratio_pct = round((pm_area / pad_area) * 100.0, 1)
-            
-            # Distance from PM pixels to pad boundary
-            pm_pixels = np.where(combined_pm_mask > 0)
-            if len(pm_pixels[0]) > 0:
-                distances = pad_dist_map[pm_pixels]
-                if len(distances) > 0:
-                    min_dist_um = round(float(np.min(distances)), 1)
-                    # Find coordinates of the closest point to draw distance line
-                    min_idx = np.argmin(distances)
-                    closest_y = pm_pixels[0][min_idx]
-                    closest_x = pm_pixels[1][min_idx]
-                    cv2.circle(ann_part, (closest_x, closest_y), 4, (0, 0, 255), -1)
-                    cv2.putText(ann_part, f"{min_dist_um}px", (closest_x + 6, closest_y - 6),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 255), 1)
-
-            # Check Rule Limits
-            if calc_max_ratio_pct > max_ratio_pct:
-                decision = "FAIL"
-                reasons.append(f"Area Ratio Too Large ({calc_max_ratio_pct}% > {max_ratio_pct}%)")
-            elif min_ratio_pct > 0 and calc_max_ratio_pct < min_ratio_pct:
-                decision = "FAIL"
-                reasons.append(f"Area Ratio Too Small ({calc_max_ratio_pct}% < {min_ratio_pct}%)")
-                
-            if min_dist_um < fail_dist_um:
-                decision = "FAIL"
-                reasons.append(f"Mark Close to Edge ({min_dist_um}px < {fail_dist_um}px)")
-                
-    # Grains
-    for gr in grain_polys:
-        gr_poly = gr.astype(np.int32)
-        cv2.polylines(ann_part, [gr_poly], isClosed=True, color=(255, 0, 255), thickness=1)
-        
-    rule_time = round((time.time() - t_rule_start) * 1000, 2)
-    cat_reason = " & ".join(reasons) if reasons else "-"
-    
-    # Save visual images
-    canvas[70:, w_orig:] = ann_part
-    banner_color = (0, 0, 220) if decision == "FAIL" else (0, 180, 0)
-    cv2.rectangle(canvas, (0, 0), (w_orig * 2, 70), banner_color, -1)
-    
-    cv2.putText(canvas, f"AI {decision}", (w_orig - 50, 32), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 255, 255), 2)
-    sub_txt = f"Dist: {min_dist_um if min_dist_um < 900 else 'N/A'}px | Area: {calc_max_ratio_pct}% | {cat_reason}"
-    cv2.putText(canvas, sub_txt, (20, 58), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (230, 230, 230), 1)
-    cv2.line(canvas, (w_orig, 70), (w_orig, h_orig + 70), (255, 255, 255), 2)
+    rule_time = 0.0
     
     raw_fname = f"raw_bm_{session_id}_{filename}"
     ann_fname = f"ann_bm_{session_id}_{filename}"
     inspect_fname = f"inspect_bm_{session_id}_{filename}"
-    
-    cv2.imwrite(os.path.join(VISUALS_DIR, raw_fname), img_cv)
-    cv2.imwrite(os.path.join(VISUALS_DIR, ann_fname), ann_part)
-    cv2.imwrite(os.path.join(VISUALS_DIR, inspect_fname), canvas)
+    raw_out_path = os.path.join(VISUALS_DIR, raw_fname)
+    ann_out_path = os.path.join(VISUALS_DIR, ann_fname)
+    inspect_out_path = os.path.join(VISUALS_DIR, inspect_fname)
+
+    if has_actual_rules:
+        generic_results = [{
+            "image_path": image_path,
+            "pads": pads,
+            "probemarks": mark_polys,
+            "grains": grain_polys
+        }]
+        custom_cfg = {
+            "fail_distance_um": fail_dist_um,
+            "warning_distance_um": 0.0,
+            "warning_occurrence_threshold": 1,
+            "max_area_ratio_pct": max_ratio_pct,
+            "min_area_ratio_pct": min_ratio_pct,
+            "missing_mark_action": missing_action,
+        }
+        try:
+            report = run_inspection(
+                generic_results,
+                output_csv_path=_resolve_sim_path("simulation/output/benchmark_inspection_report.csv"),
+                output_viz_dir=VISUALS_DIR,
+                config_path=custom_cfg
+            )
+            rule_time = round((time.time() - t_rule_start) * 1000, 2)
+            if report and len(report) > 0:
+                rep = report[0]
+                decision = rep.get("decision", "PASS")
+                cat_reason = rep.get("reason", "-")
+                try:
+                    min_dist_um = float(rep.get("min_dist", 999.0)) if rep.get("min_dist") != "N/A" else 0.0
+                except (ValueError, TypeError):
+                    min_dist_um = 0.0
+                try:
+                    calc_max_ratio_pct = float(rep.get("ratio", "0.0").replace("%", ""))
+                except (ValueError, TypeError):
+                    calc_max_ratio_pct = 0.0
+
+                viz_path = rep.get("viz_path") or os.path.join(VISUALS_DIR, f"inspect_{filename}")
+                if os.path.exists(viz_path):
+                    canvas_img = cv2.imread(viz_path)
+                    if canvas_img is not None:
+                        h_c, w_c, _ = canvas_img.shape
+                        w_half = w_c // 2
+                        raw_part = canvas_img[70:, :w_half]
+                        ann_part = canvas_img[70:, w_half:]
+                        
+                        cv2.imwrite(raw_out_path, raw_part)
+                        cv2.imwrite(ann_out_path, ann_part)
+                        cv2.imwrite(inspect_out_path, canvas_img)
+        except Exception as rule_err:
+            print(f"[BENCHMARK] Error running rule engine: {rule_err}")
+
+    if not os.path.exists(ann_out_path) or not os.path.exists(raw_out_path):
+        # Fallback if rule engine not available
+        canvas = np.zeros((h_orig + 70, w_orig * 2, 3), dtype=np.uint8)
+        canvas[70:, :w_orig] = img_cv.copy()
+        ann_part = img_cv.copy()
+        reasons = []
+
+        if len(pads) == 0:
+            decision = "FAIL"
+            reasons.append("No Pad Detected")
+        else:
+            for pad in pads:
+                pad_poly = pad.astype(np.int32)
+                cv2.polylines(ann_part, [pad_poly], isClosed=True, color=(255, 100, 0), thickness=1)
+                overlay = ann_part.copy()
+                cv2.fillPoly(overlay, [pad_poly], (255, 0, 0))
+                cv2.addWeighted(overlay, 0.2, ann_part, 0.8, 0, ann_part)
+                
+            main_pad = max(pads, key=cv2.contourArea)
+            pad_hull = cv2.convexHull(main_pad)
+            pad_mask = np.zeros((h_orig, w_orig), dtype=np.uint8)
+            cv2.fillPoly(pad_mask, [pad_hull], 255)
+            pad_area = cv2.countNonZero(pad_mask)
+            pad_dist_map = cv2.distanceTransform(pad_mask, cv2.DIST_L2, 5)
+            
+            if len(mark_polys) == 0:
+                if missing_action == "fail":
+                    decision = "FAIL"
+                    reasons.append("No Probe Mark (Strict Fail)")
+                else:
+                    decision = "PASS"
+            else:
+                combined_pm_mask = np.zeros((h_orig, w_orig), dtype=np.uint8)
+                for pm in mark_polys:
+                    pm_poly = pm.astype(np.int32)
+                    cv2.fillPoly(combined_pm_mask, [pm_poly], 255)
+                    
+                pm_area = cv2.countNonZero(combined_pm_mask)
+                if pad_area > 0:
+                    calc_max_ratio_pct = round((pm_area / pad_area) * 100.0, 1)
+                
+                pm_pixels = np.where(combined_pm_mask > 0)
+                if len(pm_pixels[0]) > 0:
+                    distances = pad_dist_map[pm_pixels]
+                    if len(distances) > 0:
+                        min_dist_um = round(float(np.min(distances)), 1)
+
+                if calc_max_ratio_pct > max_ratio_pct:
+                    decision = "FAIL"
+                    reasons.append(f"Area Ratio Too Large ({calc_max_ratio_pct}% > {max_ratio_pct}%)")
+                elif min_ratio_pct > 0 and calc_max_ratio_pct < min_ratio_pct:
+                    decision = "FAIL"
+                    reasons.append(f"Area Ratio Too Small ({calc_max_ratio_pct}% < {min_ratio_pct}%)")
+                    
+                if min_dist_um < fail_dist_um:
+                    decision = "FAIL"
+                    reasons.append(f"Mark Close to Edge ({min_dist_um}um < {fail_dist_um}um)")
+                    
+                pm_color = (0, 0, 255) if decision == "FAIL" else (0, 255, 0)
+                for pm in mark_polys:
+                    pm_poly = pm.astype(np.int32)
+                    cv2.polylines(ann_part, [pm_poly], isClosed=True, color=pm_color, thickness=1)
+                    overlay = ann_part.copy()
+                    cv2.fillPoly(overlay, [pm_poly], pm_color)
+                    cv2.addWeighted(overlay, 0.35, ann_part, 0.65, 0, ann_part)
+                    
+        for gr in grain_polys:
+            gr_poly = gr.astype(np.int32)
+            cv2.polylines(ann_part, [gr_poly], isClosed=True, color=(255, 0, 255), thickness=1)
+            
+        rule_time = round((time.time() - t_rule_start) * 1000, 2)
+        cat_reason = " & ".join(reasons) if reasons else "-"
+        
+        canvas[70:, w_orig:] = ann_part
+        banner_color = (0, 0, 220) if decision == "FAIL" else (0, 180, 0)
+        cv2.rectangle(canvas, (0, 0), (w_orig * 2, 70), banner_color, -1)
+        cv2.putText(canvas, f"AI {decision}", (w_orig - 50, 32), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 255, 255), 2)
+        sub_txt = f"Dist: {min_dist_um if min_dist_um < 900 else 'N/A'}um | Area: {calc_max_ratio_pct}% | {cat_reason}"
+        cv2.putText(canvas, sub_txt, (20, 58), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (230, 230, 230), 1)
+        cv2.line(canvas, (w_orig, 70), (w_orig, h_orig + 70), (255, 255, 255), 1)
+        
+        cv2.imwrite(raw_out_path, img_cv)
+        cv2.imwrite(ann_out_path, ann_part)
+        cv2.imwrite(inspect_out_path, canvas)
     
     t_query = f"?t={int(time.time() * 1000)}"
     raw_url = f"http://localhost:8001/visuals/{raw_fname}{t_query}"
@@ -1407,7 +1451,10 @@ def process_benchmark_image(task: dict):
         asyncio.run_coroutine_threadsafe(manager.broadcast(json.dumps({
             "event": "BENCHMARK_PROGRESS",
             "data": {
+                "status": priority_dispatcher_state.get("status", "RUNNING"),
                 "session_id": session_id,
+                "p1_processed": priority_dispatcher_state["p1_processed"],
+                "p1_total": priority_dispatcher_state["p1_total"],
                 "processed": priority_dispatcher_state["p1_processed"],
                 "total": priority_dispatcher_state["p1_total"],
                 "current_image": filename,
@@ -1500,6 +1547,19 @@ def priority_dispatcher_thread():
                         sess_id = priority_dispatcher_state.get("active_session_id")
                         if sess_id:
                             finalize_benchmark_session(sess_id)
+                        if main_loop and main_loop.is_running():
+                            asyncio.run_coroutine_threadsafe(manager.broadcast(json.dumps({
+                                "event": "BENCHMARK_PROGRESS",
+                                "data": {
+                                    "status": "COMPLETED",
+                                    "session_id": sess_id,
+                                    "p1_processed": priority_dispatcher_state["p1_processed"],
+                                    "p1_total": priority_dispatcher_state["p1_total"],
+                                    "p0_pending": 0,
+                                    "p1_pending": 0,
+                                    "active_priority": "IDLE"
+                                }
+                            })), main_loop)
                 continue
             except queue.Empty:
                 if priority_dispatcher_state["active_priority"] == "P1_BENCHMARK":
@@ -2557,15 +2617,89 @@ async def get_benchmark_report(session_id: str):
 
     kpis = compute_session_kpis(session_id)
 
+    total_rev = kpis.get("total_reviewed", 0)
+    uk_rate = kpis.get("underkill_rate", 0.0)
+    ok_rate = kpis.get("overkill_rate", 0.0)
+    agr_rate = kpis.get("agreement_rate", 0.0)
+
+    if total_rev == 0:
+        verdict = "PENDING HUMAN REVIEW"
+    elif uk_rate == 0.0 and ok_rate <= 3.0 and agr_rate >= 95.0:
+        verdict = "PRODUCTION READY"
+    elif uk_rate > 0.0:
+        verdict = "DEFECT ESCAPE RISK (CRITICAL)"
+    elif ok_rate > 3.0 or agr_rate < 95.0:
+        verdict = "TUNING REQUIRED"
+    else:
+        verdict = "REVIEW IN PROGRESS"
+
     return {
         "session": session_data,
         "kpis": kpis,
         "summary": {
             "title": f"Wafer Defect AI Inspection Benchmark Report - {session_data['model_name']}",
             "generated_at": time.strftime("%d-%b-%Y %H:%M:%S"),
-            "verdict": "PRODUCTION READY" if kpis["underkill_rate"] == 0 and kpis["overkill_rate"] <= 3.0 else "TUNING REQUIRED"
+            "verdict": verdict
         }
     }
+
+
+@app.post("/api/model/benchmark/pause")
+async def pause_benchmark():
+    """Pauses the active benchmark without losing queued items."""
+    global priority_dispatcher_state, P1_QUEUE
+    
+    if priority_dispatcher_state.get("status") != "RUNNING":
+        return {"status": "ignored", "message": "Benchmark is not currently running."}
+        
+    priority_dispatcher_state["status"] = "PAUSED"
+    sess_id = priority_dispatcher_state.get("active_session_id")
+    
+    if main_loop and main_loop.is_running():
+        asyncio.run_coroutine_threadsafe(manager.broadcast(json.dumps({
+            "event": "BENCHMARK_PROGRESS",
+            "data": {
+                "status": "PAUSED",
+                "session_id": sess_id,
+                "p1_processed": priority_dispatcher_state.get("p1_processed", 0),
+                "p1_total": priority_dispatcher_state.get("p1_total", 0),
+                "p0_pending": priority_dispatcher_state.get("p0_pending", 0),
+                "p1_pending": P1_QUEUE.qsize(),
+                "active_priority": "IDLE"
+            }
+        })), main_loop)
+
+    print("⏸️ [BENCHMARK PAUSED] Validation execution temporarily suspended.")
+    return {"status": "success", "message": "Benchmark paused."}
+
+
+@app.post("/api/model/benchmark/resume")
+async def resume_benchmark():
+    """Resumes a paused benchmark session."""
+    global priority_dispatcher_state, P1_QUEUE
+    
+    if priority_dispatcher_state.get("status") != "PAUSED":
+        return {"status": "ignored", "message": "Benchmark is not currently paused."}
+        
+    priority_dispatcher_state["status"] = "RUNNING"
+    sess_id = priority_dispatcher_state.get("active_session_id")
+    
+    if main_loop and main_loop.is_running():
+        asyncio.run_coroutine_threadsafe(manager.broadcast(json.dumps({
+            "event": "BENCHMARK_PROGRESS",
+            "data": {
+                "status": "RUNNING",
+                "session_id": sess_id,
+                "p1_processed": priority_dispatcher_state.get("p1_processed", 0),
+                "p1_total": priority_dispatcher_state.get("p1_total", 0),
+                "p0_pending": priority_dispatcher_state.get("p0_pending", 0),
+                "p1_pending": P1_QUEUE.qsize(),
+                "active_priority": "P1_BENCHMARK"
+            }
+        })), main_loop)
+
+    print("▶️ [BENCHMARK RESUMED] Continuing validation queue execution.")
+    return {"status": "success", "message": "Benchmark resumed."}
 
 
 @app.post("/api/model/benchmark/stop")
@@ -2590,6 +2724,20 @@ async def stop_benchmark():
     sess_id = priority_dispatcher_state.get("active_session_id")
     if sess_id:
         finalize_benchmark_session(sess_id)
+
+    if main_loop and main_loop.is_running():
+        asyncio.run_coroutine_threadsafe(manager.broadcast(json.dumps({
+            "event": "BENCHMARK_PROGRESS",
+            "data": {
+                "status": "STOPPED",
+                "session_id": sess_id,
+                "p1_processed": priority_dispatcher_state.get("p1_processed", 0),
+                "p1_total": priority_dispatcher_state.get("p1_total", 0),
+                "p0_pending": 0,
+                "p1_pending": 0,
+                "active_priority": "IDLE"
+            }
+        })), main_loop)
 
     print(f"🛑 [BENCHMARK STOPPED] Drained {drained} remaining validation items from P1 Queue.")
     return {"status": "success", "message": f"Benchmark stopped. {drained} items cleared."}

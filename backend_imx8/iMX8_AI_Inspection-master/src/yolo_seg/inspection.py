@@ -128,11 +128,11 @@ def load_inspection_config(config_path: str) -> dict:
     """
     defaults = {
         "fail_distance_um": 8.0,
-        "warning_distance_um": 3.0,
+        "warning_distance_um": 0.0,
         "warning_occurrence_threshold": 1,
         "max_area_ratio_pct": 25.0,
         "min_area_ratio_pct": 1.0,
-        "missing_mark_action": "warning",
+        "missing_mark_action": "fail",
         "min_overlap_pct": 0.5,
         "pad_width_um": None,
         "default_px_per_um": 1.0,
@@ -143,6 +143,13 @@ def load_inspection_config(config_path: str) -> dict:
         "min_area_sizes": [0, 0, 0],
         "greyscale_threshold": 0.0,
     }
+
+    if isinstance(config_path, dict):
+        merged = defaults.copy()
+        for k, v in config_path.items():
+            if k in merged and v is not None:
+                merged[k] = v
+        return merged
 
     if config_path is None or not os.path.exists(config_path):
         if config_path is not None:
@@ -354,7 +361,7 @@ def run_inspection(image_results,
             if len(probemarks) > 0:
                 reasons.append("Unknown (Cannot classify pad)")
                 for pm in probemarks:
-                    cv2.drawContours(img_viz, [pm], -1, (0, 0, 255), 2)
+                    cv2.drawContours(img_viz, [pm], -1, (0, 0, 255), 1)
             else:
                 reasons.append("Unknown (Cannot classify pad and probe mark)")
         else:
@@ -458,21 +465,23 @@ def run_inspection(image_results,
                 overlay = img_viz.copy()
                 cv2.fillPoly(overlay, [pad], (255, 0, 0))
                 cv2.addWeighted(overlay, 0.2, img_viz, 0.8, 0, img_viz)
-                cv2.drawContours(img_viz, [pad], -1, (255, 100, 0), 2)
+                cv2.drawContours(img_viz, [pad], -1, (255, 100, 0), 1)
                 
                 if len(matched_pms) == 0:
                     # Missing probe mark on this pad!
-                    if MISSING_MARK_ACTION == "fail":
+                    if MISSING_MARK_ACTION == "fail" or WARN_DIST_UM <= 0.0:
                         decision = "FAIL"
-                        reasons.append("No probemark detected on pad (strict mode)")
+                        reasons.append("No probemark detected on pad")
                         # Draw pad contour in Red (0, 0, 255) for missing fail
-                        cv2.drawContours(img_viz, [pad], -1, (0, 0, 255), 2)
+                        cv2.drawContours(img_viz, [pad], -1, (0, 0, 255), 1)
+                    elif MISSING_MARK_ACTION == "ignore":
+                        pass
                     else:
                         if decision != "FAIL":
                             decision = "WARNING"
                         reasons.append("[WARNING] No probemark detected — please verify")
                         # Draw pad contour in Yellow (0, 255, 255) for missing warning
-                        cv2.drawContours(img_viz, [pad], -1, (0, 255, 255), 2)
+                        cv2.drawContours(img_viz, [pad], -1, (0, 255, 255), 1)
                 else:
                     # Run checks for each probe mark matched to this pad
                     # Create a combined binary mask for all matched probe marks to get the true union area
@@ -592,7 +601,7 @@ def run_inspection(image_results,
                         overlay = img_viz.copy()
                         cv2.fillPoly(overlay, [pm], pm_color)
                         cv2.addWeighted(overlay, 0.35, img_viz, 0.65, 0, img_viz)
-                        cv2.drawContours(img_viz, [pm], -1, pm_color, 2)
+                        cv2.drawContours(img_viz, [pm], -1, pm_color, 1)
                         
                         # Distance line color
                         is_dist_fail = (dist_um < FAIL_DIST_UM)
@@ -610,15 +619,15 @@ def run_inspection(image_results,
                                 closest_pad_pt = find_closest_contour_point(closest_pm_pt, pad)
                                 
                             if closest_pad_pt is not None:
-                                cv2.line(img_viz, closest_pm_pt, closest_pad_pt, dist_line_color, 2)
-                                cv2.circle(img_viz, closest_pm_pt, 4, dist_line_color, -1)
-                                cv2.circle(img_viz, closest_pad_pt, 4, dist_line_color, -1)
+                                cv2.line(img_viz, closest_pm_pt, closest_pad_pt, dist_line_color, 1)
+                                cv2.circle(img_viz, closest_pm_pt, 3, dist_line_color, -1)
+                                cv2.circle(img_viz, closest_pad_pt, 3, dist_line_color, -1)
                                 label_pos = (
                                     (closest_pm_pt[0] + closest_pad_pt[0]) // 2 + 5,
                                     (closest_pm_pt[1] + closest_pad_pt[1]) // 2 - 5,
                                 )
                                 cv2.putText(img_viz, f"{dist_um:.2f}um", label_pos,
-                                            cv2.FONT_HERSHEY_SIMPLEX, 0.4, dist_line_color, 1)
+                                            cv2.FONT_HERSHEY_SIMPLEX, 0.38, dist_line_color, 1)
 
         # ------------------------------------------------------------------
         # Grain — visual only, does NOT affect pass/fail
@@ -636,17 +645,17 @@ def run_inspection(image_results,
                 if cv2.countNonZero(gr_clean_mask) > 0:
                     cnts, _ = cv2.findContours(gr_clean_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
                     if cnts:
-                        cv2.drawContours(img_viz, cnts, -1, (255, 0, 255), 2)
+                        cv2.drawContours(img_viz, cnts, -1, (255, 0, 255), 1)
 
         # ------------------------------------------------------------------
         # Total Probemark % Area Badge (Bottom-Right Corner)
         # ------------------------------------------------------------------
         if max_ratio_pct > 0 or len(probemarks) > 0:
             area_str = f"Area : {max_ratio_pct:.1f}%"
-            font_scale = 0.55
-            thickness = 2
+            font_scale = 0.5
+            thickness = 1
             (t_w, t_h), _ = cv2.getTextSize(area_str, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness)
-            margin = 10
+            margin = 8
             box_x1 = max(5, w - t_w - margin * 2)
             box_y1 = max(5, h - t_h - margin * 2)
             box_x2 = min(w - 2, w - margin // 2)
@@ -710,7 +719,7 @@ def run_inspection(image_results,
         x_sub = max(10, (total_width - t_w_sub) // 2)
         cv2.putText(canvas, sub_text, (x_sub, 55), font, 0.55, text_color_sub, 1)
  
-        cv2.line(canvas, (w, banner_h), (w, h + banner_h), (255, 255, 255), 2)
+        cv2.line(canvas, (w, banner_h), (w, h + banner_h), (255, 255, 255), 1)
  
         viz_path = os.path.join(output_viz_dir, f"inspect_{image_name}")
         cv2.imwrite(viz_path, canvas)
