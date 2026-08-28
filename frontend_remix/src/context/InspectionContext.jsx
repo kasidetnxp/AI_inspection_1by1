@@ -117,10 +117,9 @@ export function InspectionProvider({ children }) {
   const [isBenchmarkDragging, setIsBenchmarkDragging] = useState(false);
   const [loadedImage, setLoadedImage] = useState(null);
   const [loadedRawImage, setLoadedRawImage] = useState(null);
-  const [selectedClasses, setSelectedClasses] = useState(3);
-  const [uploadClassCount, setUploadClassCount] = useState(3);
-  const [modelFilter, setModelFilter] = useState("ALL");
   const [modelsList, setModelsList] = useState([]);
+  const [isModelConverting, setIsModelConverting] = useState(false);
+  const [convertingModelName, setConvertingModelName] = useState("");
 
   const [benchmarkActiveSubTab, setBenchmarkActiveSubTab] = useState("hub");
   const [benchmarkModel, setBenchmarkModel] = useState("unet.tflite");
@@ -312,6 +311,14 @@ export function InspectionProvider({ children }) {
   // Keyboard Hotkeys
   useEffect(() => {
     const handleKeyDown = (e) => {
+      // Ignore single-character hotkeys if typing in inputs/textareas
+      if (["INPUT", "TEXTAREA"].includes(e.target?.tagName)) {
+        if (e.key === "Escape") {
+          e.target.blur();
+        }
+        return;
+      }
+
       // 1. Hotkeys for Historical Inspection Modal
       if (selectedModalItem) {
         if (e.key === "ArrowLeft") {
@@ -327,10 +334,10 @@ export function InspectionProvider({ children }) {
       if (benchmarkSplitModalItem) {
         if (e.key === "p" || e.key === "P") {
           e.preventDefault();
-          handleSaveHumanReview(benchmarkSplitModalItem, "PASS");
+          handleSaveHumanReview(benchmarkSplitModalItem, "PASS", benchmarkSplitModalItem.notes || "");
         } else if (e.key === "f" || e.key === "F") {
           e.preventDefault();
-          handleSaveHumanReview(benchmarkSplitModalItem, "FAIL");
+          handleSaveHumanReview(benchmarkSplitModalItem, "FAIL", benchmarkSplitModalItem.notes || "");
         } else if (e.key === "ArrowLeft") {
           e.preventDefault();
           handlePrevBenchmarkItem();
@@ -433,9 +440,9 @@ export function InspectionProvider({ children }) {
       .then(res => res.json())
       .then(data => {
         if (data.kpis) setBenchmarkKpis(data.kpis);
-        setBenchmarkResults(prev => prev.map(r => r.id === item.id ? { ...r, human_decision: decision } : r));
+        setBenchmarkResults(prev => prev.map(r => r.id === item.id ? { ...r, human_decision: decision, notes: notes } : r));
         if (benchmarkSplitModalItem && benchmarkSplitModalItem.id === item.id) {
-          setBenchmarkSplitModalItem(prev => ({ ...prev, human_decision: decision }));
+          setBenchmarkSplitModalItem(prev => ({ ...prev, human_decision: decision, notes: notes }));
         }
       })
       .catch(err => console.error("Error saving review:", err));
@@ -553,35 +560,40 @@ export function InspectionProvider({ children }) {
 
   const handleUploadFile = (file) => {
     if (!file) return;
+    const isPth = file.name.toLowerCase().endsWith(".pth") || file.name.toLowerCase().endsWith(".pt");
+    const isTflite = file.name.toLowerCase().endsWith(".tflite");
+    
+    if (!isPth && !isTflite) {
+      alert("รองรับเฉพาะไฟล์โมเดล .pth หรือ .tflite เท่านั้น");
+      return;
+    }
+
     const formData = new FormData();
     formData.append("file", file);
-    formData.append("classes", uploadClassCount);
+
+    setIsModelConverting(true);
+    setConvertingModelName(file.name);
 
     fetch(`${apiBase}/api/models/upload`, {
       method: "POST",
       body: formData
     })
       .then(res => {
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        if (!res.ok) {
+          return res.json().then(d => { throw new Error(d.detail || `HTTP ${res.status}`); });
+        }
         return res.json();
       })
-      .then(() => {
-        alert(`[UPLOAD SUCCESS] อัปโหลดโมเดล '${file.name}' สำเร็จ!\n\nกำลังเปิดใช้งานโมเดลนี้สำหรับการตรวจจับ...`);
-        handleActivateModel({ name: file.name, classes: uploadClassCount });
+      .then((data) => {
+        setIsModelConverting(false);
+        const finalName = data.name || file.name;
+        alert(`[UPLOAD SUCCESS] อัปโหลดโมเดล '${finalName}' สำเร็จ!\n\n${isPth ? "ระบบได้แปลงไฟล์เป็น TFLite (INT8) สำหรับรันบน NPU เรียบร้อยแล้ว" : ""}`);
+        fetchModels();
       })
       .catch(err => {
+        setIsModelConverting(false);
         console.error("Upload error:", err);
-        const newModel = {
-          name: file.name,
-          version: "v1.0.0",
-          engine: file.name.endsWith(".tflite") ? "TFLite / NPU" : "ONNX / CPU",
-          size: `${(file.size / (1024 * 1024)).toFixed(1)} MB`,
-          accuracy: "95.0%",
-          classes: uploadClassCount,
-          active: false
-        };
-        setModelsList(prev => [newModel, ...prev]);
-        alert(`Model '${file.name}' added to local view.`);
+        alert(`เกิดข้อผิดพลาดในการอัปโหลด/แปลงโมเดล: ${err.message || err}`);
       });
   };
 
@@ -589,21 +601,18 @@ export function InspectionProvider({ children }) {
     fetch(`${apiBase}/api/models/activate`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: model.name, classes: model.classes || 3 })
+      body: JSON.stringify({ name: model.name })
     })
       .then(res => {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         return res.json();
       })
       .then(data => {
-        const activeClasses = data.classes || model.classes || 3;
-        setSelectedClasses(activeClasses);
-        alert(`[NPU HOT-SWAP SUCCESS]\nModel '${model.name}' (${activeClasses}-Class Auto-Detected) activated on i.MX8 NPU Delegate!`);
+        alert(`[NPU HOT-SWAP SUCCESS]\nModel '${model.name}' activated on i.MX8 NPU Delegate!`);
         fetchModels();
       })
       .catch(err => {
         console.error("Activation error:", err);
-        setSelectedClasses(model.classes || 3);
         setModelsList(prev => prev.map(m => ({ ...m, active: m.name === model.name })));
       });
   };
@@ -1357,10 +1366,9 @@ export function InspectionProvider({ children }) {
     isBenchmarkDragging, setIsBenchmarkDragging,
     loadedImage, setLoadedImage,
     loadedRawImage, setLoadedRawImage,
-    selectedClasses, setSelectedClasses,
-    uploadClassCount, setUploadClassCount,
-    modelFilter, setModelFilter,
     modelsList, setModelsList,
+    isModelConverting, setIsModelConverting,
+    convertingModelName, setConvertingModelName,
     benchmarkActiveSubTab, setBenchmarkActiveSubTab,
     benchmarkModel, setBenchmarkModel,
     benchmarkZipFile, setBenchmarkZipFile,

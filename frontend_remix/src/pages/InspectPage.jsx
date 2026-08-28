@@ -50,34 +50,43 @@ export default function InspectPage() {
           <div className="hmi-card summary-card" style={{ flex: 1 }}>
             <div className="card-header">
               <h3>SUMMARY</h3>
-              <span className="pill-id" id="wafer-id-tag">
-                {formatBatchWafer(currentInspection)}
-              </span>
             </div>
             <div className="card-body">
               <div className="metric-list">
                 <div className="metric-row">
-                  <span className="met-label">Confidence</span>
-                  <span className="met-value font-mono" id="val-confidence">
-                    {currentInspection.confidence}%
+                  <span className="met-label">Machine No.</span>
+                  <span className="met-value font-mono highlight-blue" id="val-machine">
+                    {currentInspection.machine || "PROBER01"}
                   </span>
                 </div>
                 <div className="metric-row">
-                  <span className="met-label">Inference Time</span>
-                  <span className="met-value font-mono highlight-blue" id="val-inference-time">
-                    {currentInspection.inferenceTime} ms
+                  <span className="met-label">Batch / Wafer</span>
+                  <span className="met-value font-mono" id="val-batch">
+                    {currentInspection.batch && currentInspection.batch !== "-" ? currentInspection.batch : "-"}
                   </span>
                 </div>
                 <div className="metric-row">
-                  <span className="met-label">Rule Time</span>
-                  <span className="met-value font-mono highlight-green" id="val-rule-time">
-                    {currentInspection.ruleTime || 0} ms
+                  <span className="met-label">Pad / Site</span>
+                  <span className="met-value font-mono" id="val-pad-site">
+                    {currentInspection.pad && currentInspection.pad !== "-"
+                      ? `${currentInspection.pad} / ${currentInspection.site || "-"}`
+                      : "-"}
+                  </span>
+                </div>
+                <div className="metric-row">
+                  <span className="met-label">XY Coord</span>
+                  <span className="met-value font-mono" id="val-xy">
+                    {currentInspection.xyCoord || "-"}
                   </span>
                 </div>
                 <div className="metric-row">
                   <span className="met-label">Temp</span>
                   <span className="met-value font-mono highlight-orange" id="val-temp">
-                    {currentInspection.temp || "-"}
+                    {currentInspection.temp
+                      ? currentInspection.temp.includes("°C")
+                        ? currentInspection.temp
+                        : `${currentInspection.temp}°C`
+                      : "-"}
                   </span>
                 </div>
               </div>
@@ -142,13 +151,7 @@ export default function InspectPage() {
                 <div className="meta-row">
                   <span className="meta-lbl">Model:</span>
                   <span className="meta-val font-mono highlight-green" id="active-model-name">
-                    unet_pytorch_3class.pth
-                  </span>
-                </div>
-                <div className="meta-row">
-                  <span className="meta-lbl">Classifier:</span>
-                  <span className="meta-val font-mono highlight-blue" id="active-model-classifier">
-                    Rule Engine (YAML)
+                    unet_pytorch_new.pth
                   </span>
                 </div>
               </div>
@@ -176,26 +179,16 @@ export default function InspectPage() {
                     <span className="lbl">FAIL</span>
                     <span className="val font-mono" id="stat-fail">{failCount}</span>
                   </div>
-                </div>
-              </div>
-
-              <div className="stats-details">
-                <div className="metric-row">
-                  <span className="met-label">Yield</span>
-                  <span className="met-value font-mono highlight-green" id="stat-yield">{yieldRate}%</span>
-                </div>
-                <div className="metric-row">
-                  <span className="met-label">Overkill</span>
-                  <span className="met-value font-mono" id="stat-overkill">0.45%</span>
-                </div>
-                <div className="metric-row">
-                  <span className="met-label">Underkill</span>
-                  <span className="met-value font-mono" id="stat-underkill">0.02%</span>
+                  <div className="sub-stat blue-text">
+                    <span className="lbl">YIELD</span>
+                    <span className="val font-mono" id="stat-yield">{yieldRate}%</span>
+                  </div>
                 </div>
               </div>
             </div>
           </div>
         </section>
+
 
         {/* BOTTOM ROW: HISTORY */}
         <section className="grid-row bottom-row">

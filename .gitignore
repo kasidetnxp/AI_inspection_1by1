@@ -34,6 +34,9 @@ confuse/
 *.pt
 *.onnx
 *.weights
+*.tflite
+models/
+backend_imx8/models/
 
 # Datasets, raw images, and simulation outputs
 simulation/

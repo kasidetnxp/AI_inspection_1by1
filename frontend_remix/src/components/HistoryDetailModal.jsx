@@ -197,13 +197,12 @@ export default function HistoryDetailModal() {
             </div>
           </div>
 
-          {/* RIGHT: METADATA PANEL (FIXED WIDTH WITH SCROLL) */}
+          {/* RIGHT: METADATA PANEL (RIGHT-ALIGNED VALUES) */}
           <div
             className="modal-meta-panel"
             style={{
               display: "flex",
               flexDirection: "column",
-              gap: "12px",
               height: "100%",
               minHeight: 0
             }}
@@ -216,36 +215,38 @@ export default function HistoryDetailModal() {
                 overflowY: "auto",
                 display: "flex",
                 flexDirection: "column",
-                gap: "8px",
-                padding: "12px",
+                gap: "10px",
+                padding: "14px",
                 background: "rgba(255, 255, 255, 0.02)",
-                borderRadius: "6px",
+                borderRadius: "8px",
                 border: "1px solid var(--border-color)"
               }}
             >
-              <div className="meta-row">
-                <span className="meta-lbl">Machine no:</span>
-                <span className="meta-val font-mono">{selectedModalItem.machineNo || "PROBER01"}</span>
+              <div className="meta-row" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <span className="meta-lbl" style={{ flexShrink: 0 }}>Machine no:</span>
+                <span className="meta-val font-mono" style={{ textAlign: "right" }}>{selectedModalItem.machineNo || "PROBER01"}</span>
               </div>
-              <div className="meta-row">
-                <span className="meta-lbl">Wafer ID:</span>
-                <span className="meta-val font-mono" style={{ fontWeight: "bold" }}>{selectedModalItem.id}</span>
+              <div className="meta-row" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <span className="meta-lbl" style={{ flexShrink: 0 }}>Wafer ID:</span>
+                <span className="meta-val font-mono" style={{ textAlign: "right", fontWeight: "bold" }}>{selectedModalItem.id}</span>
               </div>
-              <div className="meta-row">
-                <span className="meta-lbl">Time stamp:</span>
-                <span className="meta-val font-mono">{selectedModalItem.timestamp}</span>
+              <div className="meta-row" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <span className="meta-lbl" style={{ flexShrink: 0 }}>Time stamp:</span>
+                <span className="meta-val font-mono" style={{ textAlign: "right" }}>{selectedModalItem.timestamp}</span>
               </div>
-              <div className="meta-row">
-                <span className="meta-lbl">Result:</span>
+              <div className="meta-row" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <span className="meta-lbl" style={{ flexShrink: 0 }}>Result:</span>
                 <span className={`badge-result ${selectedModalItem.decision.toLowerCase()}`}>
                   {selectedModalItem.decision}
                 </span>
               </div>
-              <div className="meta-row">
-                <span className="meta-lbl">Failure reason:</span>
+              <div className="meta-row" style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "10px" }}>
+                <span className="meta-lbl" style={{ flexShrink: 0 }}>Failure reason:</span>
                 <span
                   className="meta-val font-mono"
                   style={{
+                    textAlign: "right",
+                    wordBreak: "break-word",
                     color: selectedModalItem.reason && selectedModalItem.reason !== "-" ? "var(--color-fail)" : "inherit",
                     fontWeight: "600"
                   }}
@@ -253,54 +254,31 @@ export default function HistoryDetailModal() {
                   {selectedModalItem.reason || "-"}
                 </span>
               </div>
-              <div className="meta-row">
-                <span className="meta-lbl">Batch:</span>
-                <span className="meta-val font-mono">{selectedModalItem.batch || "-"}</span>
+              <div className="meta-row" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <span className="meta-lbl" style={{ flexShrink: 0 }}>Batch:</span>
+                <span className="meta-val font-mono" style={{ textAlign: "right" }}>{selectedModalItem.batch || "-"}</span>
               </div>
-              <div className="meta-row">
-                <span className="meta-lbl">Site coordinate:</span>
-                <span className="meta-val font-mono">{selectedModalItem.xyCoord || "-"}</span>
+              <div className="meta-row" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <span className="meta-lbl" style={{ flexShrink: 0 }}>Site coordinate:</span>
+                <span className="meta-val font-mono" style={{ textAlign: "right" }}>{selectedModalItem.xyCoord || "-"}</span>
               </div>
-              <div className="meta-row">
-                <span className="meta-lbl">Probecard site:</span>
-                <span className="meta-val font-mono">{selectedModalItem.site || "-"}</span>
+              <div className="meta-row" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <span className="meta-lbl" style={{ flexShrink: 0 }}>Probecard site:</span>
+                <span className="meta-val font-mono" style={{ textAlign: "right" }}>{selectedModalItem.site || "-"}</span>
               </div>
-              <div className="meta-row">
-                <span className="meta-lbl">Pad no.:</span>
-                <span className="meta-val font-mono">{selectedModalItem.pad || "-"}</span>
+              <div className="meta-row" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <span className="meta-lbl" style={{ flexShrink: 0 }}>Pad no.:</span>
+                <span className="meta-val font-mono" style={{ textAlign: "right" }}>{selectedModalItem.pad || "-"}</span>
               </div>
-              <div className="meta-row">
-                <span className="meta-lbl">Inference Latency:</span>
-                <span className="meta-val font-mono">{selectedModalItem.inferenceTime ?? 0} ms</span>
+              <div className="meta-row" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <span className="meta-lbl" style={{ flexShrink: 0 }}>Inference Latency:</span>
+                <span className="meta-val font-mono" style={{ textAlign: "right" }}>{selectedModalItem.inferenceTime ?? 0} ms</span>
               </div>
-              <div className="meta-row">
-                <span className="meta-lbl">Temp:</span>
-                <span className="meta-val font-mono">{selectedModalItem.temp || "-"}</span>
+              <div className="meta-row" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <span className="meta-lbl" style={{ flexShrink: 0 }}>Temp:</span>
+                <span className="meta-val font-mono" style={{ textAlign: "right" }}>{selectedModalItem.temp || "-"}</span>
               </div>
             </div>
-
-            <button
-              className="override-btn active"
-              style={{
-                width: "100%",
-                padding: "12px",
-                fontSize: "13px",
-                fontWeight: "bold",
-                background: "var(--accent-blue)",
-                color: "#fff",
-                cursor: "pointer",
-                borderRadius: "6px",
-                border: "none",
-                flexShrink: 0
-              }}
-              onClick={() => {
-                mapInspectionData(selectedModalItem);
-                navigate("/inspect");
-                closeModal();
-              }}
-            >
-              LOAD INTO LIVE VIEW
-            </button>
           </div>
         </div>
       </div>

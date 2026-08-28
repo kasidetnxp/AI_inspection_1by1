@@ -21,7 +21,7 @@ fuser -k 3000/tcp > /dev/null 2>&1
 # Stop & remove PostgreSQL Database Containers (Docker Compose Down)
 if command -v docker > /dev/null 2>&1 && [ -f "docker-compose.yml" ]; then
     echo "🐘 Shutting down PostgreSQL Docker Containers (docker compose down)..."
-    docker compose down > /dev/null 2>&1 || sudo docker compose down > /dev/null 2>&1
+    docker compose down > /dev/null 2>&1 || true
 fi
 
 

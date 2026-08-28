@@ -1400,9 +1400,53 @@ def process_benchmark_image(task: dict):
     # 1. AI Model Inference under thread-safe inference lock
     t_start = time.time()
     with inference_lock:
-        if tflite_runner is not None:
+        req_model = task.get("model_name") or tflite_model_path or PATHS_CFG.get("model_path") or SYS_CONFIG.get("ai", {}).get("model_path") or "unet.tflite"
+        
+        # Resolve target model path
+        model_path = None
+        for cand in [
+            req_model,
+            os.path.join(_THIS_DIR, req_model),
+            os.path.join(_THIS_DIR, "models", req_model),
+            os.path.join(PROJECT_ROOT, req_model),
+            os.path.join(PROJECT_ROOT, "models", req_model),
+            tflite_model_path,
+        ]:
+            if cand and os.path.exists(cand):
+                model_path = cand
+                break
+                
+        if not model_path:
+            for p_dir in [".", os.path.join(_THIS_DIR, "iMX8_AI_Inspection-master", "models"), "models", _THIS_DIR, PROJECT_ROOT]:
+                if os.path.exists(p_dir):
+                    for root, _, files in os.walk(p_dir):
+                        for f in files:
+                            if f.lower().endswith((".tflite", ".onnx", ".pt", ".pth")) and "quant" not in f.lower():
+                                if os.path.basename(req_model).lower() in f.lower():
+                                    model_path = os.path.join(root, f)
+                                    break
+                        if model_path: break
+                if model_path: break
+
+        is_tflite = model_path and model_path.lower().endswith((".tflite", ".onnx"))
+        
+        if is_tflite:
             try:
-                from run_unet_tflite_folder import preprocess_image, postprocess_unet
+                from run_unet_tflite_folder import ModelRunner, preprocess_image, postprocess_unet
+                if tflite_runner is None or getattr(tflite_runner, "_model_path", None) != model_path:
+                    tflite_runner = ModelRunner(model_path)
+                    tflite_runner._model_path = model_path
+                    tflite_model_path = model_path
+                    out_details = tflite_runner.get_output_details()
+                    if out_details and len(out_details) > 0 and 'shape' in out_details[0]:
+                        shape = list(out_details[0]['shape'])
+                        if shape[-1] in (2, 3, 4):
+                            active_class_mode = int(shape[-1])
+                        elif len(shape) >= 2 and shape[1] in (2, 3, 4):
+                            active_class_mode = int(shape[1])
+                    if "2class" in os.path.basename(model_path).lower():
+                        active_class_mode = 2
+
                 input_details = tflite_runner.get_input_details()
                 output_details = tflite_runner.get_output_details()
                 input_data, meta = preprocess_image(img_cv, input_details[0])
@@ -1427,7 +1471,54 @@ def process_benchmark_image(task: dict):
                             grain_polys.append(c.astype(np.int32))
                 confidence = 98.0
             except Exception as inf_err:
-                print(f"[BENCHMARK] Inference error: {inf_err}")
+                print(f"[BENCHMARK] TFLite inference error: {inf_err}")
+                inf_time = round((time.time() - t_start) * 1000, 1)
+        elif model_path and model_path.lower().endswith((".pt", ".pth")):
+            try:
+                import torch
+                imx8_src_root = os.path.join(_THIS_DIR, "iMX8_AI_Inspection-master")
+                if imx8_src_root not in sys.path:
+                    sys.path.insert(0, imx8_src_root)
+                import src.utils.config
+                if active_class_mode >= 3:
+                    src.utils.config.ID_TO_LABEL[3] = "grain"
+                    src.utils.config.NUM_CLASSES = 4
+                else:
+                    if 3 in src.utils.config.ID_TO_LABEL:
+                        del src.utils.config.ID_TO_LABEL[3]
+                    src.utils.config.NUM_CLASSES = 3
+                
+                from src.unet.model import UNet
+                from src.unet.predict import process_single_image
+                
+                if not hasattr(app.state, "pytorch_unet") or getattr(app.state, "pytorch_model_path", None) != model_path:
+                    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+                    checkpoint = torch.load(model_path, map_location=device, weights_only=False)
+                    state_dict = checkpoint['model_state_dict'] if (isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint) else checkpoint
+                    unet_classes = state_dict['outc.conv.weight'].shape[0] if 'outc.conv.weight' in state_dict else 4
+                    
+                    unet_model = UNet(n_channels=3, n_classes=unet_classes).to(device)
+                    unet_model.load_state_dict(state_dict)
+                    unet_model.eval()
+                    app.state.pytorch_unet = unet_model
+                    app.state.pytorch_model_path = model_path
+                    app.state.pytorch_device = device
+                
+                unet_model = app.state.pytorch_unet
+                device = app.state.pytorch_device
+                output_dir = VISUALS_DIR
+                os.makedirs(output_dir, exist_ok=True)
+                
+                unet_start = time.time()
+                unet_res = process_single_image(image_path, unet_model, device, output_dir)
+                inf_time = round((time.time() - unet_start) * 1000, 1)
+                
+                pads = unet_res.get("pads", [])
+                mark_polys = unet_res.get("probemarks", [])
+                grain_polys = unet_res.get("grains", []) if active_class_mode >= 3 else []
+                confidence = 95.0
+            except Exception as pt_err:
+                print(f"[BENCHMARK] PyTorch inference error: {pt_err}")
                 inf_time = round((time.time() - t_start) * 1000, 1)
         else:
             inf_time = 15.0
@@ -1498,7 +1589,7 @@ def process_benchmark_image(task: dict):
         except Exception as rule_err:
             print(f"[BENCHMARK] Error running rule engine: {rule_err}")
 
-    if not os.path.exists(ann_out_path) or not os.path.exists(raw_out_path):
+    if not os.path.exists(ann_out_path) or not os.path.exists(raw_out_path) or (os.path.exists(ann_out_path) and os.path.getsize(ann_out_path) == 0) or (os.path.exists(raw_out_path) and os.path.getsize(raw_out_path) == 0):
         # Fallback if rule engine not available
         canvas = np.zeros((h_orig + 70, w_orig * 2, 3), dtype=np.uint8)
         canvas[70:, :w_orig] = img_cv.copy()
@@ -2089,9 +2180,27 @@ async def apply_config_preset(preset_name: str = Body(..., embed=True)):
     except Exception as e:
         return JSONResponse(status_code=400, content={"status": "error", "message": str(e)})
 
+@app.post("/api/config/update-thresholds")
+async def update_thresholds(payload: dict = Body(...)):
+    global ACTIVE_PRODUCT_SETTING
+    try:
+        fail_dist = float(payload.get("fail_distance_um", 8.0))
+        max_area = float(payload.get("max_area_ratio_pct", 25.0))
+        ACTIVE_PRODUCT_SETTING["edgeThreshold"] = fail_dist
+        ACTIVE_PRODUCT_SETTING["areaRatioThreshold"] = max_area
+        with open(os.path.join(_THIS_DIR, "active_product_setting.json"), "w", encoding="utf-8") as f:
+            json.dump(ACTIVE_PRODUCT_SETTING, f, indent=2)
+        return {
+            "status": "success",
+            "message": f"Updated thresholds: Fail Dist={fail_dist}µm, Max Area={max_area}%",
+            "product": ACTIVE_PRODUCT_SETTING
+        }
+    except Exception as e:
+        return JSONResponse(status_code=400, content={"status": "error", "message": str(e)})
+
 @app.get("/api/models")
 async def get_models():
-    global tflite_model_path, active_class_mode
+    global tflite_model_path
     models_info = []
     seen = set()
     
@@ -2107,26 +2216,17 @@ async def get_models():
             continue
         try:
             for fname in os.listdir(s_dir):
-                if fname.lower().endswith((".tflite", ".onnx", ".pth", ".pt")) and fname not in seen and "quant" not in fname.lower():
+                if fname.lower().endswith(".tflite") and fname not in seen and "quant" not in fname.lower():
                     fpath = os.path.join(s_dir, fname)
                     if os.path.isfile(fpath):
                         seen.add(fname)
                         sz_mb = round(os.path.getsize(fpath) / (1024 * 1024), 1)
-                        is_tflite = fname.lower().endswith(".tflite")
                         is_active = (tflite_model_path and os.path.abspath(fpath) == os.path.abspath(tflite_model_path)) or (not tflite_model_path and fname == "unet.tflite")
-                        
-                        classes = 3
-                        if "2class" in fname.lower(): classes = 2
-                        elif "4class" in fname.lower(): classes = 4
-                        elif "3class" in fname.lower(): classes = 3
 
                         models_info.append({
                             "name": fname,
                             "version": "v1.0.0",
-                            "engine": "TFLite / NPU" if is_tflite else ("ONNX / CPU" if fname.endswith(".onnx") else "PyTorch / GPU"),
                             "size": f"{sz_mb} MB",
-                            "classes": classes,
-                            "accuracy": "97.5%" if "unet" in fname.lower() else "95.0%",
                             "active": bool(is_active)
                         })
         except Exception:
@@ -2136,10 +2236,7 @@ async def get_models():
         models_info.append({
             "name": "unet.tflite",
             "version": "v1.0.0",
-            "engine": "TFLite / NPU",
             "size": "28.5 MB",
-            "classes": 3,
-            "accuracy": "97.5%",
             "active": True
         })
         
@@ -2147,26 +2244,51 @@ async def get_models():
 
 
 @app.post("/api/models/upload")
-async def upload_model(file: UploadFile = File(...), classes: int = 3):
-    if not file.filename.lower().endswith((".tflite", ".onnx", ".pth", ".pt")):
-        raise HTTPException(status_code=400, detail="Invalid model file extension. Only .tflite, .onnx, .pth, and .pt files are supported.")
+async def upload_model(file: UploadFile = File(...)):
+    fname_lower = file.filename.lower()
+    if not (fname_lower.endswith(".tflite") or fname_lower.endswith(".pth") or fname_lower.endswith(".pt")):
+        raise HTTPException(status_code=400, detail="Invalid model file extension. Only .pth and .tflite files are supported.")
     
-    target_path = os.path.join(MODELS_DIR, file.filename)
+    os.makedirs(MODELS_DIR, exist_ok=True)
+    temp_upload_path = os.path.join(MODELS_DIR, file.filename)
     try:
-        with open(target_path, "wb") as buffer:
+        with open(temp_upload_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
+        
+        final_filename = file.filename
+        if fname_lower.endswith((".pth", ".pt")):
+            stem = os.path.splitext(file.filename)[0]
+            final_filename = f"{stem}.tflite"
+            target_tflite_path = os.path.join(MODELS_DIR, final_filename)
+            
+            print(f"📥 [MODEL UPLOAD] Uploaded PyTorch model '{file.filename}'. Starting auto-conversion to TFLite INT8...")
+            
+            from convert_model import convert_pth_to_tflite
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(None, convert_pth_to_tflite, temp_upload_path, target_tflite_path)
+            
+            # Remove original .pth file per Option B
+            if os.path.exists(temp_upload_path) and temp_upload_path != target_tflite_path:
+                try: os.remove(temp_upload_path)
+                except Exception: pass
+            
+            target_path = target_tflite_path
+        else:
+            target_path = temp_upload_path
             
         size_mb = round(os.path.getsize(target_path) / (1024 * 1024), 1)
-        print(f"📥 [MODEL UPLOAD] Saved model file '{file.filename}' ({size_mb} MB) to {target_path}")
+        print(f"📥 [MODEL UPLOAD] Ready TFLite model '{final_filename}' ({size_mb} MB) in {MODELS_DIR}")
         return {
             "status": "success",
-            "name": file.filename,
+            "name": final_filename,
             "size": f"{size_mb} MB",
-            "classes": classes,
-            "message": f"Model '{file.filename}' uploaded successfully to i.MX8 node."
+            "message": f"Model '{final_filename}' uploaded and ready on i.MX8 node."
         }
     except Exception as e:
         print(f"❌ [MODEL UPLOAD] Upload failed: {e}")
+        if os.path.exists(temp_upload_path):
+            try: os.remove(temp_upload_path)
+            except Exception: pass
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -2174,7 +2296,6 @@ async def upload_model(file: UploadFile = File(...), classes: int = 3):
 async def activate_model(payload: dict):
     global tflite_runner, tflite_model_path, active_class_mode
     model_name = payload.get("name")
-    req_classes = payload.get("classes", 3)
     if not model_name:
         raise HTTPException(status_code=400, detail="Model name is required")
         
@@ -2202,27 +2323,9 @@ async def activate_model(payload: dict):
             if "ai" not in SYS_CONFIG: SYS_CONFIG["ai"] = {}
             SYS_CONFIG["ai"]["model_path"] = target_path
 
-            # Auto-detect class count from filename hint first
-            det_classes = req_classes
-            fname_lower = os.path.basename(target_path).lower()
-            if "2class" in fname_lower: det_classes = 2
-            elif "4class" in fname_lower: det_classes = 4
-            elif "3class" in fname_lower: det_classes = 3
-
-            if target_path.lower().endswith((".tflite", ".onnx")):
+            if target_path.lower().endswith(".tflite"):
                 from run_unet_tflite_folder import ModelRunner
                 tflite_runner = ModelRunner(target_path)
-                
-                # Check output tensor shape to auto-detect class count
-                try:
-                    out_details = tflite_runner.get_output_details()
-                    if out_details and len(out_details) > 0 and 'shape' in out_details[0]:
-                        shape = list(out_details[0]['shape'])
-                        if shape[-1] in (2, 3, 4):
-                            det_classes = int(shape[-1])
-                        elif len(shape) >= 2 and shape[1] in (2, 3, 4):
-                            det_classes = int(shape[1])
-                except Exception: pass
 
                 dummy_img = np.zeros((1, 640, 640, 3), dtype=np.float32)
                 try:
@@ -2231,30 +2334,25 @@ async def activate_model(payload: dict):
                     pass
             else:
                 tflite_runner = None
-                if hasattr(app.state, "pytorch_unet"):
-                    app.state.pytorch_unet = None
-                if hasattr(app.state, "pytorch_model_path"):
-                    app.state.pytorch_model_path = None
 
-            active_class_mode = det_classes
+            active_class_mode = 3
 
             if old_runner:
                 del old_runner
                 
-            print(f"⚡ [NPU HOT-SWAP] ✅ Activated new model: {model_name} (Auto-detected: {active_class_mode} Classes) on NPU")
+            print(f"⚡ [NPU HOT-SWAP] ✅ Activated new model: {model_name} on NPU")
             
             # Broadcast WS event if main_loop is running
             if main_loop and main_loop.is_running():
                 asyncio.run_coroutine_threadsafe(manager.broadcast(json.dumps({
                     "event": "MODEL_ACTIVATED",
-                    "data": { "name": model_name, "classes": active_class_mode }
+                    "data": { "name": model_name, "classes": 3 }
                 })), main_loop)
             
             return {
                 "status": "success",
                 "active_model": model_name,
-                "classes": active_class_mode,
-                "message": f"Successfully activated '{model_name}' ({active_class_mode}-Class) on i.MX8 NPU!"
+                "message": f"Successfully activated '{model_name}' on i.MX8 NPU!"
             }
         except Exception as err:
             print(f"❌ [NPU HOT-SWAP] Failed to activate model '{model_name}': {err}")
@@ -2409,7 +2507,7 @@ async def start_benchmark(payload: dict):
     if limit and isinstance(limit, int) and limit > 0:
         image_paths = image_paths[:limit]
 
-    session_id = f"BM-{time.strftime('%Y%m%d-%H%M%S')}"
+    session_id = payload.get("session_id") or f"BM-{time.strftime('%Y%m%d-%H%M%S')}"
     created_at = time.strftime("%d-%b-%Y %H:%M:%S")
     rules_json = json.dumps(rules)
     initial_metrics = json.dumps({
@@ -2556,6 +2654,7 @@ async def upload_benchmark_images(
     }
 
     return await start_benchmark({
+        "session_id": session_id,
         "model_name": model_name,
         "dataset_key": "custom",
         "custom_folder": upload_dir,

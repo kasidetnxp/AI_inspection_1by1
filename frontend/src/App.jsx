@@ -34,6 +34,33 @@ export default function App() {
   const [activeTab, setActiveTab] = useState("inspect");
   const [compareMode, setCompareMode] = useState("split");
   const [isLight, setIsLight] = useState(true);
+
+  const getDefaultEdgeIp = () => {
+    const saved = typeof localStorage !== "undefined" ? localStorage.getItem("IMX8_EDGE_IP") : null;
+    if (saved && saved !== "10.42.0.1" && saved !== "10.42.0.95") return saved;
+    const hostname = typeof window !== "undefined" ? (window.location.hostname || "localhost") : "localhost";
+    return (hostname === "0.0.0.0" || hostname === "::") ? "localhost" : hostname;
+  };
+
+  const [edgeIp, setEdgeIp] = useState(getDefaultEdgeIp);
+  const apiBase = `http://${edgeIp}:8001`;
+
+  const resolveImageUrl = (url) => {
+    if (!url) return null;
+    if (url.startsWith("http://") || url.startsWith("https://")) {
+      return url.replace(/^https?:\/\/[^/]+/, apiBase);
+    }
+    if (url.startsWith("/")) {
+      return `${apiBase}${url}`;
+    }
+    return `${apiBase}/${url}`;
+  };
+
+  const updateEdgeIp = (newIp) => {
+    setEdgeIp(newIp);
+    localStorage.setItem("IMX8_EDGE_IP", newIp);
+  };
+
   const [isBackendConnected, setIsBackendConnected] = useState(false);
   const [dbType, setDbType] = useState("SQLite");
 
@@ -185,9 +212,9 @@ export default function App() {
   const [loadedImage, setLoadedImage] = useState(null);
   const [loadedRawImage, setLoadedRawImage] = useState(null);
   const [selectedClasses, setSelectedClasses] = useState(3);
-  const [uploadClassCount, setUploadClassCount] = useState(3);
-  const [modelFilter, setModelFilter] = useState("ALL");
   const [modelsList, setModelsList] = useState([]);
+  const [isModelConverting, setIsModelConverting] = useState(false);
+  const [convertingModelName, setConvertingModelName] = useState("");
 
   const [benchmarkActiveSubTab, setBenchmarkActiveSubTab] = useState("hub"); // "hub" | "validation" | "registry"
   const [benchmarkModel, setBenchmarkModel] = useState("unet.tflite");
@@ -245,8 +272,15 @@ export default function App() {
   const [benchmarkSearch, setBenchmarkSearch] = useState("");
   const [benchmarkSplitModalItem, setBenchmarkSplitModalItem] = useState(null);
   const [benchmarkSplitModalIndex, setBenchmarkSplitModalIndex] = useState(0);
+  const [benchmarkModalComment, setBenchmarkModalComment] = useState("");
   const [benchmarkReportModalOpen, setBenchmarkReportModalOpen] = useState(false);
   const [isBenchmarkStarting, setIsBenchmarkStarting] = useState(false);
+
+  useEffect(() => {
+    if (benchmarkSplitModalItem) {
+      setBenchmarkModalComment(benchmarkSplitModalItem.notes || "");
+    }
+  }, [benchmarkSplitModalItem?.id, benchmarkSplitModalItem?.notes]);
 
   // Configuration Management State (Product_Settine & Machine_Setting)
   const [activeConfig, setActiveConfig] = useState({
@@ -257,6 +291,85 @@ export default function App() {
   const [configUploadStatus, setConfigUploadStatus] = useState("");
   const [isUploadingProduct, setIsUploadingProduct] = useState(false);
   const [isUploadingMachine, setIsUploadingMachine] = useState(false);
+
+  // Settings State: Edge IP & Live Thresholds
+  const [tempIp, setTempIp] = useState(edgeIp);
+  const [saveIpSuccess, setSaveIpSuccess] = useState(false);
+  const [pingResult, setPingResult] = useState(null);
+  const [isPinging, setIsPinging] = useState(false);
+  const [settingsFailDist, setSettingsFailDist] = useState(8.0);
+  const [settingsMaxArea, setSettingsMaxArea] = useState(25.0);
+  const [isSavingThresholds, setIsSavingThresholds] = useState(false);
+
+  useEffect(() => {
+    setTempIp(edgeIp);
+  }, [edgeIp]);
+
+  useEffect(() => {
+    if (activeConfig?.computed) {
+      if (activeConfig.computed.failDistanceUm != null) {
+        setSettingsFailDist(Number(activeConfig.computed.failDistanceUm));
+      }
+      if (activeConfig.computed.maxAreaRatioPct != null) {
+        setSettingsMaxArea(Number(activeConfig.computed.maxAreaRatioPct));
+      }
+    }
+  }, [activeConfig]);
+
+  const handleSaveIp = (e) => {
+    if (e && e.preventDefault) e.preventDefault();
+    const sanitized = tempIp.trim();
+    if (!sanitized) return;
+    updateEdgeIp(sanitized);
+    setSaveIpSuccess(true);
+    setTimeout(() => setSaveIpSuccess(false), 2500);
+    handleTestPing(sanitized);
+  };
+
+  const handleTestPing = async (ipToTest) => {
+    const target = (ipToTest || tempIp || edgeIp).trim();
+    setIsPinging(true);
+    setPingResult(null);
+    try {
+      const t0 = performance.now();
+      const res = await fetch(`http://${target}:8001/api/models`, { signal: AbortSignal.timeout(3500) });
+      const latency = Math.round(performance.now() - t0);
+      if (res.ok) {
+        setPingResult({ ok: true, message: `${latency} ms (Online)` });
+      } else {
+        setPingResult({ ok: false, message: `HTTP ${res.status}` });
+      }
+    } catch (err) {
+      setPingResult({ ok: false, message: "Offline / Unreachable" });
+    } finally {
+      setIsPinging(false);
+    }
+  };
+
+  const handleSaveThresholds = async () => {
+    setIsSavingThresholds(true);
+    try {
+      const res = await fetch(`${apiBase}/api/config/update-thresholds`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          fail_distance_um: settingsFailDist,
+          max_area_ratio_pct: settingsMaxArea
+        })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setConfigUploadStatus(data.message || "Thresholds updated");
+        fetchActiveConfig();
+      } else {
+        setConfigUploadStatus(data.message || "Failed updating thresholds");
+      }
+    } catch (err) {
+      setConfigUploadStatus(`Error: ${err.message}`);
+    } finally {
+      setIsSavingThresholds(false);
+    }
+  };
 
   const fetchActiveConfig = async () => {
     try {
@@ -383,6 +496,14 @@ export default function App() {
 
   useEffect(() => {
     const handleKeyDown = (e) => {
+      // Ignore hotkeys when typing in text fields
+      if (["INPUT", "TEXTAREA"].includes(e.target?.tagName)) {
+        if (e.key === "Escape") {
+          e.target.blur();
+        }
+        return;
+      }
+
       // 1. Hotkeys for Historical Inspection Modal
       if (selectedModalItem) {
         if (e.key === "ArrowLeft") {
@@ -398,10 +519,10 @@ export default function App() {
       if (benchmarkSplitModalItem) {
         if (e.key === "p" || e.key === "P") {
           e.preventDefault();
-          handleSaveHumanReview(benchmarkSplitModalItem, "PASS");
+          handleSaveHumanReview(benchmarkSplitModalItem, "PASS", benchmarkModalComment);
         } else if (e.key === "f" || e.key === "F") {
           e.preventDefault();
-          handleSaveHumanReview(benchmarkSplitModalItem, "FAIL");
+          handleSaveHumanReview(benchmarkSplitModalItem, "FAIL", benchmarkModalComment);
         } else if (e.key === "ArrowLeft") {
           e.preventDefault();
           handlePrevBenchmarkItem();
@@ -415,7 +536,7 @@ export default function App() {
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [selectedModalItem, selectedModalIndex, benchmarkSplitModalItem, benchmarkSplitModalIndex, benchmarkResults, history, activeTab, analyticsFilter, analyticsBatchFilter, analyticsMachineFilter, filterSearch]);
+  }, [selectedModalItem, selectedModalIndex, benchmarkSplitModalItem, benchmarkSplitModalIndex, benchmarkResults, history, activeTab, analyticsFilter, analyticsBatchFilter, analyticsMachineFilter, filterSearch, benchmarkModalComment]);
 
   const fetchBenchmarkDatasets = () => {
     fetch(`${apiBase}/api/model/benchmark/datasets`)
@@ -522,9 +643,9 @@ export default function App() {
       .then(res => res.json())
       .then(data => {
         if (data.kpis) setBenchmarkKpis(data.kpis);
-        setBenchmarkResults(prev => prev.map(r => r.id === item.id ? { ...r, human_decision: decision } : r));
+        setBenchmarkResults(prev => prev.map(r => r.id === item.id ? { ...r, human_decision: decision, notes: notes } : r));
         if (benchmarkSplitModalItem && benchmarkSplitModalItem.id === item.id) {
-          setBenchmarkSplitModalItem(prev => ({ ...prev, human_decision: decision }));
+          setBenchmarkSplitModalItem(prev => ({ ...prev, human_decision: decision, notes: notes }));
         }
       })
       .catch(err => console.error("Error saving review:", err));
@@ -641,35 +762,40 @@ export default function App() {
 
   const handleUploadFile = (file) => {
     if (!file) return;
+    const isPth = file.name.toLowerCase().endsWith(".pth") || file.name.toLowerCase().endsWith(".pt");
+    const isTflite = file.name.toLowerCase().endsWith(".tflite");
+    
+    if (!isPth && !isTflite) {
+      alert("รองรับเฉพาะไฟล์โมเดล .pth หรือ .tflite เท่านั้น");
+      return;
+    }
+
     const formData = new FormData();
     formData.append("file", file);
-    formData.append("classes", uploadClassCount);
+
+    setIsModelConverting(true);
+    setConvertingModelName(file.name);
 
     fetch(`${apiBase}/api/models/upload`, {
       method: "POST",
       body: formData
     })
       .then(res => {
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        if (!res.ok) {
+          return res.json().then(d => { throw new Error(d.detail || `HTTP ${res.status}`); });
+        }
         return res.json();
       })
       .then(data => {
-        alert(`[UPLOAD SUCCESS] อัปโหลดโมเดล '${file.name}' สำเร็จ!\n\nกำลังเปิดใช้งานโมเดลนี้สำหรับการตรวจจับ...`);
-        handleActivateModel({ name: file.name, classes: uploadClassCount });
+        setIsModelConverting(false);
+        const finalName = data.name || file.name;
+        alert(`[UPLOAD SUCCESS] อัปโหลดโมเดล '${finalName}' สำเร็จ!\n\n${isPth ? "ระบบได้แปลงไฟล์เป็น TFLite (INT8) สำหรับรันบน NPU เรียบร้อยแล้ว" : ""}`);
+        fetchModels();
       })
       .catch(err => {
+        setIsModelConverting(false);
         console.error("Upload error:", err);
-        const newModel = {
-          name: file.name,
-          version: "v1.0.0",
-          engine: file.name.endsWith(".tflite") ? "TFLite / NPU" : "ONNX / CPU",
-          size: `${(file.size / (1024 * 1024)).toFixed(1)} MB`,
-          accuracy: "95.0%",
-          classes: uploadClassCount,
-          active: false
-        };
-        setModelsList(prev => [newModel, ...prev]);
-        alert(`Model '${file.name}' added to local view.`);
+        alert(`เกิดข้อผิดพลาดในการอัปโหลด/แปลงโมเดล: ${err.message || err}`);
       });
   };
 
@@ -677,21 +803,18 @@ export default function App() {
     fetch(`${apiBase}/api/models/activate`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: model.name, classes: model.classes || 3 })
+      body: JSON.stringify({ name: model.name })
     })
       .then(res => {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         return res.json();
       })
       .then(data => {
-        const activeClasses = data.classes || model.classes || 3;
-        setSelectedClasses(activeClasses);
-        alert(`[NPU HOT-SWAP SUCCESS]\nModel '${model.name}' (${activeClasses}-Class Auto-Detected) activated on i.MX8 NPU Delegate!`);
+        alert(`[NPU HOT-SWAP SUCCESS]\nModel '${model.name}' activated on i.MX8 NPU Delegate!`);
         fetchModels();
       })
       .catch(err => {
         console.error("Activation error:", err);
-        setSelectedClasses(model.classes || 3);
         setModelsList(prev => prev.map(m => ({ ...m, active: m.name === model.name })));
       });
   };
@@ -746,38 +869,6 @@ export default function App() {
     const interval = setInterval(updateClock, 1000);
     return () => clearInterval(interval);
   }, []);
-
-  const getDefaultEdgeIp = () => {
-    const saved = localStorage.getItem("IMX8_EDGE_IP");
-    if (saved && saved !== "10.42.0.1" && saved !== "10.42.0.95") return saved;
-
-    // [Mode A: Local PC Execution - Active]
-    const hostname = typeof window !== "undefined" ? (window.location.hostname || "localhost") : "localhost";
-    return (hostname === "0.0.0.0" || hostname === "::") ? "localhost" : hostname;
-
-    // [Mode B: Physical i.MX8 Hardware Execution]
-    // Uncomment line below if running HMI against physical i.MX8 board IP:
-    // return "10.42.0.95";
-  };
-
-  const [edgeIp, setEdgeIp] = useState(getDefaultEdgeIp);
-  const apiBase = `http://${edgeIp}:8001`;
-
-  const resolveImageUrl = (url) => {
-    if (!url) return null;
-    if (url.startsWith("http://") || url.startsWith("https://")) {
-      return url.replace(/^https?:\/\/[^/]+/, apiBase);
-    }
-    if (url.startsWith("/")) {
-      return `${apiBase}${url}`;
-    }
-    return `${apiBase}/${url}`;
-  };
-
-  const updateEdgeIp = (newIp) => {
-    setEdgeIp(newIp);
-    localStorage.setItem("IMX8_EDGE_IP", newIp);
-  };
 
   const fetchModels = () => {
     fetch(`${apiBase}/api/models`)
@@ -1285,56 +1376,30 @@ export default function App() {
     if (!canvas) return;
 
     const dpr = window.devicePixelRatio || 1;
-    const rect = canvas.getBoundingClientRect();
-    const size = Math.min(rect.width || canvas.clientWidth || 600, rect.height || canvas.clientHeight || 600);
-    const val = size > 0 ? size : 600;
+    const isSplit = compareMode !== "overlay";
+    const baseW = isSplit ? 1200 : 600;
+    const baseH = 600;
 
-    canvas.width = val * dpr;
-    canvas.height = val * dpr;
+    canvas.width = baseW * dpr;
+    canvas.height = baseH * dpr;
 
     const ctx = canvas.getContext("2d");
     ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.scale((val * dpr) / 600, (val * dpr) / 600);
+    ctx.scale(dpr, dpr);
 
-    const drawRoundedRect = (c, x, y, width, height, radius, fill, stroke) => {
-      c.beginPath();
-      c.moveTo(x + radius, y);
-      c.arcTo(x + width, y, x + width, y + height, radius);
-      c.arcTo(x + width, y + height, x, y + height, radius);
-      c.arcTo(x, y + height, x, y, radius);
-      c.arcTo(x, y, x + width, y, radius);
-      c.closePath();
-      if (fill) c.fill();
-      if (stroke) c.stroke();
-    };
-
-    const drawProbeMarkScratch = (c, x, y, rx, ry, rot) => {
-      c.beginPath();
-      c.ellipse(x, y, rx, ry, rot, 0, Math.PI * 2);
-      c.closePath();
-      const grad = c.createRadialGradient(x, y, 2, x, y, rx);
-      grad.addColorStop(0, "#64748b");
-      grad.addColorStop(1, "#334155");
-      c.fillStyle = grad;
-      c.fill();
-      c.strokeStyle = "rgba(255, 255, 255, 0.12)";
-      c.lineWidth = 1;
-      c.stroke();
-    };
-
-    const drawDieContent = (c, showOverlays) => {
+    const drawDieContent = (c, showOverlays, targetW = 600, targetH = 600) => {
       if (!showOverlays && loadedRawImage) {
-        c.drawImage(loadedRawImage, 0, 0, 600, 600);
+        c.drawImage(loadedRawImage, 0, 0, targetW, targetH);
         return;
       }
       if (showOverlays && loadedImage) {
-        c.drawImage(loadedImage, 0, 0, 600, 600);
+        c.drawImage(loadedImage, 0, 0, targetW, targetH);
         return;
       }
 
       // Clean 'NO IMAGE AVAILABLE' placeholder when no real camera or file image is loaded
       c.fillStyle = isLight ? "#f8fafc" : "#0d0e15";
-      c.fillRect(0, 0, 600, 600);
+      c.fillRect(0, 0, targetW, targetH);
 
       if (filters.grid) {
         c.strokeStyle = isLight ? "rgba(0, 0, 0, 0.05)" : "rgba(255, 255, 255, 0.05)";
@@ -1342,38 +1407,53 @@ export default function App() {
       }
 
       c.strokeStyle = isLight ? "rgba(0, 0, 0, 0.2)" : "rgba(255, 255, 255, 0.25)";
-      c.lineWidth = 1.5;
-      const rl = 25, rPad = 15;
+      c.lineWidth = 2;
+      const rl = 35, rPad = 18;
       c.beginPath(); c.moveTo(rPad, rPad + rl); c.lineTo(rPad, rPad); c.lineTo(rPad + rl, rPad); c.stroke();
-      c.beginPath(); c.moveTo(600 - rPad, rPad + rl); c.lineTo(600 - rPad, rPad); c.lineTo(600 - rPad - rl, rPad); c.stroke();
-      c.beginPath(); c.moveTo(rPad, 600 - rPad - rl); c.lineTo(rPad, 600 - rPad); c.lineTo(rPad + rl, 600 - rPad); c.stroke();
-      c.beginPath(); c.moveTo(600 - rPad, 600 - rPad - rl); c.lineTo(600 - rPad, 600 - rPad); c.lineTo(600 - rPad - rl, 600 - rPad); c.stroke();
+      c.beginPath(); c.moveTo(targetW - rPad, rPad + rl); c.lineTo(targetW - rPad, rPad); c.lineTo(targetW - rPad - rl, rPad); c.stroke();
+      c.beginPath(); c.moveTo(rPad, targetH - rPad - rl); c.lineTo(rPad, targetH - rPad); c.lineTo(rPad + rl, targetH - rPad); c.stroke();
+      c.beginPath(); c.moveTo(targetW - rPad, targetH - rPad - rl); c.lineTo(targetW - rPad, targetH - rPad); c.lineTo(targetW - rPad - rl, targetH - rPad); c.stroke();
+
+      // Standby indicator in center
+      c.fillStyle = isLight ? "#94a3b8" : "#475569";
+      c.font = "600 13px 'Inter', sans-serif";
+      c.textAlign = "center";
+      c.fillText("STANDBY • WAITING FOR PROBER SCAN", targetW / 2, targetH / 2);
     };
 
     if (compareMode === "overlay") {
-      drawDieContent(ctx, true);
+      drawDieContent(ctx, true, 600, 600);
     } else {
-      ctx.strokeStyle = isLight ? "rgba(0, 0, 0, 0.1)" : "rgba(255, 255, 255, 0.1)";
-      ctx.lineWidth = 1.5;
-      ctx.beginPath(); ctx.moveTo(300, 0); ctx.lineTo(300, 600); ctx.stroke();
+      // Split mode: 1200 x 600
+      ctx.strokeStyle = isLight ? "rgba(0, 0, 0, 0.12)" : "rgba(255, 255, 255, 0.12)";
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(600, 0); ctx.lineTo(600, 600); ctx.stroke();
 
-      ctx.save();
-      ctx.translate(6, 150); ctx.scale(0.48, 0.48);
-      drawDieContent(ctx, false);
-      ctx.restore();
+      const paneSize = 530;
+      const leftX = (600 - paneSize) / 2;
+      const rightX = 600 + (600 - paneSize) / 2;
+      const topY = 50;
 
+      // Header Labels
       ctx.fillStyle = isLight ? "#64748b" : "#94a3b8";
-      ctx.font = "bold 13px 'Inter', sans-serif"; ctx.textAlign = "center";
-      ctx.fillText("RAW CAMERA FEED", 150, 30);
+      ctx.font = "bold 16px 'Inter', sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText("RAW CAMERA FEED", 300, 32);
 
       ctx.save();
-      ctx.translate(306, 150); ctx.scale(0.48, 0.48);
-      drawDieContent(ctx, true);
+      ctx.translate(leftX, topY);
+      drawDieContent(ctx, false, paneSize, paneSize);
       ctx.restore();
 
       ctx.fillStyle = "var(--color-info)";
-      ctx.font = "bold 13px 'Inter', sans-serif"; ctx.textAlign = "center";
-      ctx.fillText("AI SEGMENTATION", 450, 30);
+      ctx.font = "bold 16px 'Inter', sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText("AI SEGMENTATION", 900, 32);
+
+      ctx.save();
+      ctx.translate(rightX, topY);
+      drawDieContent(ctx, true, paneSize, paneSize);
+      ctx.restore();
     }
   }, [currentDieImage, compareMode, isLight, filters, loadedImage, loadedRawImage, currentInspection]);
 
@@ -1587,8 +1667,12 @@ export default function App() {
         <header className="app-header">
           <div className="header-left">
             <div className="logo-area">
-              <span className="logo-icon"></span>
-              <h1>WAFER AI</h1>
+              <img
+                src="/nxp_logo.webp"
+                alt="NXP Semiconductors"
+                className="brand-logo"
+              />
+              <span className="brand-subtitle">iMX8 AI INSPECTION</span>
             </div>
           </div>
 
@@ -1598,34 +1682,6 @@ export default function App() {
             <button className={`nav-tab ${activeTab === "models" ? "active" : ""}`} onClick={() => { setActiveTab("models"); setBenchmarkActiveSubTab("hub"); }}>MODELS</button>
             <button className={`nav-tab ${activeTab === "settings" ? "active" : ""}`} onClick={() => { setActiveTab("settings"); fetchActiveConfig(); }}>SETTINGS</button>
           </nav>
-
-          <div className="header-center">
-            <div className="status-indicator-group">
-              {isBackendConnected && (
-                <div className="status-pill online" style={{ background: "rgba(16, 185, 129, 0.05)", border: "1px solid rgba(16, 185, 129, 0.15)", color: "var(--color-pass)", fontSize: "12px", padding: "4px 8px", borderRadius: "4px", fontWeight: "600", fontFamily: "var(--font-display)", textTransform: "uppercase" }}>
-                  DB: {dbType}
-                </div>
-              )}
-              <div className="status-pill" style={{ background: "rgba(2, 132, 199, 0.08)", border: "1px solid rgba(2, 132, 199, 0.25)", padding: "2px 6px", borderRadius: "4px", display: "flex", alignItems: "center", gap: "4px" }}>
-                <span style={{ fontSize: "12px", fontWeight: "bold", color: "var(--color-info)" }}>EDGE IP:</span>
-                <input
-                  type="text"
-                  value={edgeIp}
-                  onChange={(e) => updateEdgeIp(e.target.value)}
-                  style={{ background: "transparent", border: "none", color: "inherit", fontSize: "12px", fontFamily: "var(--font-mono)", width: "95px", outline: "none", fontWeight: "bold" }}
-                  title="Change i.MX8 Edge Node IP Address"
-                />
-              </div>
-              <div className={`status-pill ${isBackendConnected ? "online" : "offline"}`} id="imx8-status">
-                <span className="status-dot"></span>
-                <span className="status-label">{isBackendConnected ? "EDGE: ONLINE" : "EDGE: OFFLINE"}</span>
-              </div>
-              <div className={`status-pill ${isBackendConnected ? "online" : "offline"}`} id="prober-status">
-                <span className="status-dot"></span>
-                <span className="status-label">{isBackendConnected ? "PROBER: READY" : "PROBER: OFFLINE"}</span>
-              </div>
-            </div>
-          </div>
 
           <div className="header-right" style={{ display: "flex", alignItems: "center", gap: "12px" }}>
             <div className="datetime-display" id="live-time">{clockStr}</div>
@@ -1656,25 +1712,30 @@ export default function App() {
               <div className="hmi-card summary-card" style={{ flex: 1 }}>
                 <div className="card-header">
                   <h3>SUMMARY</h3>
-                  <span className="pill-id" id="wafer-id-tag">{formatBatchWafer(currentInspection)}</span>
                 </div>
                 <div className="card-body">
                   <div className="metric-list">
                     <div className="metric-row">
-                      <span className="met-label">Confidence</span>
-                      <span className="met-value font-mono" id="val-confidence">{currentInspection.confidence}%</span>
+                      <span className="met-label">Machine No.</span>
+                      <span className="met-value font-mono highlight-blue" id="val-machine">{currentInspection.machine || "PROBER01"}</span>
                     </div>
                     <div className="metric-row">
-                      <span className="met-label">Inference Time</span>
-                      <span className="met-value font-mono highlight-blue" id="val-inference-time">{currentInspection.inferenceTime} ms</span>
+                      <span className="met-label">Batch / Wafer</span>
+                      <span className="met-value font-mono" id="val-batch">{currentInspection.batch && currentInspection.batch !== "-" ? currentInspection.batch : "-"}</span>
                     </div>
                     <div className="metric-row">
-                      <span className="met-label">Rule Time</span>
-                      <span className="met-value font-mono highlight-green" id="val-rule-time">{currentInspection.ruleTime || 0} ms</span>
+                      <span className="met-label">Pad / Site</span>
+                      <span className="met-value font-mono" id="val-pad-site">
+                        {currentInspection.pad && currentInspection.pad !== "-" ? `${currentInspection.pad} / ${currentInspection.site || '-'}` : "-"}
+                      </span>
+                    </div>
+                    <div className="metric-row">
+                      <span className="met-label">XY Coord</span>
+                      <span className="met-value font-mono" id="val-xy">{currentInspection.xyCoord || "-"}</span>
                     </div>
                     <div className="metric-row">
                       <span className="met-label">Temp</span>
-                      <span className="met-value font-mono highlight-orange" id="val-temp">{currentInspection.temp || "-"}</span>
+                      <span className="met-value font-mono highlight-orange" id="val-temp">{currentInspection.temp ? (currentInspection.temp.includes("°C") ? currentInspection.temp : `${currentInspection.temp}°C`) : "-"}</span>
                     </div>
                   </div>
                 </div>
@@ -1689,7 +1750,7 @@ export default function App() {
                 </div>
 
                 <div className="card-body canvas-container">
-                  <canvas ref={canvasRef} id="wafer-canvas"></canvas>
+                  <canvas ref={canvasRef} id="wafer-canvas" className={compareMode === "overlay" ? "overlay-mode" : "split-mode"}></canvas>
                   <div ref={scannerRef} className="scanning-bar" id="scanner-line"></div>
                 </div>
 
@@ -1700,7 +1761,7 @@ export default function App() {
                     <span>{isBackendConnected ? "EDGE NPU ONLINE" : "EDGE NPU OFFLINE"}</span>
                   </div>
                   <div className="live-telemetry">
-                    <span>INFERENCE: PyTorch UNet + Rule Engine</span>
+                    <span>INFERENCE: {modelsList.find(m => m.active)?.name || "PyTorch UNet"} + Rule Engine</span>
                   </div>
                 </div>
               </div>
@@ -1736,13 +1797,9 @@ export default function App() {
                   <div className="model-meta-box">
                     <div className="meta-row">
                       <span className="meta-lbl">Model:</span>
-                      <span className="meta-val font-mono highlight-green" id="active-model-name">
-                        unet_pytorch_3class.pth
+                      <span className="meta-val font-mono highlight-green" id="active-model-name" title={modelsList.find(m => m.active)?.name || "unet_pytorch_new.pth"}>
+                        {modelsList.find(m => m.active)?.name || "unet_pytorch_new.pth"}
                       </span>
-                    </div>
-                    <div className="meta-row">
-                      <span className="meta-lbl">Classifier:</span>
-                      <span className="meta-val font-mono highlight-blue" id="active-model-classifier">Rule Engine (YAML)</span>
                     </div>
                   </div>
                 </div>
@@ -1769,21 +1826,10 @@ export default function App() {
                         <span className="lbl">FAIL</span>
                         <span className="val font-mono" id="stat-fail">{failCount}</span>
                       </div>
-                    </div>
-                  </div>
-
-                  <div className="stats-details">
-                    <div className="metric-row">
-                      <span className="met-label">Yield</span>
-                      <span className="met-value font-mono highlight-green" id="stat-yield">{yieldRate}%</span>
-                    </div>
-                    <div className="metric-row">
-                      <span className="met-label">Overkill</span>
-                      <span className="met-value font-mono" id="stat-overkill">0.45%</span>
-                    </div>
-                    <div className="metric-row">
-                      <span className="met-label">Underkill</span>
-                      <span className="met-value font-mono" id="stat-underkill">0.02%</span>
+                      <div className="sub-stat blue-text">
+                        <span className="lbl">YIELD</span>
+                        <span className="val font-mono" id="stat-yield">{yieldRate}%</span>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -1933,29 +1979,8 @@ export default function App() {
                   )}
                 </div>
 
-                {/* View Mode Switcher & Export Actions */}
+                {/* Actions: Export & Clear */}
                 <div style={{ display: "flex", gap: "10px", flexWrap: "wrap", alignItems: "center" }}>
-                  
-                  {/* View Mode Toggle */}
-                  <div className="filter-pill-group" style={{ padding: "2px" }}>
-                    <button
-                      className={`filter-pill ${historyViewMode === "dashboard" ? "active" : ""}`}
-                      onClick={() => setHistoryViewMode("dashboard")}
-                      title="Show Analytics Charts + Table"
-                      style={{ fontSize: "13.5px", padding: "6px 12px" }}
-                    >
-                      DASHBOARD
-                    </button>
-                    <button
-                      className={`filter-pill ${historyViewMode === "table-full" ? "active" : ""}`}
-                      onClick={() => setHistoryViewMode("table-full")}
-                      title="Expand to Full Width Data Table"
-                      style={{ fontSize: "13.5px", padding: "6px 12px" }}
-                    >
-                      FULL TABLE
-                    </button>
-                  </div>
-
                   <button className="excel-export-btn" id="btn-export-excel" onClick={exportToCSV} style={{ padding: "7px 16px", fontSize: "14px" }}>
                     <span className="excel-icon"></span> Export (.csv)
                   </button>
@@ -1983,179 +2008,55 @@ export default function App() {
               </div>
 
               {/* MAIN HISTORY DASHBOARD CONTENT */}
-              {historyViewMode === "dashboard" ? (
-                <div className="analytics-dashboard-grid">
-                  {/* Left side: KPIs + Donut + Defect Bar */}
-                  <div className="analytics-dashboard-col left-dashboard-col">
-                    <div className="analytics-kpi-subgrid">
-                      <div className="analytics-stat-card">
-                        <span className="stat-lbl">Processed Wafers</span>
-                        <span className="stat-val font-mono" id="an-total-inspected">{history.length}</span>
-                      </div>
-                      <div className="analytics-stat-card card-green">
-                        <span className="stat-lbl">Yield Rate (Pass)</span>
-                        <span className="stat-val font-mono" id="an-yield-rate">
-                          {(history.length > 0 ? (history.filter(h => h.decision === "PASS").length / history.length) * 100 : 0).toFixed(2)}%
-                        </span>
-                      </div>
-                      <div className="analytics-stat-card card-red">
-                        <span className="stat-lbl">Defect Rate (Fail)</span>
-                        <span className="stat-val font-mono" id="an-defect-rate">
-                          {(history.length > 0 ? (history.filter(h => h.decision !== "PASS").length / history.length) * 100 : 0).toFixed(2)}%
-                        </span>
-                      </div>
-                      <div className="analytics-stat-card card-blue">
-                        <span className="stat-lbl">Avg Confidence</span>
-                        <span className="stat-val font-mono" id="an-avg-confidence">
-                          {(history.length > 0 ? history.reduce((sum, h) => sum + h.confidence, 0) / history.length : 0).toFixed(1)}%
-                        </span>
-                      </div>
+              <div className="analytics-dashboard-grid">
+                {/* Left side: KPIs + Donut + Defect Bar */}
+                <div className="analytics-dashboard-col left-dashboard-col">
+                  <div className="analytics-kpi-subgrid">
+                    <div className="analytics-stat-card span-full">
+                      <span className="stat-lbl">Processed Wafers</span>
+                      <span className="stat-val font-mono" id="an-total-inspected">{history.length}</span>
                     </div>
-
-                    <div className="hmi-card donut-chart-card">
-                      <div className="card-header"><h3>YIELD DISTRIBUTION</h3></div>
-                      <div className="card-body chart-body" style={{ height: "180px", position: "relative" }}>
-                        <Doughnut data={donutChartData} options={donutChartOptions} />
-                      </div>
+                    <div className="analytics-stat-card card-green">
+                      <span className="stat-lbl">Yield Rate (Pass)</span>
+                      <span className="stat-val font-mono" id="an-yield-rate">
+                        {(history.length > 0 ? (history.filter(h => h.decision === "PASS").length / history.length) * 100 : 0).toFixed(2)}%
+                      </span>
+                      <span className="stat-sub font-mono">
+                        ({history.filter(h => h.decision === "PASS").length})
+                      </span>
                     </div>
-
-                    <div className="hmi-card bar-chart-card">
-                      <div className="card-header"><h3>DEFECT CAUSES BREAKDOWN</h3></div>
-                      <div className="card-body chart-body" style={{ height: "180px", position: "relative" }}>
-                        <Bar data={barChartData} options={barChartOptions} />
-                      </div>
+                    <div className="analytics-stat-card card-red">
+                      <span className="stat-lbl">Defect Rate (Fail)</span>
+                      <span className="stat-val font-mono" id="an-defect-rate">
+                        {(history.length > 0 ? (history.filter(h => h.decision !== "PASS").length / history.length) * 100 : 0).toFixed(2)}%
+                      </span>
+                      <span className="stat-sub font-mono">
+                        ({history.filter(h => h.decision !== "PASS").length})
+                      </span>
                     </div>
                   </div>
 
-                  {/* Right side: Line chart + Table with Pagination */}
-                  <div className="analytics-dashboard-col right-dashboard-col">
-                    <div className="hmi-card line-chart-card">
-                      <div className="card-header"><h3>LATENCY HISTORY (MS)</h3></div>
-                      <div className="card-body chart-body" style={{ height: "160px", position: "relative" }}>
-                        <Line data={lineChartData} options={lineChartOptions} />
-                      </div>
+                  <div className="hmi-card donut-chart-card">
+                    <div className="card-header"><h3>YIELD DISTRIBUTION</h3></div>
+                    <div className="card-body chart-body" style={{ height: "180px", position: "relative" }}>
+                      <Doughnut data={donutChartData} options={donutChartOptions} />
                     </div>
+                  </div>
 
-                    <div className="hmi-card analytics-table-card" style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
-                      <div className="card-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                        <h3>DETAILED PRODUCTION RECORDS</h3>
-                        <span className="pill-id" id="report-row-count">{filteredHistory.length} Records</span>
-                      </div>
-                      
-                      <div className="card-body table-container" style={{ flex: 1, overflowY: "auto", minHeight: "220px" }}>
-                        <table className="history-table report-table">
-                          <thead>
-                            <tr>
-                              <th>Timestamp</th>
-                              <th>Machine no</th>
-                              <th>Batch/Wafer no</th>
-                              <th>Pad</th>
-                              <th>Site</th>
-                              <th>XY Coordinate</th>
-                              <th>Temp</th>
-                              <th>Result</th>
-                              <th>Failure Reason</th>
-                              <th>Latency</th>
-                            </tr>
-                          </thead>
-                          <tbody id="analytics-table-body">
-                            {paginatedHistory.map((rec, index) => {
-                              const absoluteIndex = (effectiveHistoryPage - 1) * (historyPageSize === "ALL" ? filteredHistory.length : Number(historyPageSize)) + index;
-                              return (
-                                <tr key={absoluteIndex} onClick={() => openModalWithItem(rec, absoluteIndex)} title="Click to view inspection image" style={{ cursor: "pointer" }}>
-                                  <td>{rec.timestamp || rec.timeShort || "-"}</td>
-                                  <td className="font-mono">{rec.machineNo || "PROBER01"}</td>
-                                  <td className="font-mono">{formatBatchWafer(rec)}</td>
-                                  <td className="font-mono">{rec.pad || "-"}</td>
-                                  <td className="font-mono">{rec.site || "-"}</td>
-                                  <td className="font-mono">{rec.xyCoord || "-"}</td>
-                                  <td className="font-mono">{rec.temp || "-"}</td>
-                                  <td>
-                                    <span className={`badge-result ${rec.decision.toLowerCase()}`}>{rec.decision}</span>
-                                  </td>
-                                  <td className="font-mono" style={{ fontSize: "14px", color: rec.reason && rec.reason !== "-" ? "var(--color-fail)" : "inherit" }}>
-                                    {rec.reason || "-"}
-                                  </td>
-                                  <td className="font-mono">{rec.inferenceTime ?? 0} ms</td>
-                                </tr>
-                              );
-                            })}
-                            {paginatedHistory.length === 0 && (
-                              <tr>
-                                <td colSpan="10" style={{ textAlign: "center", padding: "24px", color: "var(--text-muted)", fontSize: "14px" }}>
-                                  No records found matching current filter criteria.
-                                </td>
-                              </tr>
-                            )}
-                          </tbody>
-                        </table>
-                      </div>
-
-                      {/* Pagination Footer */}
-                      <div className="table-pagination-footer" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 16px", borderTop: "1px solid var(--border-color)", background: "rgba(0,0,0,0.03)", flexWrap: "wrap", gap: "10px", fontSize: "13.5px" }}>
-                        <div style={{ display: "flex", alignItems: "center", gap: "10px", color: "var(--text-muted)" }}>
-                          <span>
-                            Showing <strong>{filteredHistory.length === 0 ? 0 : (effectiveHistoryPage - 1) * (historyPageSize === "ALL" ? filteredHistory.length : Number(historyPageSize)) + 1}</strong> - <strong>{Math.min(effectiveHistoryPage * (historyPageSize === "ALL" ? filteredHistory.length : Number(historyPageSize)), filteredHistory.length)}</strong> of <strong>{filteredHistory.length}</strong>
-                          </span>
-                          <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-                            <span>Page Size:</span>
-                            <select
-                              value={historyPageSize}
-                              onChange={(e) => { setHistoryPageSize(e.target.value === "ALL" ? "ALL" : Number(e.target.value)); setHistoryPage(1); }}
-                              style={{ padding: "4px 8px", borderRadius: "4px", border: "1px solid var(--border-color)", background: "var(--bg-input)", color: "var(--text-main)", fontSize: "13.5px" }}
-                            >
-                              <option value={15}>15</option>
-                              <option value={25}>25</option>
-                              <option value={50}>50</option>
-                              <option value={100}>100</option>
-                              <option value="ALL">All ({filteredHistory.length})</option>
-                            </select>
-                          </div>
-                        </div>
-
-                        {historyPageSize !== "ALL" && totalHistoryPages > 1 && (
-                          <div className="pagination-btn-group" style={{ display: "flex", alignItems: "center", gap: "3px" }}>
-                            <button className="pagination-nav-btn" disabled={effectiveHistoryPage <= 1} onClick={() => setHistoryPage(1)} title="First Page">⏮</button>
-                            <button className="pagination-nav-btn" disabled={effectiveHistoryPage <= 1} onClick={() => setHistoryPage(p => Math.max(1, p - 1))} title="Previous Page">◀</button>
-                            <span style={{ padding: "0 6px", fontWeight: "bold" }}>Page {effectiveHistoryPage} of {totalHistoryPages}</span>
-                            <button className="pagination-nav-btn" disabled={effectiveHistoryPage >= totalHistoryPages} onClick={() => setHistoryPage(p => Math.min(totalHistoryPages, p + 1))} title="Next Page">▶</button>
-                            <button className="pagination-nav-btn" disabled={effectiveHistoryPage >= totalHistoryPages} onClick={() => setHistoryPage(totalHistoryPages)} title="Last Page">⏭</button>
-                          </div>
-                        )}
-                      </div>
-
+                  <div className="hmi-card bar-chart-card">
+                    <div className="card-header"><h3>DEFECT CAUSES BREAKDOWN</h3></div>
+                    <div className="card-body chart-body" style={{ height: "180px", position: "relative" }}>
+                      <Bar data={barChartData} options={barChartOptions} />
                     </div>
                   </div>
                 </div>
-              ) : (
-                /* FULL TABLE EXPANDED VIEW */
-                <div style={{ display: "flex", flexDirection: "column", gap: "12px", height: "calc(100% - 60px)" }}>
-                  
-                  {/* Mini KPI Bar */}
-                  <div className="analytics-kpi-subgrid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))" }}>
-                    <div className="analytics-stat-card">
-                      <span className="stat-lbl">Total Scans</span>
-                      <span className="stat-val font-mono">{history.length}</span>
-                    </div>
-                    <div className="analytics-stat-card card-green">
-                      <span className="stat-lbl">Pass Count</span>
-                      <span className="stat-val font-mono">{history.filter(h => h.decision === "PASS").length}</span>
-                    </div>
-                    <div className="analytics-stat-card card-red">
-                      <span className="stat-lbl">Defect Count</span>
-                      <span className="stat-val font-mono">{history.filter(h => h.decision !== "PASS").length}</span>
-                    </div>
-                    <div className="analytics-stat-card card-blue">
-                      <span className="stat-lbl">Yield Rate</span>
-                      <span className="stat-val font-mono">{(history.length > 0 ? (history.filter(h => h.decision === "PASS").length / history.length) * 100 : 0).toFixed(2)}%</span>
-                    </div>
-                  </div>
 
-                  {/* Expanded Full Width Table */}
-                  <div className="hmi-card analytics-table-card" style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+                {/* Right side: Table with Full Height */}
+                <div className="analytics-dashboard-col right-dashboard-col">
+                  <div className="hmi-card analytics-table-card" style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", height: "100%" }}>
                     <div className="card-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                      <h3>FULL PRODUCTION INSPECTION HISTORY</h3>
-                      <span className="pill-id">{filteredHistory.length} Filtered Records</span>
+                      <h3>DETAILED PRODUCTION RECORDS</h3>
+                      <span className="pill-id" id="report-row-count">{filteredHistory.length} Records</span>
                     </div>
                     
                     <div className="card-body table-container" style={{ flex: 1, overflowY: "auto" }}>
@@ -2171,7 +2072,6 @@ export default function App() {
                             <th>Temp</th>
                             <th>Result</th>
                             <th>Failure Reason</th>
-                            <th>Latency</th>
                           </tr>
                         </thead>
                         <tbody id="analytics-table-body">
@@ -2189,16 +2089,15 @@ export default function App() {
                                 <td>
                                   <span className={`badge-result ${rec.decision.toLowerCase()}`}>{rec.decision}</span>
                                 </td>
-                                <td className="font-mono" style={{ fontSize: "13px", color: rec.reason && rec.reason !== "-" ? "var(--color-fail)" : "inherit" }}>
+                                <td className="font-mono" style={{ fontSize: "14px", color: rec.reason && rec.reason !== "-" ? "var(--color-fail)" : "inherit" }}>
                                   {rec.reason || "-"}
                                 </td>
-                                <td className="font-mono">{rec.inferenceTime ?? 0} ms</td>
                               </tr>
                             );
                           })}
                           {paginatedHistory.length === 0 && (
                             <tr>
-                              <td colSpan="10" style={{ textAlign: "center", padding: "24px", color: "var(--text-muted)" }}>
+                              <td colSpan="9" style={{ textAlign: "center", padding: "24px", color: "var(--text-muted)", fontSize: "14px" }}>
                                 No records found matching current filter criteria.
                               </td>
                             </tr>
@@ -2208,8 +2107,8 @@ export default function App() {
                     </div>
 
                     {/* Pagination Footer */}
-                    <div className="table-pagination-footer" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 16px", borderTop: "1px solid var(--border-color)", background: "rgba(0,0,0,0.03)", flexWrap: "wrap", gap: "10px", fontSize: "12px" }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: "12px", color: "var(--text-muted)" }}>
+                    <div className="table-pagination-footer" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 16px", borderTop: "1px solid var(--border-color)", background: "rgba(0,0,0,0.03)", flexWrap: "wrap", gap: "10px", fontSize: "13.5px" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: "10px", color: "var(--text-muted)" }}>
                         <span>
                           Showing <strong>{filteredHistory.length === 0 ? 0 : (effectiveHistoryPage - 1) * (historyPageSize === "ALL" ? filteredHistory.length : Number(historyPageSize)) + 1}</strong> - <strong>{Math.min(effectiveHistoryPage * (historyPageSize === "ALL" ? filteredHistory.length : Number(historyPageSize)), filteredHistory.length)}</strong> of <strong>{filteredHistory.length}</strong>
                         </span>
@@ -2218,7 +2117,7 @@ export default function App() {
                           <select
                             value={historyPageSize}
                             onChange={(e) => { setHistoryPageSize(e.target.value === "ALL" ? "ALL" : Number(e.target.value)); setHistoryPage(1); }}
-                            style={{ padding: "3px 8px", borderRadius: "4px", border: "1px solid var(--border-color)", background: "var(--bg-input)", color: "var(--text-main)", fontSize: "12px" }}
+                            style={{ padding: "4px 8px", borderRadius: "4px", border: "1px solid var(--border-color)", background: "var(--bg-input)", color: "var(--text-main)", fontSize: "13.5px" }}
                           >
                             <option value={15}>15</option>
                             <option value={25}>25</option>
@@ -2230,42 +2129,18 @@ export default function App() {
                       </div>
 
                       {historyPageSize !== "ALL" && totalHistoryPages > 1 && (
-                        <div className="pagination-btn-group" style={{ display: "flex", alignItems: "center", gap: "4px" }}>
-                          <button className="pagination-nav-btn" disabled={effectiveHistoryPage <= 1} onClick={() => setHistoryPage(1)} title="First Page">⏮ First</button>
-                          <button className="pagination-nav-btn" disabled={effectiveHistoryPage <= 1} onClick={() => setHistoryPage(p => Math.max(1, p - 1))} title="Previous Page">◀ Prev</button>
-                          
-                          {/* Page numbers */}
-                          {(() => {
-                            const pages = [];
-                            const maxVisible = 5;
-                            let start = Math.max(1, effectiveHistoryPage - Math.floor(maxVisible / 2));
-                            let end = Math.min(totalHistoryPages, start + maxVisible - 1);
-                            if (end - start + 1 < maxVisible) {
-                              start = Math.max(1, end - maxVisible + 1);
-                            }
-                            for (let i = start; i <= end; i++) {
-                              pages.push(
-                                <button
-                                  key={i}
-                                  className={`pagination-nav-btn ${effectiveHistoryPage === i ? "active" : ""}`}
-                                  onClick={() => setHistoryPage(i)}
-                                >
-                                  {i}
-                                </button>
-                              );
-                            }
-                            return pages;
-                          })()}
-
-                          <button className="pagination-nav-btn" disabled={effectiveHistoryPage >= totalHistoryPages} onClick={() => setHistoryPage(p => Math.min(totalHistoryPages, p + 1))} title="Next Page">Next ▶</button>
-                          <button className="pagination-nav-btn" disabled={effectiveHistoryPage >= totalHistoryPages} onClick={() => setHistoryPage(totalHistoryPages)} title="Last Page">Last ⏭</button>
+                        <div className="pagination-btn-group" style={{ display: "flex", alignItems: "center", gap: "3px" }}>
+                          <button className="pagination-nav-btn" disabled={effectiveHistoryPage <= 1} onClick={() => setHistoryPage(1)} title="First Page">⏮</button>
+                          <button className="pagination-nav-btn" disabled={effectiveHistoryPage <= 1} onClick={() => setHistoryPage(p => Math.max(1, p - 1))} title="Previous Page">◀</button>
+                          <span style={{ padding: "0 6px", fontWeight: "bold" }}>Page {effectiveHistoryPage} of {totalHistoryPages}</span>
+                          <button className="pagination-nav-btn" disabled={effectiveHistoryPage >= totalHistoryPages} onClick={() => setHistoryPage(p => Math.min(totalHistoryPages, p + 1))} title="Next Page">▶</button>
+                          <button className="pagination-nav-btn" disabled={effectiveHistoryPage >= totalHistoryPages} onClick={() => setHistoryPage(totalHistoryPages)} title="Last Page">⏭</button>
                         </div>
                       )}
                     </div>
-
                   </div>
                 </div>
-              )}
+              </div>
             </main>
           </div>
         )}
@@ -2287,9 +2162,9 @@ export default function App() {
                       <h2 className="models-hub-title">MODELS</h2>
                     </div>
                     <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                      <span style={{ fontSize: "11px", color: "var(--text-muted)", fontWeight: "600" }}>ACTIVE NPU:</span>
+                      <span style={{ fontSize: "11px", color: "var(--text-muted)", fontWeight: "600" }}>MODEL:</span>
                       <span className="badge-result pass font-mono" style={{ fontSize: "11px", fontWeight: "700" }}>
-                        {benchmarkModel || "unet.tflite"} ({selectedClasses}C)
+                        {benchmarkModel || "unet.tflite"}
                       </span>
                     </div>
                   </div>
@@ -2319,18 +2194,21 @@ export default function App() {
                     <button
                       className="subnav-back-icon-btn"
                       onClick={() => setBenchmarkActiveSubTab("hub")}
-                      title="Back"
+                      title="Back to Models Hub"
                     >
-                      ←
+                      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.8" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M9 14L4 9l5-5" />
+                        <path d="M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5v0a5.5 5.5 0 0 1-5.5 5.5H4" />
+                      </svg>
                     </button>
                     <span className="subnav-current-title">
                       {benchmarkActiveSubTab === "registry" ? "UPLOAD" : "TEST"}
                     </span>
                   </div>
                   <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                    <span style={{ fontSize: "11px", color: "var(--text-muted)", fontWeight: "600" }}>ACTIVE NPU:</span>
+                    <span style={{ fontSize: "11px", color: "var(--text-muted)", fontWeight: "600" }}>MODEL:</span>
                     <span className="badge-result pass font-mono" style={{ fontSize: "11px", fontWeight: "700" }}>
-                      {benchmarkModel || "unet.tflite"} ({selectedClasses}C)
+                      {benchmarkModel || "unet.tflite"}
                     </span>
                   </div>
                 </div>
@@ -2346,96 +2224,34 @@ export default function App() {
                     {/* Overkill Rate */}
                     <div className={`kpi-card ${(benchmarkKpis.overkill_rate || 0) > 3 ? "alert-warning" : "highlight-info"}`}>
                       <div className="kpi-header">
-                        <span className="kpi-title">Overkill Rate (FP)</span>
-                        <span className="kpi-badge-hint badge-warn">AI Fail / Human Pass</span>
+                        <span className="kpi-title">OVERKILL RATE</span>
                       </div>
                       <div className="kpi-value-row">
                         <span className="kpi-main-val" style={{ color: (benchmarkKpis.overkill_rate || 0) > 3 ? "var(--color-warn)" : "inherit" }}>
                           {Number(benchmarkKpis.overkill_rate ?? 0).toFixed(1)}%
                         </span>
-                        <span className="kpi-sub-text">({benchmarkKpis.overkill_count ?? 0} dies wasted)</span>
                       </div>
-                      <div className="kpi-sub-text">Target: &lt; 3.0% (Minimizes false scrap)</div>
                     </div>
 
-                    {/* Underkill / Escape Rate */}
+                    {/* Underkill Rate */}
                     <div className={`kpi-card ${(benchmarkKpis.underkill_rate || 0) > 0 ? "alert-danger" : "highlight-success"}`}>
                       <div className="kpi-header">
-                        <span className="kpi-title">Underkill / Escape (FN)</span>
-                        <span className={`kpi-badge-hint ${(benchmarkKpis.underkill_rate || 0) > 0 ? "badge-fail" : "badge-pass"}`}>
-                          {(benchmarkKpis.underkill_rate || 0) > 0 ? "CRITICAL RISK" : "ZERO ESCAPE"}
-                        </span>
+                        <span className="kpi-title">UNDERKILL</span>
                       </div>
                       <div className="kpi-value-row">
                         <span className="kpi-main-val" style={{ color: (benchmarkKpis.underkill_rate || 0) > 0 ? "var(--color-fail)" : "var(--color-pass)" }}>
                           {Number(benchmarkKpis.underkill_rate ?? 0).toFixed(1)}%
                         </span>
-                        <span className="kpi-sub-text">({benchmarkKpis.underkill_count ?? 0} defect escapes)</span>
                       </div>
-                      <div className="kpi-sub-text">Target: 0.0% (Zero defect leakage)</div>
-                    </div>
-
-                    {/* AI-Human Agreement */}
-                    <div className="kpi-card highlight-info">
-                      <div className="kpi-header">
-                        <span className="kpi-title">AI Agreement</span>
-                        <span className="kpi-badge-hint badge-info">Ground Truth Match</span>
-                      </div>
-                      <div className="kpi-value-row">
-                        <span className="kpi-main-val">{Number(benchmarkKpis.agreement_rate ?? 0).toFixed(1)}%</span>
-                        <span className="kpi-sub-text">({benchmarkKpis.agreement_count ?? 0} / {benchmarkKpis.total_reviewed || 0})</span>
-                      </div>
-                      <div className="kpi-sub-text">Reviewed: {benchmarkKpis.total_reviewed ?? 0} / {benchmarkKpis.total_tested ?? 0} items</div>
                     </div>
 
                     {/* True Yield vs AI Yield */}
                     <div className="kpi-card">
                       <div className="kpi-header">
-                        <span className="kpi-title">Yield Benchmark</span>
-                        <span className="kpi-badge-hint badge-neutral">Pass Ratio</span>
+                        <span className="kpi-title">YIELD BENCHMARK</span>
                       </div>
                       <div className="kpi-value-row">
                         <span className="kpi-main-val">{Number(benchmarkKpis.true_yield ?? 0).toFixed(1)}%</span>
-                        <span className="kpi-sub-text">(AI: {Number(benchmarkKpis.ai_yield ?? 0).toFixed(1)}%)</span>
-                      </div>
-                      <div className="kpi-sub-text">Pass: {benchmarkKpis.human_pass_count ?? 0} | Fail: {benchmarkKpis.human_fail_count ?? 0}</div>
-                    </div>
-
-                    {/* NPU Latency */}
-                    <div className="kpi-card">
-                      <div className="kpi-header">
-                        <span className="kpi-title">NPU Latency</span>
-                        <span className="kpi-badge-hint badge-pass">i.MX8 NPU</span>
-                      </div>
-                      <div className="kpi-value-row">
-                        <span className="kpi-main-val">{Number(benchmarkKpis.avg_inference_time_ms ?? 0).toFixed(1)} <small style={{ fontSize: "13px" }}>ms</small></span>
-                      </div>
-                      <div className="kpi-sub-text">Rule Eval: {Number(benchmarkKpis.avg_rule_time_ms ?? 0).toFixed(2)} ms</div>
-                    </div>
-
-                    {/* Interactive Confusion Matrix */}
-                    <div className="confusion-matrix-card">
-                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                        <span className="kpi-title" style={{ fontSize: "10px" }}>Confusion Matrix</span>
-                        <span style={{ fontSize: "9px", color: "var(--text-muted)" }}>H: Ground Truth</span>
-                      </div>
-                      <div className="matrix-grid">
-                        <div className="matrix-cell tp" title="True Positive: AI FAIL and Human FAIL (Confirmed Defect)">
-                          <span className="matrix-lbl">TP (Defect)</span>
-                          <span className="matrix-num" style={{ color: "#10b981" }}>{benchmarkKpis.confusion_matrix.tp}</span>
-                        </div>
-                        <div className="matrix-cell fp" title="False Positive / Overkill: AI FAIL but Human PASS (Wasted Good Die)">
-                          <span className="matrix-lbl">FP (Overkill)</span>
-                          <span className="matrix-num" style={{ color: "#f59e0b" }}>{benchmarkKpis.confusion_matrix.fp}</span>
-                        </div>
-                        <div className="matrix-cell fn" title="False Negative / Escape: AI PASS but Human FAIL (Defect Escaped)">
-                          <span className="matrix-lbl">FN (Escape)</span>
-                          <span className="matrix-num" style={{ color: "#ef4444" }}>{benchmarkKpis.confusion_matrix.fn}</span>
-                        </div>
-                        <div className="matrix-cell tn" title="True Negative: AI PASS and Human PASS (Confirmed Good Die)">
-                          <span className="matrix-lbl">TN (Good)</span>
-                          <span className="matrix-num" style={{ color: "#0ea5e9" }}>{benchmarkKpis.confusion_matrix.tn}</span>
-                        </div>
                       </div>
                     </div>
                   </div>
@@ -2447,33 +2263,33 @@ export default function App() {
                     <div className="validation-setup-panel">
                       <div className="hmi-card">
                         <div className="card-header">
-                          <h3>TEST SETUP & ENGINE RULES</h3>
-                          <span className="pill-id">CONFIG</span>
+                          <h3>TEST SETUP</h3>
                         </div>
-                        <div className="card-body" style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+                        <div className="card-body" style={{ display: "flex", flexDirection: "column", gap: "14px" }}>
                           
                           {/* Model Selector */}
                           <div className="form-group-lab">
-                            <label>Target AI Model</label>
+                            <label style={{ fontSize: "14px", fontWeight: "700" }}>Target AI Model</label>
                             <select
                               className="lab-select"
                               value={benchmarkModel}
                               onChange={(e) => setBenchmarkModel(e.target.value)}
+                              style={{ fontSize: "15px", padding: "10px 12px" }}
                             >
                               {modelsList.map((m, idx) => (
                                 <option key={idx} value={m.name}>
-                                  {m.name} ({m.classes || 3} Classes - {m.engine || "TFLite"})
+                                  {m.name}
                                 </option>
                               ))}
                               {modelsList.length === 0 && (
-                                <option value="unet.tflite">unet.tflite (3 Classes - TFLite NPU)</option>
+                                <option value="unet.tflite">unet.tflite</option>
                               )}
                             </select>
                           </div>
 
                           {/* Test Dataset (ZIP Upload) */}
                           <div className="form-group-lab">
-                            <label>Upload Test Dataset (.zip)</label>
+                            <label style={{ fontSize: "14px", fontWeight: "700" }}>Upload Test Dataset (.zip)</label>
                             <input
                               type="file"
                               ref={benchmarkFileInputRef}
@@ -2500,18 +2316,25 @@ export default function App() {
                                 }}
                                 onClick={() => benchmarkFileInputRef.current && benchmarkFileInputRef.current.click()}
                               >
-                                <p className="upload-main-text" style={{ fontSize: "12px", margin: 0, fontWeight: "600" }}>
+                                <div style={{ marginBottom: "10px", color: "var(--color-info)" }}>
+                                  <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                                    <polyline points="17 8 12 3 7 8"></polyline>
+                                    <line x1="12" y1="3" x2="12" y2="15"></line>
+                                  </svg>
+                                </div>
+                                <p className="upload-main-text" style={{ fontSize: "16px", margin: "0 0 6px 0", fontWeight: "700" }}>
                                   Drop .ZIP file or click to browse
                                 </p>
-                                <p className="upload-sub-text" style={{ fontSize: "10px", margin: "4px 0 0 0" }}>
+                                <p className="upload-sub-text" style={{ fontSize: "14px", margin: 0, color: "var(--text-muted)" }}>
                                   Raw wafer images archive (.zip)
                                 </p>
                               </div>
                             ) : (
-                              <div className="selected-zip-box">
+                              <div className="selected-zip-box" style={{ padding: "14px 16px" }}>
                                 <div className="zip-file-info">
-                                  <span className="zip-file-name" title={benchmarkZipFile.name}>{benchmarkZipFile.name}</span>
-                                  <span className="zip-file-meta">
+                                  <span className="zip-file-name" style={{ fontSize: "15px" }} title={benchmarkZipFile.name}>{benchmarkZipFile.name}</span>
+                                  <span className="zip-file-meta" style={{ fontSize: "13px" }}>
                                     {(benchmarkZipFile.size / (1024 * 1024)).toFixed(2)} MB • Ready to benchmark
                                   </span>
                                 </div>
@@ -2530,24 +2353,22 @@ export default function App() {
                             )}
                           </div>
 
-                          {/* ponytail: rule params removed — config from uploaded file on backend */}
-
                           {/* Task Status Monitor */}
-                          <div className="priority-queue-card">
-                            <div className="priority-header">
+                          <div className="priority-queue-card" style={{ padding: "14px 16px" }}>
+                            <div className="priority-header" style={{ fontSize: "14px" }}>
                               <span>TASK STATUS</span>
-                              <span style={{ fontSize: "10px", fontWeight: "700", color: benchmarkProgress.status === "RUNNING" ? "#38bdf8" : "var(--text-muted)" }}>
+                              <span style={{ fontSize: "13px", fontWeight: "700", color: benchmarkProgress.status === "RUNNING" ? "#38bdf8" : "var(--text-muted)" }}>
                                 {isBenchmarkStarting ? "UPLOADING..." : benchmarkProgress.status}
                               </span>
                             </div>
 
                             {benchmarkProgress.p0_pending > 0 && benchmarkProgress.status === "RUNNING" && (
-                              <div className="priority-warning-banner">
+                              <div className="priority-warning-banner" style={{ fontSize: "13px", padding: "8px 12px" }}>
                                 ⏳ กำลังรอ — เครื่อง Prober กำลังประมวลผลภาพอยู่ การ Validation จะทำต่อโดยอัตโนมัติ
                               </div>
                             )}
 
-                            <div className="priority-progress-bar" style={{ marginTop: "4px" }}>
+                            <div className="priority-progress-bar" style={{ marginTop: "8px", height: "8px" }}>
                               <div
                                 className="priority-progress-fill"
                                 style={{
@@ -2557,7 +2378,7 @@ export default function App() {
                                 }}
                               ></div>
                             </div>
-                            <div style={{ display: "flex", justifyContent: "space-between", fontSize: "9.5px", color: "var(--text-muted)" }}>
+                            <div style={{ display: "flex", justifyContent: "space-between", fontSize: "13px", color: "var(--text-muted)", marginTop: "6px" }}>
                               <span>
                                 Progress: {benchmarkProgress.p1_processed || benchmarkProgress.processed || 0} / {benchmarkProgress.p1_total || benchmarkProgress.total || 0} Images ({
                                   (benchmarkProgress.p1_total || benchmarkProgress.total || 0) > 0 
@@ -2569,13 +2390,13 @@ export default function App() {
                           </div>
 
                           {/* Action Buttons */}
-                          <div style={{ display: "flex", gap: "8px", marginTop: "6px" }}>
+                          <div style={{ display: "flex", gap: "10px", marginTop: "8px" }}>
                             {benchmarkProgress.status === "PAUSED" ? (
                               <>
                                 <button
                                   type="button"
                                   className="btn-resume-benchmark"
-                                  style={{ flex: 1 }}
+                                  style={{ flex: 1, padding: "12px 16px", fontSize: "15px" }}
                                   onClick={handleResumeBenchmark}
                                 >
                                   ▶ RESUME BENCHMARK
@@ -2583,6 +2404,7 @@ export default function App() {
                                 <button
                                   type="button"
                                   className="btn-stop-benchmark"
+                                  style={{ padding: "12px 16px", fontSize: "15px" }}
                                   onClick={handleStopBenchmark}
                                   title="Stop and clear remaining images"
                                 >
@@ -2594,7 +2416,7 @@ export default function App() {
                                 <button
                                   type="button"
                                   className="btn-start-benchmark"
-                                  style={{ flex: 1 }}
+                                  style={{ flex: 1, padding: "12px 16px", fontSize: "15px" }}
                                   disabled={isBenchmarkStarting || benchmarkProgress.status === "RUNNING"}
                                   onClick={handleStartBenchmark}
                                 >
@@ -2608,6 +2430,7 @@ export default function App() {
                                   <button
                                     type="button"
                                     className="btn-pause-benchmark"
+                                    style={{ padding: "12px 16px", fontSize: "15px" }}
                                     onClick={handlePauseBenchmark}
                                     title="Pause execution temporarily"
                                   >
@@ -2618,6 +2441,7 @@ export default function App() {
                                   <button
                                     type="button"
                                     className="btn-stop-benchmark"
+                                    style={{ padding: "12px 16px", fontSize: "15px" }}
                                     onClick={handleStopBenchmark}
                                     title="Stop and cancel benchmark"
                                   >
@@ -2638,51 +2462,56 @@ export default function App() {
                         <div className="card-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "8px" }}>
                           <div>
                             <h3>HUMAN REVIEW STATION</h3>
-                            <span style={{ fontSize: "10px", color: "var(--text-muted)" }}>
+                            <span style={{ fontSize: "14px", color: "var(--text-muted)" }}>
                               Compare AI Decision vs QA Ground Truth ({benchmarkResults.length} Items)
                             </span>
                           </div>
-                          <div style={{ display: "flex", gap: "6px" }}>
-                            <button className="review-action-btn" onClick={handleExportBenchmarkCSV} title="Export CSV summary report">
+                          <div style={{ display: "flex", gap: "8px" }}>
+                            <button className="review-action-btn" style={{ fontSize: "14px", padding: "7px 16px" }} onClick={handleExportBenchmarkCSV} title="Export CSV summary report">
                               EXPORT CSV
                             </button>
-                            <button className="review-action-btn" onClick={handleViewReport} title="Open analytical validation report card">
+                            <button className="review-action-btn" style={{ fontSize: "14px", padding: "7px 16px" }} onClick={handleViewReport} title="Open analytical validation report card">
                               VIEW REPORT
                             </button>
                           </div>
                         </div>
 
-                        <div className="card-body" style={{ display: "flex", flexDirection: "column", gap: "10px", flex: 1, overflow: "hidden" }}>
+                        <div className="card-body" style={{ display: "flex", flexDirection: "column", gap: "12px", flex: 1, overflow: "hidden" }}>
                           
                           {/* Review Toolbar & Filter Tabs */}
                           <div className="review-toolbar">
                             <div className="review-filter-group">
                               <button
                                 className={`review-filter-btn ${benchmarkFilter === "ALL" ? "active" : ""}`}
+                                style={{ fontSize: "14px", padding: "7px 14px" }}
                                 onClick={() => setBenchmarkFilter("ALL")}
                               >
                                 All ({benchmarkKpis.total_tested || benchmarkResults.length})
                               </button>
                               <button
                                 className={`review-filter-btn warn ${benchmarkFilter === "DISAGREEMENT" ? "active" : ""}`}
+                                style={{ fontSize: "14px", padding: "7px 14px" }}
                                 onClick={() => setBenchmarkFilter("DISAGREEMENT")}
                               >
                                 Disagreements ({(benchmarkKpis.overkill_count || 0) + (benchmarkKpis.underkill_count || 0)})
                               </button>
                               <button
                                 className={`review-filter-btn ${benchmarkFilter === "UNREVIEWED" ? "active" : ""}`}
+                                style={{ fontSize: "14px", padding: "7px 14px" }}
                                 onClick={() => setBenchmarkFilter("UNREVIEWED")}
                               >
                                 Pending Review ({benchmarkKpis.unreviewed_count ?? 0})
                               </button>
                               <button
                                 className={`review-filter-btn ${benchmarkFilter === "HUMAN_PASS" ? "active" : ""}`}
+                                style={{ fontSize: "14px", padding: "7px 14px" }}
                                 onClick={() => setBenchmarkFilter("HUMAN_PASS")}
                               >
                                 Human PASS ({benchmarkKpis.human_pass_count ?? 0})
                               </button>
                               <button
                                 className={`review-filter-btn ${benchmarkFilter === "HUMAN_FAIL" ? "active" : ""}`}
+                                style={{ fontSize: "14px", padding: "7px 14px" }}
                                 onClick={() => setBenchmarkFilter("HUMAN_FAIL")}
                               >
                                 Human FAIL ({benchmarkKpis.human_fail_count ?? 0})
@@ -2690,7 +2519,7 @@ export default function App() {
                             </div>
 
                             {/* Search & Batch Action Helpers */}
-                            <div style={{ display: "flex", gap: "6px", alignItems: "center", flexWrap: "wrap" }}>
+                            <div style={{ display: "flex", gap: "8px", alignItems: "center", flexWrap: "wrap" }}>
                               <div style={{ display: "flex", alignItems: "center", position: "relative" }}>
                                 <input
                                   type="text"
@@ -2699,11 +2528,11 @@ export default function App() {
                                   value={benchmarkSearch}
                                   onChange={(e) => setBenchmarkSearch(e.target.value)}
                                   style={{
-                                    padding: "4px 8px",
-                                    paddingRight: benchmarkSearch ? "22px" : "8px",
-                                    fontSize: "11px",
+                                    padding: "6px 10px",
+                                    paddingRight: benchmarkSearch ? "26px" : "10px",
+                                    fontSize: "14px",
                                     borderRadius: "4px",
-                                    width: "180px"
+                                    width: "210px"
                                   }}
                                 />
                                 {benchmarkSearch && (
@@ -2711,12 +2540,12 @@ export default function App() {
                                     onClick={() => setBenchmarkSearch("")}
                                     style={{
                                       position: "absolute",
-                                      right: "4px",
+                                      right: "6px",
                                       background: "none",
                                       border: "none",
                                       color: "var(--text-muted)",
                                       cursor: "pointer",
-                                      fontSize: "11px",
+                                      fontSize: "14px",
                                       padding: "0 2px"
                                     }}
                                     title="Clear search"
@@ -2725,10 +2554,9 @@ export default function App() {
                                   </button>
                                 )}
                               </div>
-                              {/* ponytail: Auto-Confirm AI removed */}
                               <button
                                 className="review-action-btn"
-                                style={{ fontSize: "10.5px" }}
+                                style={{ fontSize: "13px", padding: "6px 12px" }}
                                 onClick={() => handleBatchReview("MARK_UNREVIEWED_PASS")}
                                 title="Set all unreviewed items to PASS"
                               >
@@ -2736,7 +2564,7 @@ export default function App() {
                               </button>
                               <button
                                 className="review-action-btn"
-                                style={{ fontSize: "10.5px" }}
+                                style={{ fontSize: "13px", padding: "6px 12px" }}
                                 onClick={() => handleBatchReview("MARK_UNREVIEWED_FAIL")}
                                 title="Set all unreviewed items to FAIL"
                               >
@@ -2744,7 +2572,7 @@ export default function App() {
                               </button>
                               <button
                                 className="review-action-btn"
-                                style={{ fontSize: "10.5px" }}
+                                style={{ fontSize: "13px", padding: "6px 12px" }}
                                 onClick={() => handleBatchReview("RESET_ALL")}
                                 title="Reset all reviews back to UNREVIEWED"
                               >
@@ -2755,24 +2583,24 @@ export default function App() {
 
                           {/* Results Table */}
                           <div className="table-container" style={{ flex: 1, overflowY: "auto" }}>
-                            <table className="history-table">
+                            <table className="history-table benchmark-review-table">
                               <thead>
                                 <tr>
-                                  <th style={{ width: "60px" }}>Visual</th>
-                                  <th>Sample / Wafer ID</th>
-                                  <th>AI Decision</th>
-                                  <th>Violations / Reason</th>
-                                  <th>Min Edge</th>
-                                  <th>Area %</th>
-                                  <th>Latency</th>
-                                  <th>Human Review</th>
-                                  <th style={{ textAlign: "center", width: "150px" }}>Grade Action</th>
+                                  <th style={{ width: "74px", fontSize: "14px" }}>Visual</th>
+                                  <th style={{ minWidth: "160px", maxWidth: "220px", fontSize: "14px" }}>Sample / Wafer ID</th>
+                                  <th style={{ width: "95px", fontSize: "14px", textAlign: "center" }}>AI Decision</th>
+                                  <th style={{ minWidth: "180px", maxWidth: "230px", fontSize: "14px" }}>Violations / Reason</th>
+                                  <th style={{ width: "85px", fontSize: "14px", whiteSpace: "nowrap" }}>Min Edge</th>
+                                  <th style={{ width: "75px", fontSize: "14px", whiteSpace: "nowrap" }}>Area %</th>
+                                  <th style={{ width: "85px", fontSize: "14px", whiteSpace: "nowrap" }}>Latency</th>
+                                  <th style={{ width: "115px", fontSize: "14px", textAlign: "center" }}>Human Review</th>
+                                  <th style={{ textAlign: "center", width: "145px", fontSize: "14px" }}>Grade Action</th>
                                 </tr>
                               </thead>
                               <tbody>
                                 {filteredBenchmarkResults.length === 0 ? (
                                   <tr>
-                                    <td colSpan={9} style={{ textAlign: "center", padding: "30px", color: "var(--text-muted)" }}>
+                                    <td colSpan={9} style={{ textAlign: "center", padding: "40px", color: "var(--text-muted)", fontSize: "15px" }}>
                                       {benchmarkProgress.status === "RUNNING"
                                         ? "Processing benchmark images on i.MX8 NPU... Results will stream in real-time."
                                         : "No matching benchmark validation results found."}
@@ -2799,13 +2627,14 @@ export default function App() {
                                         <td>
                                           <div
                                             style={{
-                                              width: "44px",
-                                              height: "44px",
-                                              borderRadius: "4px",
+                                              width: "56px",
+                                              height: "56px",
+                                              borderRadius: "6px",
                                               overflow: "hidden",
                                               cursor: "pointer",
-                                              border: "1px solid var(--border-color)",
-                                              background: "#000"
+                                              border: "1.5px solid var(--border-color)",
+                                              background: "#000",
+                                              boxShadow: "0 2px 6px rgba(0,0,0,0.15)"
                                             }}
                                             onClick={() => {
                                               setBenchmarkSplitModalItem(item);
@@ -2825,62 +2654,63 @@ export default function App() {
                                         </td>
 
                                         {/* Sample Name */}
-                                        <td>
+                                        <td style={{ maxWidth: "220px" }}>
                                           <div
-                                            style={{ cursor: "pointer", fontWeight: "600" }}
+                                            style={{ cursor: "pointer", fontWeight: "600", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
                                             onClick={() => {
                                               setBenchmarkSplitModalItem(item);
                                               setBenchmarkSplitModalIndex(idx);
                                             }}
+                                            title={item.image_name}
                                           >
-                                            <span className="font-mono" style={{ fontSize: "14px" }}>{item.image_name}</span>
+                                            <span className="font-mono" style={{ fontSize: "13.5px" }}>{item.image_name}</span>
                                           </div>
                                         </td>
 
                                         {/* AI Decision */}
-                                        <td>
-                                          <span className={`badge-result ${item.ai_decision.toLowerCase()}`}>
+                                        <td style={{ textAlign: "center" }}>
+                                          <span className={`badge-result ${item.ai_decision.toLowerCase()}`} style={{ fontSize: "13px", padding: "4px 8px" }}>
                                             {item.ai_decision}
                                           </span>
                                         </td>
 
-                                        {/* Violation / Reason */}
-                                        <td style={{ fontSize: "14px", color: "var(--text-muted)", maxWidth: "220px" }}>
+                                        {/* Violation / Reason (with clean wrap & no column overlap) */}
+                                        <td style={{ fontSize: "13.5px", color: "var(--text-muted)", maxWidth: "230px", minWidth: "180px", wordBreak: "break-word", whiteSpace: "normal", lineHeight: "1.3" }}>
                                           <span title={item.ai_reason}>{item.ai_reason || "-"}</span>
                                         </td>
 
                                         {/* Min Edge Distance */}
-                                        <td className="font-mono" style={{ fontSize: "14px" }}>
+                                        <td className="font-mono" style={{ fontSize: "13.5px", whiteSpace: "nowrap" }}>
                                           <span>
                                             {item.min_edge_distance_um != null ? `${Number(item.min_edge_distance_um).toFixed(1)} µm` : "-"}
                                           </span>
                                         </td>
 
                                         {/* Mark Area Ratio */}
-                                        <td className="font-mono" style={{ fontSize: "14px" }}>
+                                        <td className="font-mono" style={{ fontSize: "13.5px", whiteSpace: "nowrap" }}>
                                           {item.mark_area_ratio_pct != null ? `${Number(item.mark_area_ratio_pct).toFixed(1)}%` : "-"}
                                         </td>
 
                                         {/* NPU Latency */}
-                                        <td className="font-mono" style={{ fontSize: "14px" }}>
+                                        <td className="font-mono" style={{ fontSize: "13.5px", whiteSpace: "nowrap" }}>
                                           {item.inference_time_ms ? `${Number(item.inference_time_ms).toFixed(1)} ms` : "-"}
                                         </td>
 
                                         {/* Human Decision Badge */}
-                                        <td>
+                                        <td style={{ textAlign: "center" }}>
                                           {item.human_decision === "PASS" && (
-                                            <span className="badge-result pass" style={{ fontSize: "13px" }}>PASS</span>
+                                            <span className="badge-result pass" style={{ fontSize: "13px", padding: "4px 8px" }}>PASS</span>
                                           )}
                                           {item.human_decision === "FAIL" && (
-                                            <span className="badge-result fail" style={{ fontSize: "13px" }}>FAIL</span>
+                                            <span className="badge-result fail" style={{ fontSize: "13px", padding: "4px 8px" }}>FAIL</span>
                                           )}
                                           {item.human_decision === "UNREVIEWED" && (
-                                            <span className="badge-result warn" style={{ fontSize: "13px", opacity: 0.7 }}>UNREVIEWED</span>
+                                            <span className="badge-result warn" style={{ fontSize: "13px", padding: "4px 8px", opacity: 0.7 }}>UNREVIEWED</span>
                                           )}
                                           {isDisagreement && (
-                                            <span style={{ marginLeft: "4px", fontSize: "12px", color: isUnderkill ? "#ef4444" : "#f59e0b", fontWeight: "bold" }}>
+                                            <div style={{ marginTop: "3px", fontSize: "11px", color: isUnderkill ? "#ef4444" : "#f59e0b", fontWeight: "bold" }}>
                                               {isUnderkill ? "[ESCAPE]" : "[OVERKILL]"}
-                                            </span>
+                                            </div>
                                           )}
                                         </td>
 
@@ -2889,6 +2719,7 @@ export default function App() {
                                           <div style={{ display: "flex", gap: "4px", justifyContent: "center" }}>
                                             <button
                                               className={`btn-human-pass ${item.human_decision === "PASS" ? "active" : ""}`}
+                                              style={{ padding: "5px 9px", fontSize: "13px" }}
                                               onClick={() => handleSaveHumanReview(item, "PASS")}
                                               title="Mark this sample as Human PASS"
                                             >
@@ -2896,6 +2727,7 @@ export default function App() {
                                             </button>
                                             <button
                                               className={`btn-human-fail ${item.human_decision === "FAIL" ? "active" : ""}`}
+                                              style={{ padding: "5px 9px", fontSize: "13px" }}
                                               onClick={() => handleSaveHumanReview(item, "FAIL")}
                                               title="Mark this sample as Human FAIL"
                                             >
@@ -2903,7 +2735,7 @@ export default function App() {
                                             </button>
                                             <button
                                               className="action-btn-sm"
-                                              style={{ padding: "5px 10px", fontSize: "13px", fontWeight: "700" }}
+                                              style={{ padding: "5px 9px", fontSize: "13px", fontWeight: "700" }}
                                               onClick={() => {
                                                 setBenchmarkSplitModalItem(item);
                                                 setBenchmarkSplitModalIndex(idx);
@@ -2943,34 +2775,12 @@ export default function App() {
                         <h3>UPLOAD AI DETECTOR</h3>
                       </div>
                       <div className="card-body">
-                        {/* Target Class Selector for Imported Model */}
-                        <div style={{ marginBottom: "14px", display: "flex", flexDirection: "column", gap: "6px" }}>
-                          <label style={{ fontSize: "11px", fontWeight: "600", color: "var(--text-muted)", textTransform: "uppercase" }}>Model Class Architecture:</label>
-                          <div style={{ display: "flex", gap: "6px" }}>
-                            <button
-                              type="button"
-                              className={`compare-btn ${uploadClassCount === 2 ? "active" : ""}`}
-                              onClick={() => setUploadClassCount(2)}
-                              style={{ flex: 1, padding: "5px 8px", fontSize: "11px", borderRadius: "4px" }}
-                            >
-                              2 Classes (Pad + Mark)
-                            </button>
-                            <button
-                              type="button"
-                              className={`compare-btn ${uploadClassCount === 3 ? "active" : ""}`}
-                              onClick={() => setUploadClassCount(3)}
-                              style={{ flex: 1, padding: "5px 8px", fontSize: "11px", borderRadius: "4px" }}
-                            >
-                              3 Classes (Pad + Mark + Grain)
-                            </button>
-                          </div>
-                        </div>
-
                         <input
                           type="file"
                           ref={fileInputRef}
-                          accept=".tflite,.onnx,.pth"
+                          accept=".tflite,.pth,.pt"
                           style={{ display: "none" }}
+                          disabled={isModelConverting}
                           onChange={(e) => {
                             if (e.target.files && e.target.files.length > 0) {
                               handleUploadFile(e.target.files[0]);
@@ -2980,21 +2790,42 @@ export default function App() {
                         <div
                           className={`upload-drop-zone ${isDragging ? "active-drag" : ""}`}
                           id="upload-zone"
-                          onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
+                          style={{ minHeight: "220px", pointerEvents: isModelConverting ? "none" : "auto", opacity: isModelConverting ? 0.85 : 1 }}
+                          onDragOver={(e) => { e.preventDefault(); if (!isModelConverting) setIsDragging(true); }}
                           onDragLeave={() => setIsDragging(false)}
                           onDrop={(e) => {
                             e.preventDefault();
                             setIsDragging(false);
+                            if (isModelConverting) return;
                             const files = e.dataTransfer.files;
                             if (files.length > 0) {
                               handleUploadFile(files[0]);
                             }
                           }}
                         >
-                          <div className="upload-icon-box"></div>
-                          <p className="upload-main-text">Drag & Drop model file here</p>
-                          <p className="upload-sub-text">Imports as {uploadClassCount}-Class Model (.onnx, .tflite)</p>
-                          <button className="select-file-btn" id="btn-select-file" onClick={() => fileInputRef.current && fileInputRef.current.click()}>Select File</button>
+                          {isModelConverting ? (
+                            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "10px" }}>
+                              <div className="upload-spinner"></div>
+                              <p className="upload-main-text" style={{ fontSize: "16px", color: "var(--color-info)" }}>Converting Model...</p>
+                              <p className="upload-sub-text" style={{ fontSize: "12px", marginTop: "4px" }}>
+                                Exporting PyTorch ({convertingModelName}) & Quantizing to INT8 TFLite for NPU...
+                              </p>
+                            </div>
+                          ) : (
+                            <>
+                              <div className="upload-icon-box"></div>
+                              <p className="upload-main-text">Drag & Drop model file here</p>
+                              <p className="upload-sub-text">Accepts .pth (Auto-converts to TFLite) or .tflite</p>
+                              <button
+                                className="select-file-btn"
+                                id="btn-select-file"
+                                type="button"
+                                onClick={() => fileInputRef.current && fileInputRef.current.click()}
+                              >
+                                Select File
+                              </button>
+                            </>
+                          )}
                         </div>
                       </div>
                     </div>
@@ -3003,36 +2834,10 @@ export default function App() {
                   {/* Models table list */}
                   <div className="models-right-panel">
                     <div className="hmi-card models-list-card">
-                      <div className="card-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "10px" }}>
+                      <div className="card-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                         <div>
-                          <h3>REGISTERED AI MODELS</h3>
-                          <span style={{ fontSize: "10px", color: "var(--text-muted)" }}>Active System Mode: <strong style={{ color: "var(--color-info)" }}>{selectedClasses} Classes</strong></span>
+                          <h3 style={{ margin: 0 }}>REGISTERED AI MODELS</h3>
                         </div>
-                        <div className="model-class-toggle" style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-                          <span style={{ fontSize: "11px", fontWeight: "600", color: "var(--text-muted)", textTransform: "uppercase" }}>Filter View:</span>
-                          <button
-                            className={`compare-btn ${modelFilter === "ALL" ? "active" : ""}`}
-                            onClick={() => setModelFilter("ALL")}
-                            style={{ padding: "3px 8px", fontSize: "10px", borderRadius: "4px" }}
-                          >
-                            All
-                          </button>
-                          <button
-                            className={`compare-btn ${modelFilter === "2" ? "active" : ""}`}
-                            onClick={() => setModelFilter("2")}
-                            style={{ padding: "3px 8px", fontSize: "10px", borderRadius: "4px" }}
-                          >
-                            2 Classes Only
-                          </button>
-                          <button
-                            className={`compare-btn ${modelFilter === "3" ? "active" : ""}`}
-                            onClick={() => setModelFilter("3")}
-                            style={{ padding: "3px 8px", fontSize: "10px", borderRadius: "4px" }}
-                          >
-                            3 Classes Only
-                          </button>
-                        </div>
-                        <span className="pill-id">EDGE MEMORY</span>
                       </div>
                       <div className="card-body table-container">
                         <table className="history-table models-table">
@@ -3040,62 +2845,42 @@ export default function App() {
                             <tr>
                               <th>Model Name</th>
                               <th>Version</th>
-                              <th>Engine</th>
                               <th>Size</th>
-                              <th>Supported Classes</th>
-                              <th>Accuracy</th>
                               <th>Status</th>
-                              <th>Action</th>
+                              <th style={{ textAlign: "center" }}>Action</th>
                             </tr>
                           </thead>
                           <tbody id="models-table-body">
-                            {modelsList
-                              .filter(m => modelFilter === "ALL" || String(m.classes || 3) === modelFilter)
-                              .map((model, idx) => {
-                                return (
-                                  <tr key={idx} className={model.active ? "row-active-model" : ""}>
-                                    <td className="font-mono">{model.name}</td>
-                                    <td className="font-mono">{model.version || "v1.0.0"}</td>
-                                    <td className="font-mono">{model.engine || "TFLite / NPU"}</td>
-                                    <td className="font-mono">{model.size || "-"}</td>
-                                    <td>
-                                      <span
-                                        className="badge-result"
-                                        style={{
-                                          fontSize: "10px",
-                                          background: model.classes === 2 ? "rgba(14, 165, 233, 0.15)" : "rgba(139, 92, 246, 0.15)",
-                                          color: model.classes === 2 ? "#0ea5e9" : "#a855f7",
-                                          border: `1px solid ${model.classes === 2 ? "rgba(14, 165, 233, 0.4)" : "rgba(139, 92, 246, 0.4)"}`
-                                        }}
-                                      >
-                                        {model.classes || 3} Classes {model.classes === 2 ? "(Pad+Mark)" : "(Pad+Mark+Grain)"}
-                                      </span>
-                                    </td>
-                                    <td className="font-mono">{model.accuracy || "97.5%"}</td>
-                                    <td>
-                                      <span className={`badge-result ${model.active ? "pass" : "warn"}`}>
-                                        {model.active ? `ACTIVE RUNNING (${model.classes || 3}C)` : "INACTIVE"}
-                                      </span>
-                                    </td>
-                                    <td>
-                                      {model.active ? (
-                                        <button className="action-btn-sm active-green" disabled>IN USE</button>
-                                      ) : (
-                                        <div style={{ display: "flex", gap: "6px" }}>
-                                          <button
-                                            className="action-btn-sm"
-                                            onClick={() => handleActivateModel(model)}
-                                            title={`Activate model on i.MX8 NPU and switch system mode to ${model.classes || 3} Classes`}
-                                          >
-                                            ACTIVATE ({model.classes || 3}C)
-                                          </button>
-                                          <button className="action-btn-sm delete-red" onClick={() => handleDeleteModel(model)}>DELETE</button>
-                                        </div>
-                                      )}
-                                    </td>
-                                  </tr>
-                                );
-                              })}
+                            {modelsList.map((model, idx) => {
+                              return (
+                                <tr key={idx} className={model.active ? "row-active-model" : ""}>
+                                  <td className="font-mono" style={{ fontWeight: "600" }}>{model.name}</td>
+                                  <td className="font-mono">{model.version || "v1.0.0"}</td>
+                                  <td className="font-mono">{model.size || "-"}</td>
+                                  <td>
+                                    <span className={`badge-result ${model.active ? "pass" : "warn"}`}>
+                                      {model.active ? "ACTIVE RUNNING" : "INACTIVE"}
+                                    </span>
+                                  </td>
+                                  <td style={{ textAlign: "center" }}>
+                                    {model.active ? (
+                                      <button className="action-btn-sm active-green" disabled>IN USE</button>
+                                    ) : (
+                                      <div style={{ display: "flex", gap: "6px", justifyContent: "center" }}>
+                                        <button
+                                          className="action-btn-sm"
+                                          onClick={() => handleActivateModel(model)}
+                                          title={`Activate ${model.name} on i.MX8 NPU`}
+                                        >
+                                          ACTIVATE
+                                        </button>
+                                        <button className="action-btn-sm delete-red" onClick={() => handleDeleteModel(model)}>DELETE</button>
+                                      </div>
+                                    )}
+                                  </td>
+                                </tr>
+                              );
+                            })}
                           </tbody>
                         </table>
                       </div>
@@ -3110,224 +2895,237 @@ export default function App() {
         )}
 
         {/* ==============================================================================
-            TAB CONTENT 4: CONFIGURATION & RECIPE STUDIO (Product_Settine & Machine_Setting)
+            TAB CONTENT 4: SYSTEM SETTINGS & RECIPE
             ============================================================================== */}
         {activeTab === "settings" && (
-          <div className="tab-content active-tab" id="view-settings" style={{ padding: "20px", overflowY: "auto", display: "flex", flexDirection: "column", gap: "20px" }}>
+          <div className="tab-content active-tab" id="view-settings" style={{ padding: "20px 24px", maxWidth: "1500px", margin: "0 auto", overflowY: "auto", display: "flex", flexDirection: "column", gap: "20px", width: "100%", boxSizing: "border-box" }}>
             
-            {/* Header & Quick Action Toolbar */}
-            <div className="hmi-card" style={{ padding: "16px 20px", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "12px" }}>
-              <div>
-                <h2 style={{ fontSize: "20px", fontWeight: "800", letterSpacing: "0.5px", margin: 0, color: "var(--text-main)" }}>
-                  CONFIGURATION & RECIPE MANAGEMENT
-                </h2>
-                <div style={{ fontSize: "14px", color: "var(--text-muted)", marginTop: "4px" }}>
-                  Upload and manage factory parameters (<span className="font-mono" style={{ color: "var(--color-info)", fontWeight: "bold" }}>Product_Settine.txt</span> & <span className="font-mono" style={{ color: "var(--color-info)", fontWeight: "bold" }}>Machine_Setting.txt</span>) with instant live binding
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(440px, 1fr))", gap: "20px" }}>
+              
+              {/* CARD 1: EDGE NODE & SYSTEM CONNECTIVITY */}
+              <div className="hmi-card" style={{ padding: "22px", display: "flex", flexDirection: "column", gap: "18px" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "1px solid var(--border-color)", paddingBottom: "12px" }}>
+                  <h3 style={{ margin: 0, fontSize: "17px", fontWeight: "700", letterSpacing: "0.5px" }}>EDGE NODE & SYSTEM</h3>
+                  <span
+                    className="badge-result"
+                    style={{
+                      fontSize: "12px",
+                      fontWeight: "700",
+                      padding: "4px 10px",
+                      background: isBackendConnected ? "rgba(16, 185, 129, 0.15)" : "rgba(239, 68, 68, 0.15)",
+                      color: isBackendConnected ? "#10b981" : "#ef4444",
+                      border: `1px solid ${isBackendConnected ? "rgba(16, 185, 129, 0.4)" : "rgba(239, 68, 68, 0.4)"}`
+                    }}
+                  >
+                    {isBackendConnected ? "EDGE: ONLINE" : "EDGE: OFFLINE"}
+                  </span>
                 </div>
+
+                <form onSubmit={handleSaveIp} style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+                  <div className="form-group-lab" style={{ margin: 0 }}>
+                    <label style={{ fontSize: "14px", color: "var(--text-muted)", fontWeight: "600" }}>i.MX8 Hostname / IP Address</label>
+                    <div style={{ display: "flex", gap: "10px", marginTop: "6px" }}>
+                      <input
+                        type="text"
+                        value={tempIp}
+                        onChange={(e) => {
+                          setTempIp(e.target.value);
+                          setPingResult(null);
+                        }}
+                        placeholder="localhost or 10.42.0.95"
+                        style={{
+                          flex: 1,
+                          padding: "10px 14px",
+                          borderRadius: "8px",
+                          background: "var(--bg-input)",
+                          border: "1px solid var(--border-color)",
+                          color: "var(--text-main)",
+                          fontFamily: "var(--font-mono)",
+                          fontSize: "14px"
+                        }}
+                      />
+                      <button
+                        type="submit"
+                        className="select-file-btn"
+                        style={{ padding: "10px 18px", fontSize: "13px", fontWeight: "700", borderRadius: "8px" }}
+                      >
+                        Apply IP
+                      </button>
+                      <button
+                        type="button"
+                        className="select-file-btn"
+                        style={{ padding: "10px 16px", fontSize: "13px", fontWeight: "700", borderRadius: "8px", background: "rgba(14, 165, 233, 0.15)", color: "var(--color-info)", border: "1px solid rgba(14, 165, 233, 0.3)" }}
+                        onClick={() => handleTestPing(tempIp)}
+                        disabled={isPinging}
+                      >
+                        {isPinging ? "Testing..." : "Ping"}
+                      </button>
+                    </div>
+                  </div>
+
+                  {saveIpSuccess && (
+                    <span style={{ fontSize: "13px", color: "var(--color-pass)", fontWeight: "600" }}>
+                      ✓ IP updated successfully
+                    </span>
+                  )}
+
+                  {pingResult && (
+                    <div
+                      style={{
+                        padding: "8px 14px",
+                        borderRadius: "8px",
+                        fontSize: "13px",
+                        background: pingResult.ok ? "rgba(16, 185, 129, 0.08)" : "rgba(239, 68, 68, 0.08)",
+                        border: `1px solid ${pingResult.ok ? "rgba(16, 185, 129, 0.25)" : "rgba(239, 68, 68, 0.25)"}`,
+                        color: pingResult.ok ? "var(--color-pass)" : "var(--color-fail)",
+                        display: "flex",
+                        justifyContent: "space-between",
+                        alignItems: "center"
+                      }}
+                    >
+                      <span>{pingResult.ok ? "✓ Reachable" : "✕ Unreachable"}</span>
+                      <strong className="font-mono" style={{ fontSize: "13px" }}>{pingResult.message}</strong>
+                    </div>
+                  )}
+                </form>
+
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px" }}>
+                  <div style={{ background: "rgba(255,255,255,0.02)", padding: "12px 14px", borderRadius: "8px", border: "1px solid var(--border-color)" }}>
+                    <div style={{ color: "var(--text-muted)", fontSize: "12px", fontWeight: "700", letterSpacing: "0.5px" }}>DATABASE</div>
+                    <div className="font-mono" style={{ color: "var(--color-pass)", fontWeight: "700", fontSize: "15px", marginTop: "4px" }}>{dbType}</div>
+                  </div>
+                  <div style={{ background: "rgba(255,255,255,0.02)", padding: "12px 14px", borderRadius: "8px", border: "1px solid var(--border-color)" }}>
+                    <div style={{ color: "var(--text-muted)", fontSize: "12px", fontWeight: "700", letterSpacing: "0.5px" }}>API ENDPOINT</div>
+                    <div className="font-mono" style={{ color: "var(--color-info)", fontWeight: "600", fontSize: "15px", marginTop: "4px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{apiBase}</div>
+                  </div>
+                </div>
+
+                {/* Recipe Upload Dropzones */}
+                <div style={{ borderTop: "1px solid var(--border-color)", paddingTop: "14px", display: "flex", flexDirection: "column", gap: "10px" }}>
+                  <div style={{ fontSize: "13px", fontWeight: "700", color: "var(--text-muted)", letterSpacing: "0.5px" }}>RECIPE CONFIG UPLOAD</div>
+                  <div style={{ display: "flex", gap: "10px" }}>
+                    <input
+                      id="product-config-input"
+                      type="file"
+                      accept=".txt,.json"
+                      style={{ display: "none" }}
+                      onChange={handleProductUpload}
+                    />
+                    <button
+                      type="button"
+                      className="select-file-btn"
+                      style={{ flex: 1, padding: "10px 14px", fontSize: "13px", fontWeight: "600", borderRadius: "8px", textAlign: "center" }}
+                      onClick={() => document.getElementById("product-config-input").click()}
+                      disabled={isUploadingProduct}
+                    >
+                      {isUploadingProduct ? "Uploading..." : "📁 Product_Settine.txt"}
+                    </button>
+
+                    <input
+                      id="machine-config-input"
+                      type="file"
+                      accept=".txt,.json"
+                      style={{ display: "none" }}
+                      onChange={handleMachineUpload}
+                    />
+                    <button
+                      type="button"
+                      className="select-file-btn"
+                      style={{ flex: 1, padding: "10px 14px", fontSize: "13px", fontWeight: "600", borderRadius: "8px", textAlign: "center" }}
+                      onClick={() => document.getElementById("machine-config-input").click()}
+                      disabled={isUploadingMachine}
+                    >
+                      {isUploadingMachine ? "Uploading..." : "📁 Machine_Setting.txt"}
+                    </button>
+                  </div>
+                </div>
+
               </div>
 
-              <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+              {/* CARD 2: AI INSPECTION THRESHOLDS */}
+              <div className="hmi-card" style={{ padding: "22px", display: "flex", flexDirection: "column", gap: "18px" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "1px solid var(--border-color)", paddingBottom: "12px" }}>
+                  <h3 style={{ margin: 0, fontSize: "17px", fontWeight: "700", letterSpacing: "0.5px" }}>AI INSPECTION THRESHOLDS</h3>
+                  <div style={{ display: "flex", gap: "8px" }}>
+                    <button
+                      type="button"
+                      className="select-file-btn"
+                      style={{ padding: "6px 14px", fontSize: "13px", fontWeight: "700", borderRadius: "8px", background: "rgba(16, 185, 129, 0.1)", borderColor: "rgba(16, 185, 129, 0.3)", color: "var(--color-pass)" }}
+                      onClick={() => handleApplyPreset("default_factory")}
+                    >
+                      Default
+                    </button>
+                    <button
+                      type="button"
+                      className="select-file-btn"
+                      style={{ padding: "6px 16px", fontSize: "13px", fontWeight: "700", borderRadius: "8px" }}
+                      onClick={handleSaveThresholds}
+                      disabled={isSavingThresholds}
+                    >
+                      {isSavingThresholds ? "Saving..." : "Save"}
+                    </button>
+                  </div>
+                </div>
+
+                {/* Min Edge Slider */}
+                <div className="form-group-lab" style={{ margin: 0 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: "13.5px", fontWeight: "700", color: "var(--text-muted)" }}>
+                    <span>FAIL DISTANCE (EDGE)</span>
+                    <span className="slider-val-badge font-mono" style={{ color: "var(--color-fail)", fontWeight: "800", fontSize: "16px" }}>{settingsFailDist.toFixed(1)} µm</span>
+                  </div>
+                  <div className="lab-slider-row" style={{ marginTop: "8px" }}>
+                    <input
+                      type="range"
+                      min="1.0"
+                      max="25.0"
+                      step="0.5"
+                      className="lab-slider"
+                      value={settingsFailDist}
+                      onChange={(e) => setSettingsFailDist(parseFloat(e.target.value))}
+                    />
+                  </div>
+                </div>
+
+                {/* Max Area Ratio Slider */}
+                <div className="form-group-lab" style={{ margin: 0 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: "13.5px", fontWeight: "700", color: "var(--text-muted)" }}>
+                    <span>MAX PROBE MARK AREA</span>
+                    <span className="slider-val-badge font-mono" style={{ color: "var(--color-warn)", fontWeight: "800", fontSize: "16px" }}>{settingsMaxArea.toFixed(0)}%</span>
+                  </div>
+                  <div className="lab-slider-row" style={{ marginTop: "8px" }}>
+                    <input
+                      type="range"
+                      min="5"
+                      max="60"
+                      step="1"
+                      className="lab-slider"
+                      value={settingsMaxArea}
+                      onChange={(e) => setSettingsMaxArea(parseFloat(e.target.value))}
+                    />
+                  </div>
+                </div>
+
+                {/* Compact Info summary */}
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px", borderTop: "1px solid var(--border-color)", paddingTop: "14px" }}>
+                  <div style={{ background: "rgba(255,255,255,0.02)", padding: "12px 14px", borderRadius: "8px", border: "1px solid var(--border-color)" }}>
+                    <div style={{ color: "var(--text-muted)", fontSize: "12px", fontWeight: "700", letterSpacing: "0.5px" }}>RESOLUTION</div>
+                    <div className="font-mono" style={{ fontWeight: "700", fontSize: "15px", marginTop: "4px" }}>
+                      {activeConfig?.computed?.targetWidth ?? 160} × {activeConfig?.computed?.targetHeight ?? 160} px
+                    </div>
+                  </div>
+                  <div style={{ background: "rgba(255,255,255,0.02)", padding: "12px 14px", borderRadius: "8px", border: "1px solid var(--border-color)" }}>
+                    <div style={{ color: "var(--text-muted)", fontSize: "12px", fontWeight: "700", letterSpacing: "0.5px" }}>ROI</div>
+                    <div className="font-mono" style={{ color: "var(--color-info)", fontWeight: "700", fontSize: "15px", marginTop: "4px" }}>
+                      {((activeConfig?.computed?.hRoi ?? 0.7) * 100).toFixed(0)}% H × {((activeConfig?.computed?.vRoi ?? 0.7) * 100).toFixed(0)}% V
+                    </div>
+                  </div>
+                </div>
+
                 {configUploadStatus && (
-                  <div style={{ fontSize: "13.5px", fontWeight: "600", padding: "6px 14px", borderRadius: "6px", background: "rgba(14, 165, 233, 0.1)", border: "1px solid rgba(14, 165, 233, 0.25)", color: "var(--color-info)" }}>
+                  <div style={{ fontSize: "13px", fontWeight: "600", padding: "8px 12px", borderRadius: "8px", background: "rgba(14, 165, 233, 0.1)", border: "1px solid rgba(14, 165, 233, 0.25)", color: "var(--color-info)", textAlign: "center" }}>
                     {configUploadStatus}
                   </div>
                 )}
-                <button
-                  className="select-file-btn"
-                  onClick={fetchActiveConfig}
-                  style={{ fontSize: "14px", padding: "8px 16px" }}
-                >
-                  ↻ Refresh
-                </button>
-                <button
-                  className="select-file-btn"
-                  onClick={() => handleApplyPreset("default_factory")}
-                  style={{ fontSize: "14px", padding: "8px 16px", background: "rgba(16, 185, 129, 0.1)", borderColor: "rgba(16, 185, 129, 0.3)", color: "var(--color-pass)" }}
-                >
-                  Factory Default Preset
-                </button>
-              </div>
-            </div>
-
-            {/* Top Row: 2 Upload Dropzones */}
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "20px" }}>
-              
-              {/* Dropzone 1: Product Recipe */}
-              <div className="hmi-card" style={{ padding: "20px", display: "flex", flexDirection: "column", gap: "14px", border: "1px solid var(--border-color)" }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-                    <h3 style={{ margin: 0, fontSize: "17px", fontWeight: "700" }}>PRODUCT RECIPE CONFIG</h3>
-                  </div>
-                  <span className="badge-result pass font-mono" style={{ fontSize: "12px" }}>Product_Settine.txt</span>
-                </div>
-
-                <div
-                  className="upload-drop-zone"
-                  style={{ height: "160px", background: "rgba(255, 255, 255, 0.01)", border: "2px dashed var(--border-color)", borderRadius: "8px", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", cursor: "pointer" }}
-                  onClick={() => document.getElementById("product-config-input").click()}
-                >
-                  <input
-                    id="product-config-input"
-                    type="file"
-                    accept=".txt,.json"
-                    style={{ display: "none" }}
-                    onChange={handleProductUpload}
-                  />
-                  <div style={{ fontSize: "16px", fontWeight: "700", color: "var(--text-main)" }}>
-                    {isUploadingProduct ? "Uploading..." : "Click or Drag Product_Settine.txt here"}
-                  </div>
-                  <div style={{ fontSize: "13px", color: "var(--text-muted)", marginTop: "4px" }}>
-                    Supports Product_Settine.txt or recipe JSON files
-                  </div>
-                </div>
-              </div>
-
-              {/* Dropzone 2: Machine Setting */}
-              <div className="hmi-card" style={{ padding: "20px", display: "flex", flexDirection: "column", gap: "14px", border: "1px solid var(--border-color)" }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-                    <h3 style={{ margin: 0, fontSize: "17px", fontWeight: "700" }}>MACHINE & STATION CONFIG</h3>
-                  </div>
-                  <span className="badge-result info font-mono" style={{ fontSize: "12px" }}>Machine_Setting.txt</span>
-                </div>
-
-                <div
-                  className="upload-drop-zone"
-                  style={{ height: "160px", background: "rgba(255, 255, 255, 0.01)", border: "2px dashed var(--border-color)", borderRadius: "8px", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", cursor: "pointer" }}
-                  onClick={() => document.getElementById("machine-config-input").click()}
-                >
-                  <input
-                    id="machine-config-input"
-                    type="file"
-                    accept=".txt,.json"
-                    style={{ display: "none" }}
-                    onChange={handleMachineUpload}
-                  />
-                  <div style={{ fontSize: "16px", fontWeight: "700", color: "var(--text-main)" }}>
-                    {isUploadingMachine ? "Uploading..." : "Click or Drag Machine_Setting.txt here"}
-                  </div>
-                  <div style={{ fontSize: "13px", color: "var(--text-muted)", marginTop: "4px" }}>
-                    Supports Machine_Setting.txt or station JSON files
-                  </div>
-                </div>
-              </div>
-
-            </div>
-
-            {/* Bottom Row: Active Parameters Visual Cards */}
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "20px" }}>
-
-              {/* Card 1: Active Product Criteria */}
-              <div className="hmi-card" style={{ padding: "20px", display: "flex", flexDirection: "column", gap: "16px" }}>
-                <div className="card-header" style={{ padding: 0, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                  <h3 style={{ margin: 0, fontSize: "16px", fontWeight: "700", color: "var(--text-main)" }}>
-                    ACTIVE AI INSPECTION CRITERIA
-                  </h3>
-                  <span className="badge-result pass">LIVE</span>
-                </div>
-
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
-                  <div style={{ background: "rgba(255, 255, 255, 0.02)", padding: "12px", borderRadius: "6px", border: "1px solid var(--border-color)" }}>
-                    <div style={{ fontSize: "13px", color: "var(--text-muted)" }}>FAIL DISTANCE (EDGE)</div>
-                    <div style={{ fontSize: "22px", fontWeight: "800", color: "var(--color-fail)", marginTop: "4px" }} className="font-mono">
-                      {activeConfig?.computed?.failDistanceUm ?? 8.0} µm
-                    </div>
-                    <div style={{ fontSize: "11px", color: "var(--text-muted)", marginTop: "2px" }}>
-                      edgeThreshold: {activeConfig?.product?.edgeThreshold ?? 8} / factor: {activeConfig?.product?.edgeConversionFactor ?? 1}
-                    </div>
-                  </div>
-
-                  <div style={{ background: "rgba(255, 255, 255, 0.02)", padding: "12px", borderRadius: "6px", border: "1px solid var(--border-color)" }}>
-                    <div style={{ fontSize: "13px", color: "var(--text-muted)" }}>MAX PROBEMARK AREA</div>
-                    <div style={{ fontSize: "22px", fontWeight: "800", color: "var(--color-warn)", marginTop: "4px" }} className="font-mono">
-                      {activeConfig?.computed?.maxAreaRatioPct ?? 25.0} %
-                    </div>
-                    <div style={{ fontSize: "11px", color: "var(--text-muted)", marginTop: "2px" }}>
-                      areaRatioThreshold: {activeConfig?.product?.areaRatioThreshold ?? 25}%
-                    </div>
-                  </div>
-
-                  <div style={{ background: "rgba(255, 255, 255, 0.02)", padding: "12px", borderRadius: "6px", border: "1px solid var(--border-color)" }}>
-                    <div style={{ fontSize: "13px", color: "var(--text-muted)" }}>TARGET RESOLUTION</div>
-                    <div style={{ fontSize: "20px", fontWeight: "800", color: "var(--text-main)", marginTop: "4px" }} className="font-mono">
-                      {activeConfig?.computed?.targetWidth ?? 160} × {activeConfig?.computed?.targetHeight ?? 160} px
-                    </div>
-                    <div style={{ fontSize: "11px", color: "var(--text-muted)", marginTop: "2px" }}>
-                      Shape: {activeConfig?.product?.padShape ?? "rectangle"}
-                    </div>
-                  </div>
-
-                  <div style={{ background: "rgba(255, 255, 255, 0.02)", padding: "12px", borderRadius: "6px", border: "1px solid var(--border-color)" }}>
-                    <div style={{ fontSize: "13px", color: "var(--text-muted)" }}>INSPECTION ROI</div>
-                    <div style={{ fontSize: "20px", fontWeight: "800", color: "var(--color-info)", marginTop: "4px" }} className="font-mono">
-                      {((activeConfig?.computed?.hRoi ?? 0.7) * 100).toFixed(0)}% H × {((activeConfig?.computed?.vRoi ?? 0.7) * 100).toFixed(0)}% V
-                    </div>
-                    <div style={{ fontSize: "11px", color: "var(--text-muted)", marginTop: "2px" }}>
-                      Noise Filter: Pad {activeConfig?.computed?.minAreaSizes?.[0] ?? 300}px, PM {activeConfig?.computed?.minAreaSizes?.[1] ?? 10}px
-                    </div>
-                  </div>
-                </div>
-
-                {/* Devices */}
-                <div style={{ borderTop: "1px solid var(--border-color)", paddingTop: "12px" }}>
-                  <div style={{ fontSize: "13px", color: "var(--text-muted)", marginBottom: "8px", fontWeight: "600" }}>
-                    SUPPORTED PRODUCT DEVICES ({activeConfig?.product?.devices?.length || 0}):
-                  </div>
-                  <div style={{ display: "flex", flexWrap: "wrap", gap: "6px" }}>
-                    {(activeConfig?.product?.devices || ["T073C3BTAA-PL211", "T073C3BTAA-PL2-PS16-PT-1"]).map((dev, i) => (
-                      <span key={i} className="font-mono" style={{ fontSize: "12px", padding: "4px 8px", background: "rgba(14, 165, 233, 0.08)", border: "1px solid rgba(14, 165, 233, 0.2)", borderRadius: "4px", color: "var(--color-info)" }}>
-                        {dev}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              </div>
-
-              {/* Card 2: Active Machine & Filename Parsing Rules */}
-              <div className="hmi-card" style={{ padding: "20px", display: "flex", flexDirection: "column", gap: "16px" }}>
-                <div className="card-header" style={{ padding: 0, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                  <h3 style={{ margin: 0, fontSize: "16px", fontWeight: "700", color: "var(--text-main)" }}>
-                    ACTIVE MACHINE & I/O SIMULATION
-                  </h3>
-                  <span className="badge-result info">STATION</span>
-                </div>
-
-                <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
-                  <div style={{ background: "rgba(255, 255, 255, 0.02)", padding: "12px", borderRadius: "6px", border: "1px solid var(--border-color)" }}>
-                    <div style={{ fontSize: "12.5px", color: "var(--text-muted)", fontWeight: "600" }}>PROBER SOURCE IMAGE FOLDER</div>
-                    <div className="font-mono" style={{ fontSize: "14px", color: "var(--color-info)", marginTop: "3px" }}>
-                      {activeConfig?.machine?.["lot.source.folder"] || "N:\\WP288\\PMI\\IMAGE"}
-                    </div>
-                    <div style={{ fontSize: "11px", color: "var(--text-muted)", marginTop: "2px" }}>
-                      Simulated on Linux: <span className="font-mono" style={{ color: "var(--text-main)" }}>{activeConfig?.computed?.simulatedSourceFolder || "/simulation/drive_N/WP288/PMI/IMAGE"}</span>
-                    </div>
-                  </div>
-
-                  <div style={{ background: "rgba(255, 255, 255, 0.02)", padding: "12px", borderRadius: "6px", border: "1px solid var(--border-color)" }}>
-                    <div style={{ fontSize: "12.5px", color: "var(--text-muted)", fontWeight: "600" }}>MACHINE RESULT JUDGE FOLDER & FORMAT</div>
-                    <div className="font-mono" style={{ fontSize: "14px", color: "var(--color-pass)", marginTop: "3px" }}>
-                      {activeConfig?.machine?.["machine.result.folder"] || "N:\\WP288\\PMI\\JUDGE"}
-                    </div>
-                    <div style={{ fontSize: "11px", color: "var(--text-muted)", marginTop: "2px" }}>
-                      Format: <span className="font-mono" style={{ color: "var(--text-main)" }}>{activeConfig?.machine?.["machine.result.fileFormat"] || "{output.result}_{output.code}_{output.machine}_{output.ts}.txt"}</span>
-                    </div>
-                  </div>
-
-                  {/* Filename Schema Indices */}
-                  <div style={{ background: "rgba(255, 255, 255, 0.02)", padding: "12px", borderRadius: "6px", border: "1px solid var(--border-color)" }}>
-                    <div style={{ fontSize: "12.5px", color: "var(--text-muted)", fontWeight: "600", marginBottom: "6px" }}>
-                      FILENAME INDEX SCHEMA MAPPING (UNDERSCORE DELIMITED)
-                    </div>
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6px", fontSize: "12px" }} className="font-mono">
-                      <div>• Index 0: Process Time ({activeConfig?.machine?.["input.index.processTime"] ?? 0})</div>
-                      <div>• Index 1: Wafer ID ({activeConfig?.machine?.["input.index.waferId"] ?? 1})</div>
-                      <div>• Index 2: Die Coord ({activeConfig?.machine?.["input.index.siteCoordinate"] ?? 2})</div>
-                      <div>• Index 3: Probecard ({activeConfig?.machine?.["input.index.probecardSite"] ?? 3})</div>
-                      <div>• Index 4: Pad No ({activeConfig?.machine?.["input.index.padNo"] ?? 4})</div>
-                      <div>• Index 6: Device Setup ({activeConfig?.machine?.["input.index.device"] ?? 6})</div>
-                    </div>
-                  </div>
-                </div>
 
               </div>
 
@@ -3339,166 +3137,392 @@ export default function App() {
         {/* ==============================================================================
             SPLIT VIEW INSPECTION & HUMAN GRADING MODAL
             ============================================================================== */}
-        {benchmarkSplitModalItem && (
-          <div className="split-view-modal-backdrop" onClick={() => setBenchmarkSplitModalItem(null)}>
-            <div className="split-view-modal-content" onClick={(e) => e.stopPropagation()}>
-              
-              {/* Modal Header */}
-              <div className="split-view-header">
-                <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-                  <h3 style={{ margin: 0, fontSize: "14px", fontWeight: "700" }}>
-                    SPLIT VIEW INSPECTION — {benchmarkSplitModalItem.image_name}
-                  </h3>
-                  <span className={`badge-result ${benchmarkSplitModalItem.ai_decision.toLowerCase()}`}>
-                    AI: {benchmarkSplitModalItem.ai_decision}
-                  </span>
-                  {benchmarkSplitModalItem.human_decision !== "UNREVIEWED" && (
-                    <span className={`badge-result ${benchmarkSplitModalItem.human_decision.toLowerCase()}`}>
-                      HUMAN: {benchmarkSplitModalItem.human_decision}
-                    </span>
-                  )}
+        {benchmarkSplitModalItem && (() => {
+          // Extract batch, wafer, xy, pad, site from image filename
+          const parseSplitMeta = (filename = "") => {
+            if (!filename) return { batch: "-", pad: "-", site: "-", xy: "-" };
+            const parts = filename.replace(/\.(bmp|png|jpg|jpeg)$/i, "").split("_");
+            let batch = "-";
+            let xy = "-";
+            let site = "-";
+            let pad = "-";
+
+            for (const part of parts) {
+              if (
+                /^C\d+W\d+/i.test(part) ||
+                (/^[A-Z0-9]{8,15}$/i.test(part) && !part.startsWith("X") && !part.startsWith("S") && !part.startsWith("P"))
+              ) {
+                batch = part;
+              }
+              if (/^X-?\d+Y-?\d+/i.test(part)) {
+                xy = part;
+              }
+              if (/^S\d+/i.test(part)) {
+                site = part.replace(/^S/i, "Site ");
+              }
+              if (/^P\d+/i.test(part)) {
+                pad = part.replace(/^P/i, "Pad ");
+              }
+            }
+            return { batch, xy, site, pad };
+          };
+
+          const splitMeta = parseSplitMeta(benchmarkSplitModalItem.image_name);
+          const activeModelName = (modelsList && modelsList.find((m) => m.is_active)?.name) || benchmarkModel || "unet_pytorch_new.pth";
+
+          return (
+            <div className="split-view-modal-backdrop" onClick={() => setBenchmarkSplitModalItem(null)}>
+              <div
+                className="split-view-modal-content hmi-card"
+                style={{
+                  width: "1340px",
+                  maxWidth: "96vw",
+                  height: "720px",
+                  maxHeight: "94vh",
+                  display: "flex",
+                  flexDirection: "column",
+                  overflow: "hidden"
+                }}
+                onClick={(e) => e.stopPropagation()}
+              >
+                {/* Modal Header */}
+                <div
+                  className="card-header split-view-header"
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    padding: "12px 18px",
+                    borderBottom: "1px solid var(--border-color)",
+                    flexShrink: 0
+                  }}
+                >
+                  <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                    <h3 style={{ margin: 0, fontSize: "14px", fontWeight: "700" }}>
+                      SPLIT VIEW INSPECTION — <span className="font-mono">{benchmarkSplitModalItem.image_name}</span>
+                    </h3>
+                  </div>
+
+                  <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                    {(filteredBenchmarkResults.length > 1 || benchmarkResults.length > 1) && (
+                      <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                        <button
+                          className="modal-nav-btn"
+                          onClick={handlePrevBenchmarkItem}
+                          title="Previous Image"
+                          style={{ padding: "4px 12px", fontSize: "12px" }}
+                        >
+                          ◀ PREV
+                        </button>
+                        <span className="modal-counter-badge" style={{ fontSize: "11px", minWidth: "60px", textAlign: "center" }}>
+                          {benchmarkSplitModalIndex + 1} / {filteredBenchmarkResults.length || benchmarkResults.length}
+                        </span>
+                        <button
+                          className="modal-nav-btn"
+                          onClick={handleNextBenchmarkItem}
+                          title="Next Image"
+                          style={{ padding: "4px 12px", fontSize: "12px" }}
+                        >
+                          NEXT ▶
+                        </button>
+                      </div>
+                    )}
+                    <button
+                      className="clear-history-btn"
+                      style={{ marginLeft: "8px", padding: "4px 12px", fontSize: "12px" }}
+                      onClick={() => setBenchmarkSplitModalItem(null)}
+                      title="Close modal"
+                    >
+                      Close
+                    </button>
+                  </div>
                 </div>
 
-                <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                  <button className="modal-nav-btn" onClick={handlePrevBenchmarkItem} title="Previous Image (Left Arrow)">
-                    ◀ PREV <span className="hotkey-pill">←</span>
-                  </button>
-                  <span className="modal-counter-badge">
-                    {benchmarkSplitModalIndex + 1} / {filteredBenchmarkResults.length || benchmarkResults.length}
-                  </span>
-                  <button className="modal-nav-btn" onClick={handleNextBenchmarkItem} title="Next Image (Right Arrow)">
-                    NEXT ▶ <span className="hotkey-pill">→</span>
-                  </button>
-                  <button className="close-btn" onClick={() => setBenchmarkSplitModalItem(null)}>✕</button>
-                </div>
-              </div>
-
-              {/* Modal Body: Split View Images + Diagnostic Specs */}
-              <div className="split-view-body">
-                
-                {/* 1. RAW ORIGINAL IMAGE */}
-                <div className="split-image-box">
-                  <span className="split-image-tag">1. RAW OPTICAL DIE</span>
-                  <img
-                    src={resolveImageUrl(benchmarkSplitModalItem.raw_image_url || benchmarkSplitModalItem.image_url)}
-                    alt="Raw Wafer"
-                  />
-                </div>
-
-                {/* 2. AI MASK OVERLAY & EDGE MEASUREMENT */}
-                <div className="split-image-box">
-                  <span className="split-image-tag">2. AI SEGMENTATION & DISTANCE RULE</span>
-                  <img
-                    src={resolveImageUrl(benchmarkSplitModalItem.annotated_image_url || benchmarkSplitModalItem.image_url)}
-                    alt="AI Annotated"
-                    onError={(e) => {
-                      e.target.src = resolveImageUrl(benchmarkSplitModalItem.raw_image_url || benchmarkSplitModalItem.image_url);
+                {/* Modal Body: Split View Images with Slider Arrows + Right Sidebar */}
+                <div
+                  className="card-body split-view-body"
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "1fr 340px",
+                    gap: "16px",
+                    padding: "16px",
+                    flex: 1,
+                    minHeight: 0,
+                    overflow: "hidden"
+                  }}
+                >
+                  {/* LEFT: 2 SPLIT IMAGES VIEWPORT WITH FLOATING ARROWS */}
+                  <div
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "1fr 1fr",
+                      gap: "12px",
+                      height: "100%",
+                      minHeight: 0,
+                      position: "relative"
                     }}
-                  />
-                </div>
+                  >
+                    {/* Floating Prev / Next Slider Arrows */}
+                    {(filteredBenchmarkResults.length > 1 || benchmarkResults.length > 1) && (
+                      <>
+                        <button
+                          className="modal-nav-arrow left"
+                          onClick={handlePrevBenchmarkItem}
+                          title="Previous Image"
+                        >
+                          ◀
+                        </button>
+                        <button
+                          className="modal-nav-arrow right"
+                          onClick={handleNextBenchmarkItem}
+                          title="Next Image"
+                        >
+                          ▶
+                        </button>
+                      </>
+                    )}
 
-                {/* 3. DIAGNOSTIC SPECIFICATIONS & HUMAN GRADING SIDEBAR */}
-                <div className="split-sidebar">
-                  <div>
-                    <h4 style={{ fontSize: "11px", color: "var(--text-muted)", textTransform: "uppercase", marginBottom: "8px" }}>
-                      RULE ENGINE DIAGNOSTICS
-                    </h4>
-
-                    {/* Edge Distance */}
-                    <div style={{ background: "rgba(255, 255, 255, 0.03)", padding: "8px", borderRadius: "6px", marginBottom: "6px" }}>
-                      <div style={{ display: "flex", justifyContent: "space-between", fontSize: "11px" }}>
-                        <span style={{ color: "var(--text-muted)" }}>Min Edge Distance:</span>
-                        <strong className="font-mono" style={{ color: "var(--color-info)" }}>
-                          {benchmarkSplitModalItem.min_edge_distance_um != null ? `${Number(benchmarkSplitModalItem.min_edge_distance_um).toFixed(1)} µm` : "-"}
-                        </strong>
-                      </div>
+                    {/* 1. RAW ORIGINAL IMAGE */}
+                    <div className="split-image-box">
+                      <span className="split-image-tag">1. RAW OPTICAL DIE</span>
+                      <img
+                        src={resolveImageUrl(benchmarkSplitModalItem.raw_image_url || benchmarkSplitModalItem.image_url)}
+                        alt="Raw Wafer"
+                      />
                     </div>
 
-                    {/* Mark Area Ratio */}
-                    <div style={{ background: "rgba(255, 255, 255, 0.03)", padding: "8px", borderRadius: "6px", marginBottom: "6px" }}>
-                      <div style={{ display: "flex", justifyContent: "space-between", fontSize: "11px" }}>
-                        <span style={{ color: "var(--text-muted)" }}>Mark Area Ratio:</span>
-                        <strong className="font-mono">
-                          {benchmarkSplitModalItem.mark_area_ratio_pct != null ? `${Number(benchmarkSplitModalItem.mark_area_ratio_pct).toFixed(1)}%` : "-"}
-                        </strong>
-                      </div>
-                    </div>
-
-                    {/* Classes Count */}
-                    <div style={{ background: "rgba(255, 255, 255, 0.03)", padding: "8px", borderRadius: "6px", marginBottom: "6px", fontSize: "11px" }}>
-                      <div style={{ display: "flex", justifyContent: "space-between" }}>
-                        <span style={{ color: "var(--text-muted)" }}>Pads Detected:</span>
-                        <span className="font-mono">{benchmarkSplitModalItem.pads_count || 0}</span>
-                      </div>
-                      <div style={{ display: "flex", justifyContent: "space-between", marginTop: "2px" }}>
-                        <span style={{ color: "var(--text-muted)" }}>Probe Marks:</span>
-                        <span className="font-mono">{benchmarkSplitModalItem.marks_count || 0}</span>
-                      </div>
-                      <div style={{ display: "flex", justifyContent: "space-between", marginTop: "2px" }}>
-                        <span style={{ color: "var(--text-muted)" }}>Grains / Defects:</span>
-                        <span className="font-mono">{benchmarkSplitModalItem.grains_count || 0}</span>
-                      </div>
-                    </div>
-
-                    {/* AI Latency */}
-                    <div style={{ background: "rgba(255, 255, 255, 0.03)", padding: "8px", borderRadius: "6px", marginBottom: "6px", fontSize: "11px" }}>
-                      <div style={{ display: "flex", justifyContent: "space-between" }}>
-                        <span style={{ color: "var(--text-muted)" }}>NPU Inference:</span>
-                        <strong className="font-mono" style={{ color: "var(--color-info)" }}>
-                          {benchmarkSplitModalItem.inference_time_ms ? `${benchmarkSplitModalItem.inference_time_ms.toFixed(1)} ms` : "-"}
-                        </strong>
-                      </div>
-                      <div style={{ display: "flex", justifyContent: "space-between", marginTop: "2px" }}>
-                        <span style={{ color: "var(--text-muted)" }}>AI Confidence:</span>
-                        <span className="font-mono">{benchmarkSplitModalItem.ai_confidence ? `${benchmarkSplitModalItem.ai_confidence.toFixed(1)}%` : "-"}</span>
-                      </div>
-                    </div>
-
-                    {/* Violation Reason */}
-                    <div style={{ background: "rgba(239, 68, 68, 0.05)", border: "1px solid rgba(239, 68, 68, 0.2)", padding: "8px", borderRadius: "6px", marginBottom: "12px" }}>
-                      <div style={{ fontSize: "10px", color: "var(--text-muted)", textTransform: "uppercase" }}>AI Diagnosis:</div>
-                      <div style={{ fontSize: "11px", color: benchmarkSplitModalItem.ai_decision === "FAIL" ? "#ef4444" : "#10b981", fontWeight: "600", marginTop: "2px" }}>
-                        {benchmarkSplitModalItem.ai_reason || "Within Normal Inspection Tolerance"}
-                      </div>
+                    {/* 2. AI SEGMENTATION & DISTANCE RULE */}
+                    <div className="split-image-box">
+                      <span className="split-image-tag">2. AI SEGMENTATION & DISTANCE RULE</span>
+                      <img
+                        src={resolveImageUrl(benchmarkSplitModalItem.annotated_image_url || benchmarkSplitModalItem.image_url)}
+                        alt="AI Annotated"
+                        onError={(e) => {
+                          e.target.src = resolveImageUrl(benchmarkSplitModalItem.raw_image_url || benchmarkSplitModalItem.image_url);
+                        }}
+                      />
                     </div>
                   </div>
 
-                  {/* HUMAN REVIEW ACTION BUTTONS & HOTKEYS */}
-                  <div>
-                    <h4 style={{ fontSize: "11px", color: "var(--text-muted)", textTransform: "uppercase", marginBottom: "8px" }}>
-                      HUMAN VERDICT (GROUND TRUTH)
-                    </h4>
-                    <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-                      <button
-                        className={`btn-human-pass ${benchmarkSplitModalItem.human_decision === "PASS" ? "active" : ""}`}
-                        style={{ padding: "10px", fontSize: "13px", display: "flex", justifyContent: "center", alignItems: "center" }}
-                        onClick={() => handleSaveHumanReview(benchmarkSplitModalItem, "PASS")}
-                      >
-                        <span>HUMAN PASS</span>
-                        <span className="hotkey-pill" style={{ background: "rgba(0,0,0,0.2)" }}>KEY: P</span>
-                      </button>
-                      <button
-                        className={`btn-human-fail ${benchmarkSplitModalItem.human_decision === "FAIL" ? "active" : ""}`}
-                        style={{ padding: "10px", fontSize: "13px", display: "flex", justifyContent: "center", alignItems: "center" }}
-                        onClick={() => handleSaveHumanReview(benchmarkSplitModalItem, "FAIL")}
-                      >
-                        <span>HUMAN FAIL</span>
-                        <span className="hotkey-pill" style={{ background: "rgba(0,0,0,0.2)" }}>KEY: F</span>
-                      </button>
-                    </div>
+                  {/* RIGHT: METADATA & HUMAN REVIEW PANEL */}
+                  <div
+                    className="split-sidebar"
+                    style={{
+                      display: "flex",
+                      flexDirection: "column",
+                      height: "100%",
+                      minHeight: 0
+                    }}
+                  >
+                    <div
+                      className="model-meta-box"
+                      style={{
+                        flex: 1,
+                        minHeight: 0,
+                        overflowY: "auto",
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: "10px",
+                        padding: "14px",
+                        background: "rgba(255, 255, 255, 0.02)",
+                        borderRadius: "8px",
+                        border: "1px solid var(--border-color)"
+                      }}
+                    >
+                      {/* Image & Location Info */}
+                      <div className="meta-row" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                        <span className="meta-lbl" style={{ flexShrink: 0 }}>Machine no:</span>
+                        <span className="meta-val font-mono" style={{ textAlign: "right" }}>
+                          {benchmarkSplitModalItem.machineNo || "PROBER01"}
+                        </span>
+                      </div>
+                      <div className="meta-row" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                        <span className="meta-lbl" style={{ flexShrink: 0 }}>Batch:</span>
+                        <span className="meta-val font-mono" style={{ textAlign: "right" }}>
+                          {splitMeta.batch}
+                        </span>
+                      </div>
+                      <div className="meta-row" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                        <span className="meta-lbl" style={{ flexShrink: 0 }}>Pad / Site:</span>
+                        <span className="meta-val font-mono" style={{ textAlign: "right" }}>
+                          {splitMeta.pad !== "-" || splitMeta.site !== "-" ? `${splitMeta.pad} / ${splitMeta.site}` : "-"}
+                        </span>
+                      </div>
+                      <div className="meta-row" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                        <span className="meta-lbl" style={{ flexShrink: 0 }}>Site coordinate:</span>
+                        <span className="meta-val font-mono" style={{ textAlign: "right" }}>
+                          {splitMeta.xy}
+                        </span>
+                      </div>
 
-                    <div style={{ fontSize: "9.5px", color: "var(--text-muted)", textAlign: "center", marginTop: "10px" }}>
-                      Hotkeys: <span className="hotkey-pill">P</span> Pass | <span className="hotkey-pill">F</span> Fail | <span className="hotkey-pill">←</span> Prev | <span className="hotkey-pill">→</span> Next | <span className="hotkey-pill">Esc</span> Close
+                      <div style={{ height: "1px", background: "var(--border-color)", margin: "1px 0" }} />
+
+                      {/* Inspection Results */}
+                      <div className="meta-row" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                        <span className="meta-lbl" style={{ flexShrink: 0 }}>Result:</span>
+                        <span className={`badge-result ${(benchmarkSplitModalItem.ai_decision || "PASS").toLowerCase()}`}>
+                          {benchmarkSplitModalItem.ai_decision || "PASS"}
+                        </span>
+                      </div>
+
+                      <div className="meta-row" style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "10px" }}>
+                        <span className="meta-lbl" style={{ flexShrink: 0 }}>Reason:</span>
+                        <span
+                          className="meta-val font-mono"
+                          style={{
+                            textAlign: "right",
+                            wordBreak: "break-word",
+                            color: benchmarkSplitModalItem.ai_reason && benchmarkSplitModalItem.ai_reason !== "-" && benchmarkSplitModalItem.ai_decision === "FAIL" ? "var(--color-fail)" : "inherit",
+                            fontWeight: "600"
+                          }}
+                        >
+                          {benchmarkSplitModalItem.ai_reason || "-"}
+                        </span>
+                      </div>
+
+                      <div className="meta-row" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                        <span className="meta-lbl" style={{ flexShrink: 0 }}>Min Edge Distance:</span>
+                        <span
+                          className="meta-val font-mono"
+                          style={{
+                            textAlign: "right",
+                            color:
+                              benchmarkSplitModalItem.min_edge_distance_um !== null &&
+                              benchmarkSplitModalItem.min_edge_distance_um !== undefined &&
+                              benchmarkSplitModalItem.min_edge_distance_um < (benchmarkRules?.fail_distance_um || 8.0)
+                                ? "var(--color-fail)"
+                                : "var(--color-info)",
+                            fontWeight: "600"
+                          }}
+                        >
+                          {benchmarkSplitModalItem.min_edge_distance_um !== null && benchmarkSplitModalItem.min_edge_distance_um !== undefined
+                            ? `${Number(benchmarkSplitModalItem.min_edge_distance_um).toFixed(1)} µm`
+                            : "-"}
+                        </span>
+                      </div>
+
+                      <div className="meta-row" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                        <span className="meta-lbl" style={{ flexShrink: 0 }}>Mark Area Ratio:</span>
+                        <span className="meta-val font-mono" style={{ textAlign: "right" }}>
+                          {benchmarkSplitModalItem.mark_area_ratio_pct !== null && benchmarkSplitModalItem.mark_area_ratio_pct !== undefined
+                            ? `${Number(benchmarkSplitModalItem.mark_area_ratio_pct).toFixed(1)}%`
+                            : "-"}
+                        </span>
+                      </div>
+
+                      <div className="meta-row" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                        <span className="meta-lbl" style={{ flexShrink: 0 }}>Model:</span>
+                        <span className="meta-val font-mono highlight-green" style={{ textAlign: "right" }}>
+                          {activeModelName}
+                        </span>
+                      </div>
+
+                      <div className="meta-row" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                        <span className="meta-lbl" style={{ flexShrink: 0 }}>Time Inference:</span>
+                        <span className="meta-val font-mono highlight-blue" style={{ textAlign: "right" }}>
+                          {benchmarkSplitModalItem.inference_time_ms !== null && benchmarkSplitModalItem.inference_time_ms !== undefined
+                            ? `${Number(benchmarkSplitModalItem.inference_time_ms).toFixed(1)} ms`
+                            : "-"}
+                        </span>
+                      </div>
+
+                      <div style={{ height: "1px", background: "var(--border-color)", margin: "1px 0" }} />
+
+                      {/* Human Decision Section */}
+                      <div className="meta-row" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                        <span className="meta-lbl" style={{ flexShrink: 0 }}>Human Decision:</span>
+                        {benchmarkSplitModalItem.human_decision && benchmarkSplitModalItem.human_decision !== "UNREVIEWED" ? (
+                          <span className={`badge-result ${benchmarkSplitModalItem.human_decision.toLowerCase()}`}>
+                            {benchmarkSplitModalItem.human_decision}
+                          </span>
+                        ) : (
+                          <span className="font-mono" style={{ fontSize: "11px", color: "var(--text-muted)" }}>
+                            UNREVIEWED
+                          </span>
+                        )}
+                      </div>
+
+                      {/* Human Decision Action Buttons (Clean PASS / FAIL without hotkey pills) */}
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px", marginTop: "2px" }}>
+                        <button
+                          type="button"
+                          className={`btn-human-pass ${benchmarkSplitModalItem.human_decision === "PASS" ? "active" : ""}`}
+                          style={{
+                            padding: "10px 8px",
+                            fontSize: "13px",
+                            display: "flex",
+                            justifyContent: "center",
+                            alignItems: "center",
+                            fontWeight: "700",
+                            borderRadius: "6px"
+                          }}
+                          onClick={() => handleSaveHumanReview(benchmarkSplitModalItem, "PASS", benchmarkModalComment)}
+                        >
+                          PASS
+                        </button>
+                        <button
+                          type="button"
+                          className={`btn-human-fail ${benchmarkSplitModalItem.human_decision === "FAIL" ? "active" : ""}`}
+                          style={{
+                            padding: "10px 8px",
+                            fontSize: "13px",
+                            display: "flex",
+                            justifyContent: "center",
+                            alignItems: "center",
+                            fontWeight: "700",
+                            borderRadius: "6px"
+                          }}
+                          onClick={() => handleSaveHumanReview(benchmarkSplitModalItem, "FAIL", benchmarkModalComment)}
+                        >
+                          FAIL
+                        </button>
+                      </div>
+
+                      {/* Comment Box */}
+                      <div style={{ display: "flex", flexDirection: "column", gap: "4px", marginTop: "4px" }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                          <span className="meta-lbl" style={{ fontSize: "11px" }}>Comment:</span>
+                          {benchmarkModalComment !== (benchmarkSplitModalItem.notes || "") && (
+                            <span style={{ fontSize: "10px", color: "var(--color-info)" }}>Auto-saving on blur...</span>
+                          )}
+                        </div>
+                        <textarea
+                          className="form-control"
+                          style={{
+                            width: "100%",
+                            height: "60px",
+                            resize: "none",
+                            fontSize: "12px",
+                            padding: "6px 8px",
+                            background: "rgba(0, 0, 0, 0.25)",
+                            border: "1px solid var(--border-color)",
+                            borderRadius: "6px",
+                            color: "var(--text-main)",
+                            fontFamily: "inherit"
+                          }}
+                          placeholder="Enter remarks / notes..."
+                          value={benchmarkModalComment}
+                          onChange={(e) => setBenchmarkModalComment(e.target.value)}
+                          onBlur={() => {
+                            if (benchmarkModalComment !== (benchmarkSplitModalItem.notes || "")) {
+                              handleSaveHumanReview(
+                                benchmarkSplitModalItem,
+                                benchmarkSplitModalItem.human_decision && benchmarkSplitModalItem.human_decision !== "UNREVIEWED"
+                                  ? benchmarkSplitModalItem.human_decision
+                                  : "UNREVIEWED",
+                                benchmarkModalComment
+                              );
+                            }
+                          }}
+                        />
+                      </div>
                     </div>
                   </div>
-
                 </div>
-
               </div>
-
             </div>
-          </div>
-        )}
+          );
+        })()}
 
         {/* ==============================================================================
             FORMAL MODEL VALIDATION & QUALIFICATION REPORT MODAL
@@ -3779,12 +3803,38 @@ export default function App() {
         {/* ==========================================
             HISTORICAL INSPECTION IMAGE PREVIEW MODAL
             ========================================== */}
+        {/* ==========================================
+            HISTORICAL INSPECTION IMAGE PREVIEW MODAL
+            ========================================== */}
         {selectedModalItem && (
           <div className="modal-overlay" onClick={closeModal}>
-            <div className="modal-content-box hmi-card" onClick={(e) => e.stopPropagation()}>
-              <div className="card-header modal-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-                  <h3 style={{ margin: 0 }}>HISTORICAL INSPECTION</h3>
+            <div
+              className="modal-content-box hmi-card"
+              style={{
+                width: "1080px",
+                maxWidth: "95vw",
+                height: "660px",
+                maxHeight: "92vh",
+                display: "flex",
+                flexDirection: "column",
+                overflow: "hidden"
+              }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              {/* MODAL HEADER */}
+              <div
+                className="card-header modal-header"
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  padding: "12px 18px",
+                  borderBottom: "1px solid var(--border-color)",
+                  flexShrink: 0
+                }}
+              >
+                <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                  <h3 style={{ margin: 0, fontSize: "15px", fontWeight: "700" }}>HISTORICAL INSPECTION</h3>
                   <span className={`badge-result ${selectedModalItem.decision.toLowerCase()}`}>
                     {selectedModalItem.decision}
                   </span>
@@ -3795,137 +3845,206 @@ export default function App() {
                   )}
                 </div>
 
-                <button className="clear-history-btn" onClick={closeModal}>Close</button>
-              </div>
-
-              <div className="card-body modal-body-grid" style={{ display: "grid", gridTemplateColumns: "1fr 320px", gap: "16px", padding: "16px" }}>
-                <div className="modal-image-container" style={{ position: "relative", background: "#0b0f19", borderRadius: "8px", overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center", minHeight: "380px" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
                   {getActiveModalList().length > 1 && (
-                    <>
+                    <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
                       <button
-                        className="modal-nav-arrow left"
+                        className="modal-nav-btn"
                         onClick={handlePrevModalItem}
-                        title="Previous Image (Left Arrow)"
+                        title="Previous Image (Keyboard: ← Left Arrow)"
+                        style={{ padding: "4px 10px", fontSize: "12px" }}
                       >
-                        ◀
+                        ◀ PREV
                       </button>
                       <button
-                        className="modal-nav-arrow right"
+                        className="modal-nav-btn"
                         onClick={handleNextModalItem}
-                        title="Next Image (Right Arrow)"
+                        title="Next Image (Keyboard: → Right Arrow)"
+                        style={{ padding: "4px 10px", fontSize: "12px" }}
                       >
-                        ▶
+                        NEXT ▶
                       </button>
-                    </>
-                  )}
-
-                  {selectedModalItem.comparisonImageUrl || selectedModalItem.imageUrl ? (
-                    <img
-                      key={selectedModalItem.id + "_" + (selectedModalItem.imageUrl || "") + "_" + modalViewMode}
-                      src={resolveImageUrl(
-                        modalViewMode === "raw"
-                          ? selectedModalItem.rawImageUrl || selectedModalItem.imageUrl
-                          : modalViewMode === "annotated"
-                            ? selectedModalItem.annotatedImageUrl || selectedModalItem.imageUrl
-                            : selectedModalItem.comparisonImageUrl || selectedModalItem.imageUrl
-                      )}
-                      alt={selectedModalItem.id}
-                      style={{ width: "100%", height: "auto", maxHeight: "450px", objectFit: "contain" }}
-                    />
-                  ) : (
-                    <div style={{ padding: "30px", textAlign: "center", color: "var(--text-muted)" }}>
-                      <div className="font-mono" style={{ fontSize: "14px", fontWeight: "bold", color: "var(--text-main)", marginBottom: "6px" }}>
-                        WAFER IMAGE: WF_IMG_{selectedModalItem.id.replace("#WF-", "")}_{selectedModalItem.decision}.PNG
-                      </div>
-                      <div style={{ fontSize: "11px", color: "var(--color-info)" }}>
-                        AI Mask Overlay & Inspection Visual Stored in Edge NPU Memory
-                      </div>
                     </div>
                   )}
+                  <button className="clear-history-btn" style={{ padding: "4px 12px", fontSize: "12px" }} onClick={closeModal}>Close</button>
+                </div>
+              </div>
 
-                  <div className="modal-view-mode-group">
-                    <button
-                      className={`modal-view-btn ${modalViewMode === "split" ? "active" : ""}`}
-                      onClick={() => setModalViewMode("split")}
-                    >
-                      Split Compare
-                    </button>
-                    <button
-                      className={`modal-view-btn ${modalViewMode === "annotated" ? "active" : ""}`}
-                      onClick={() => setModalViewMode("annotated")}
-                    >
-                      Annotated
-                    </button>
-                    <button
-                      className={`modal-view-btn ${modalViewMode === "raw" ? "active" : ""}`}
-                      onClick={() => setModalViewMode("raw")}
-                    >
-                      Raw Image
-                    </button>
+              {/* MODAL BODY */}
+              <div
+                className="card-body modal-body-grid"
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "1fr 340px",
+                  gap: "16px",
+                  padding: "16px",
+                  flex: 1,
+                  minHeight: 0,
+                  overflow: "hidden"
+                }}
+              >
+                {/* LEFT: IMAGE VIEWPORT WITH TOP MODE TOOLBAR */}
+                <div style={{ display: "flex", flexDirection: "column", gap: "10px", height: "100%", minHeight: 0 }}>
+                  {/* View Mode Toolbar (Above Image - No Overlap) */}
+                  <div
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      alignItems: "center",
+                      background: "rgba(255, 255, 255, 0.03)",
+                      padding: "6px 12px",
+                      borderRadius: "6px",
+                      border: "1px solid var(--border-color)",
+                      flexShrink: 0
+                    }}
+                  >
+                    <span style={{ fontSize: "11px", fontWeight: "700", color: "var(--text-muted)", textTransform: "uppercase" }}>
+                      VIEW MODE:
+                    </span>
+                    <div style={{ display: "flex", gap: "6px" }}>
+                      <button
+                        className={`modal-view-btn ${modalViewMode === "split" ? "active" : ""}`}
+                        style={{ padding: "5px 12px", fontSize: "12px" }}
+                        onClick={() => setModalViewMode("split")}
+                      >
+                        Split Compare
+                      </button>
+                      <button
+                        className={`modal-view-btn ${modalViewMode === "annotated" ? "active" : ""}`}
+                        style={{ padding: "5px 12px", fontSize: "12px" }}
+                        onClick={() => setModalViewMode("annotated")}
+                      >
+                        Annotated
+                      </button>
+                      <button
+                        className={`modal-view-btn ${modalViewMode === "raw" ? "active" : ""}`}
+                        style={{ padding: "5px 12px", fontSize: "12px" }}
+                        onClick={() => setModalViewMode("raw")}
+                      >
+                        Raw Image
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Fixed-Size Clean Image Container */}
+                  <div
+                    className="modal-image-container"
+                    style={{
+                      flex: 1,
+                      minHeight: 0,
+                      width: "100%",
+                      background: "#070913",
+                      borderRadius: "8px",
+                      border: "1px solid var(--border-color)",
+                      overflow: "hidden",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      position: "relative"
+                    }}
+                  >
+                    {getActiveModalList().length > 1 && (
+                      <>
+                        <button
+                          className="modal-nav-arrow left"
+                          onClick={handlePrevModalItem}
+                          title="Previous Image (Left Arrow)"
+                        >
+                          ◀
+                        </button>
+                        <button
+                          className="modal-nav-arrow right"
+                          onClick={handleNextModalItem}
+                          title="Next Image (Right Arrow)"
+                        >
+                          ▶
+                        </button>
+                      </>
+                    )}
+
+                    {selectedModalItem.comparisonImageUrl || selectedModalItem.imageUrl ? (
+                      <img
+                        key={selectedModalItem.id + "_" + (selectedModalItem.imageUrl || "") + "_" + modalViewMode}
+                        src={resolveImageUrl(
+                          modalViewMode === "raw"
+                            ? selectedModalItem.rawImageUrl || selectedModalItem.imageUrl
+                            : modalViewMode === "annotated"
+                              ? selectedModalItem.annotatedImageUrl || selectedModalItem.imageUrl
+                              : selectedModalItem.comparisonImageUrl || selectedModalItem.imageUrl
+                        )}
+                        alt={selectedModalItem.id}
+                        style={{ width: "100%", height: "100%", objectFit: "contain", display: "block" }}
+                      />
+                    ) : (
+                      <div style={{ padding: "30px", textAlign: "center", color: "var(--text-muted)" }}>
+                        <div className="font-mono" style={{ fontSize: "14px", fontWeight: "bold", color: "var(--text-main)", marginBottom: "6px" }}>
+                          WAFER IMAGE: WF_IMG_{selectedModalItem.id.replace("#WF-", "")}_{selectedModalItem.decision}.PNG
+                        </div>
+                        <div style={{ fontSize: "11px", color: "var(--color-info)" }}>
+                          AI Mask Overlay & Inspection Visual Stored in Edge NPU Memory
+                        </div>
+                      </div>
+                    )}
                   </div>
                 </div>
 
-                <div className="modal-meta-panel" style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
-                  <div className="model-meta-box" style={{ flex: 1, display: "flex", flexDirection: "column", gap: "8px" }}>
-                    <div className="meta-row">
-                      <span className="meta-lbl">Machine no:</span>
-                      <span className="meta-val font-mono">{selectedModalItem.machineNo || "PROBER01"}</span>
+                {/* RIGHT: METADATA PANEL (RIGHT-ALIGNED VALUES) */}
+                <div className="modal-meta-panel" style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
+                  <div className="model-meta-box" style={{ flex: 1, minHeight: 0, overflowY: "auto", display: "flex", flexDirection: "column", gap: "10px", padding: "14px", borderRadius: "8px", background: "rgba(255,255,255,0.02)", border: "1px solid var(--border-color)" }}>
+                    <div className="meta-row" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <span className="meta-lbl" style={{ flexShrink: 0 }}>Machine no:</span>
+                      <span className="meta-val font-mono" style={{ textAlign: "right" }}>{selectedModalItem.machineNo || "PROBER01"}</span>
                     </div>
-                    <div className="meta-row">
-                      <span className="meta-lbl">Wafer ID:</span>
-                      <span className="meta-val font-mono">{selectedModalItem.id}</span>
+                    <div className="meta-row" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <span className="meta-lbl" style={{ flexShrink: 0 }}>Wafer ID:</span>
+                      <span className="meta-val font-mono" style={{ textAlign: "right" }}>{selectedModalItem.id}</span>
                     </div>
-                    <div className="meta-row">
-                      <span className="meta-lbl">Time stamp:</span>
-                      <span className="meta-val font-mono">{selectedModalItem.timestamp}</span>
+                    <div className="meta-row" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <span className="meta-lbl" style={{ flexShrink: 0 }}>Time stamp:</span>
+                      <span className="meta-val font-mono" style={{ textAlign: "right" }}>{selectedModalItem.timestamp}</span>
                     </div>
-                    <div className="meta-row">
-                      <span className="meta-lbl">Result:</span>
+                    <div className="meta-row" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <span className="meta-lbl" style={{ flexShrink: 0 }}>Result:</span>
                       <span className={`badge-result ${selectedModalItem.decision.toLowerCase()}`}>{selectedModalItem.decision}</span>
                     </div>
-                    <div className="meta-row">
-                      <span className="meta-lbl">Failure reason:</span>
-                      <span className="meta-val font-mono" style={{ color: selectedModalItem.reason && selectedModalItem.reason !== "-" ? "var(--color-fail)" : "inherit" }}>
+                    <div className="meta-row" style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "10px" }}>
+                      <span className="meta-lbl" style={{ flexShrink: 0 }}>Failure reason:</span>
+                      <span
+                        className="meta-val font-mono"
+                        style={{
+                          textAlign: "right",
+                          wordBreak: "break-word",
+                          color: selectedModalItem.reason && selectedModalItem.reason !== "-" ? "var(--color-fail)" : "inherit"
+                        }}
+                      >
                         {selectedModalItem.reason || "-"}
                       </span>
                     </div>
-                    <div className="meta-row">
-                      <span className="meta-lbl">Batch:</span>
-                      <span className="meta-val font-mono">{selectedModalItem.batch || "-"}</span>
+                    <div className="meta-row" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <span className="meta-lbl" style={{ flexShrink: 0 }}>Batch:</span>
+                      <span className="meta-val font-mono" style={{ textAlign: "right" }}>{selectedModalItem.batch || "-"}</span>
                     </div>
-                    <div className="meta-row">
-                      <span className="meta-lbl">Datetime:</span>
-                      <span className="meta-val font-mono">{selectedModalItem.dateTime || selectedModalItem.timestamp}</span>
+                    <div className="meta-row" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <span className="meta-lbl" style={{ flexShrink: 0 }}>Datetime:</span>
+                      <span className="meta-val font-mono" style={{ textAlign: "right" }}>{selectedModalItem.dateTime || selectedModalItem.timestamp}</span>
                     </div>
-                    <div className="meta-row">
-                      <span className="meta-lbl">Site coordinate:</span>
-                      <span className="meta-val font-mono">{selectedModalItem.xyCoord || "-"}</span>
+                    <div className="meta-row" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <span className="meta-lbl" style={{ flexShrink: 0 }}>Site coordinate:</span>
+                      <span className="meta-val font-mono" style={{ textAlign: "right" }}>{selectedModalItem.xyCoord || "-"}</span>
                     </div>
-                    <div className="meta-row">
-                      <span className="meta-lbl">Probecard site:</span>
-                      <span className="meta-val font-mono">{selectedModalItem.site || "-"}</span>
+                    <div className="meta-row" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <span className="meta-lbl" style={{ flexShrink: 0 }}>Probecard site:</span>
+                      <span className="meta-val font-mono" style={{ textAlign: "right" }}>{selectedModalItem.site || "-"}</span>
                     </div>
-                    <div className="meta-row">
-                      <span className="meta-lbl">Pad no.:</span>
-                      <span className="meta-val font-mono">{selectedModalItem.pad || "-"}</span>
+                    <div className="meta-row" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <span className="meta-lbl" style={{ flexShrink: 0 }}>Pad no.:</span>
+                      <span className="meta-val font-mono" style={{ textAlign: "right" }}>{selectedModalItem.pad || "-"}</span>
                     </div>
-                    <div className="meta-row">
-                      <span className="meta-lbl">Temp:</span>
-                      <span className="meta-val font-mono">{selectedModalItem.temp || "-"}</span>
+                    <div className="meta-row" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <span className="meta-lbl" style={{ flexShrink: 0 }}>Temp:</span>
+                      <span className="meta-val font-mono" style={{ textAlign: "right" }}>{selectedModalItem.temp || "-"}</span>
                     </div>
                   </div>
-
-                  <button
-                    className="override-btn active"
-                    style={{ width: "100%", padding: "12px", fontSize: "14px", fontWeight: "bold", background: "var(--accent-blue)", color: "#fff", cursor: "pointer", borderRadius: "6px" }}
-                    onClick={() => {
-                      mapInspectionData(selectedModalItem);
-                      setActiveTab("inspect");
-                      closeModal();
-                    }}
-                  >
-                    LOAD INTO LIVE VIEW
-                  </button>
                 </div>
               </div>
             </div>

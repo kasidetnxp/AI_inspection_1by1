@@ -33,14 +33,12 @@ export default function ModelsPage() {
     setBenchmarkSplitModalIndex,
     handleSaveHumanReview,
     resolveImageUrl,
-    uploadClassCount,
-    setUploadClassCount,
     fileInputRef,
     isDragging,
     setIsDragging,
     handleUploadFile,
-    modelFilter,
-    setModelFilter,
+    isModelConverting,
+    convertingModelName,
     handleActivateModel,
     handleDeleteModel
   } = useInspection();
@@ -150,7 +148,7 @@ export default function ModelsPage() {
 
           {/* Right Active Model Info Pill */}
           <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-            <span style={{ fontSize: "11px", color: "var(--text-muted)", fontWeight: "600" }}>ACTIVE NPU MODEL:</span>
+            <span style={{ fontSize: "11px", color: "var(--text-muted)", fontWeight: "600" }}>MODEL:</span>
             <div
               style={{
                 display: "inline-flex",
@@ -164,7 +162,7 @@ export default function ModelsPage() {
             >
               <span className="status-dot green-glow" style={{ width: "7px", height: "7px" }}></span>
               <span className="font-mono" style={{ fontSize: "11px", fontWeight: "700", color: "var(--color-pass)" }}>
-                {benchmarkModel || "unet.tflite"} ({selectedClasses} Classes)
+                {benchmarkModel || "unet.tflite"}
               </span>
             </div>
           </div>
@@ -180,39 +178,14 @@ export default function ModelsPage() {
               <div className="hmi-card uploader-card">
                 <div className="card-header">
                   <h3>UPLOAD AI MODEL</h3>
-                  <span className="pill-id">IMPORT</span>
                 </div>
                 <div className="card-body">
-                  {/* Architecture Toggle */}
-                  <div style={{ marginBottom: "14px", display: "flex", flexDirection: "column", gap: "6px" }}>
-                    <label style={{ fontSize: "11px", fontWeight: "600", color: "var(--text-muted)", textTransform: "uppercase" }}>
-                      Model Class Architecture:
-                    </label>
-                    <div style={{ display: "flex", gap: "6px" }}>
-                      <button
-                        type="button"
-                        className={`compare-btn ${uploadClassCount === 2 ? "active" : ""}`}
-                        onClick={() => setUploadClassCount(2)}
-                        style={{ flex: 1, padding: "6px 8px", fontSize: "11px", borderRadius: "4px" }}
-                      >
-                        2 Classes (Pad + Mark)
-                      </button>
-                      <button
-                        type="button"
-                        className={`compare-btn ${uploadClassCount === 3 ? "active" : ""}`}
-                        onClick={() => setUploadClassCount(3)}
-                        style={{ flex: 1, padding: "6px 8px", fontSize: "11px", borderRadius: "4px" }}
-                      >
-                        3 Classes (Pad + Mark + Grain)
-                      </button>
-                    </div>
-                  </div>
-
                   <input
                     type="file"
                     ref={fileInputRef}
-                    accept=".tflite,.onnx,.pth"
+                    accept=".tflite,.pth,.pt"
                     style={{ display: "none" }}
+                    disabled={isModelConverting}
                     onChange={(e) => {
                       if (e.target.files && e.target.files.length > 0) {
                         handleUploadFile(e.target.files[0]);
@@ -222,42 +195,56 @@ export default function ModelsPage() {
                   <div
                     className={`upload-drop-zone ${isDragging ? "active-drag" : ""}`}
                     id="upload-zone"
-                    onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
+                    style={{ minHeight: "220px", pointerEvents: isModelConverting ? "none" : "auto", opacity: isModelConverting ? 0.85 : 1 }}
+                    onDragOver={(e) => { e.preventDefault(); if (!isModelConverting) setIsDragging(true); }}
                     onDragLeave={() => setIsDragging(false)}
                     onDrop={(e) => {
                       e.preventDefault();
                       setIsDragging(false);
+                      if (isModelConverting) return;
                       const files = e.dataTransfer.files;
                       if (files.length > 0) {
                         handleUploadFile(files[0]);
                       }
                     }}
-                    onClick={() => fileInputRef.current && fileInputRef.current.click()}
+                    onClick={() => { if (!isModelConverting && fileInputRef.current) fileInputRef.current.click(); }}
                   >
-                    <div style={{ marginBottom: "8px", color: "var(--color-info)" }}>
-                      <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-                        <polyline points="17 8 12 3 7 8"></polyline>
-                        <line x1="12" y1="3" x2="12" y2="15"></line>
-                      </svg>
-                    </div>
-                    <p className="upload-main-text" style={{ fontSize: "13px", fontWeight: "600", margin: "0 0 4px 0" }}>
-                      Drag & Drop Model File Here
-                    </p>
-                    <p className="upload-sub-text" style={{ fontSize: "11px", color: "var(--text-muted)", margin: "0 0 12px 0" }}>
-                      Supports .tflite (NPU Delegate) or .onnx ({uploadClassCount} Classes)
-                    </p>
-                    <button
-                      type="button"
-                      className="select-file-btn"
-                      style={{ padding: "6px 16px", fontSize: "12px", borderRadius: "4px" }}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        fileInputRef.current && fileInputRef.current.click();
-                      }}
-                    >
-                      Browse File
-                    </button>
+                    {isModelConverting ? (
+                      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "10px" }}>
+                        <div className="upload-spinner"></div>
+                        <p className="upload-main-text" style={{ fontSize: "16px", color: "var(--color-info)" }}>Converting Model...</p>
+                        <p className="upload-sub-text" style={{ fontSize: "12px", marginTop: "4px" }}>
+                          Exporting PyTorch ({convertingModelName}) & Quantizing to INT8 TFLite for NPU...
+                        </p>
+                      </div>
+                    ) : (
+                      <>
+                        <div style={{ marginBottom: "8px", color: "var(--color-info)" }}>
+                          <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                            <polyline points="17 8 12 3 7 8"></polyline>
+                            <line x1="12" y1="3" x2="12" y2="15"></line>
+                          </svg>
+                        </div>
+                        <p className="upload-main-text" style={{ fontSize: "13px", fontWeight: "600", margin: "0 0 4px 0" }}>
+                          Drag & Drop Model File Here
+                        </p>
+                        <p className="upload-sub-text" style={{ fontSize: "11px", color: "var(--text-muted)", margin: "0 0 12px 0" }}>
+                          Accepts .pth (Auto-converts to TFLite) or .tflite
+                        </p>
+                        <button
+                          type="button"
+                          className="select-file-btn"
+                          style={{ padding: "6px 16px", fontSize: "12px", borderRadius: "4px" }}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            fileInputRef.current && fileInputRef.current.click();
+                          }}
+                        >
+                          Browse File
+                        </button>
+                      </>
+                    )}
                   </div>
                 </div>
               </div>
@@ -266,36 +253,9 @@ export default function ModelsPage() {
             {/* Right: Models table list */}
             <div className="models-right-panel">
               <div className="hmi-card models-list-card">
-                <div className="card-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "10px" }}>
+                <div className="card-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                   <div>
                     <h3 style={{ margin: 0 }}>REGISTERED MODELS ON EDGE</h3>
-                    <span style={{ fontSize: "11px", color: "var(--text-muted)" }}>
-                      Current System Architecture: <strong style={{ color: "var(--color-info)" }}>{selectedClasses} Classes</strong>
-                    </span>
-                  </div>
-                  <div className="model-class-toggle" style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-                    <span style={{ fontSize: "11px", fontWeight: "600", color: "var(--text-muted)", textTransform: "uppercase" }}>Filter:</span>
-                    <button
-                      className={`compare-btn ${modelFilter === "ALL" ? "active" : ""}`}
-                      onClick={() => setModelFilter("ALL")}
-                      style={{ padding: "3px 8px", fontSize: "11px", borderRadius: "4px" }}
-                    >
-                      All ({modelsList.length})
-                    </button>
-                    <button
-                      className={`compare-btn ${modelFilter === "2" ? "active" : ""}`}
-                      onClick={() => setModelFilter("2")}
-                      style={{ padding: "3px 8px", fontSize: "11px", borderRadius: "4px" }}
-                    >
-                      2 Classes
-                    </button>
-                    <button
-                      className={`compare-btn ${modelFilter === "3" ? "active" : ""}`}
-                      onClick={() => setModelFilter("3")}
-                      style={{ padding: "3px 8px", fontSize: "11px", borderRadius: "4px" }}
-                    >
-                      3 Classes
-                    </button>
                   </div>
                 </div>
                 <div className="card-body table-container">
@@ -304,76 +264,53 @@ export default function ModelsPage() {
                       <tr>
                         <th>Model Name</th>
                         <th>Version</th>
-                        <th>Engine / Delegate</th>
                         <th>Size</th>
-                        <th>Architecture</th>
-                        <th>Target Acc</th>
                         <th>Status</th>
                         <th style={{ textAlign: "center" }}>Action</th>
                       </tr>
                     </thead>
                     <tbody id="models-table-body">
-                      {modelsList
-                        .filter(m => modelFilter === "ALL" || String(m.classes || 3) === modelFilter)
-                        .map((model, idx) => {
-                          const isActive = model.active || model.name === benchmarkModel;
-                          return (
-                            <tr key={idx} className={isActive ? "row-active-model" : ""}>
-                              <td className="font-mono" style={{ fontWeight: "600" }}>{model.name}</td>
-                              <td className="font-mono">{model.version || "v1.0.0"}</td>
-                              <td className="font-mono">
-                                <span style={{ color: model.name.endsWith(".tflite") ? "var(--color-pass)" : "inherit" }}>
-                                  {model.engine || (model.name.endsWith(".tflite") ? "TFLite / NPU" : "ONNX / CPU")}
-                                </span>
-                              </td>
-                              <td className="font-mono">{model.size || "-"}</td>
-                              <td>
-                                <span
-                                  className="badge-result"
-                                  style={{
-                                    fontSize: "10px",
-                                    background: model.classes === 2 ? "rgba(14, 165, 233, 0.15)" : "rgba(139, 92, 246, 0.15)",
-                                    color: model.classes === 2 ? "#0ea5e9" : "#a855f7",
-                                    border: `1px solid ${model.classes === 2 ? "rgba(14, 165, 233, 0.4)" : "rgba(139, 92, 246, 0.4)"}`
-                                  }}
-                                >
-                                  {model.classes || 3} Classes {model.classes === 2 ? "(Pad+Mark)" : "(Pad+Mark+Grain)"}
-                                </span>
-                              </td>
-                              <td className="font-mono">{model.accuracy || "97.5%"}</td>
-                              <td>
-                                <span className={`badge-result ${isActive ? "pass" : "warn"}`}>
-                                  {isActive ? `ACTIVE (${model.classes || 3}C)` : "STANDBY"}
-                                </span>
-                              </td>
-                              <td style={{ textAlign: "center" }}>
-                                {isActive ? (
-                                  <button className="action-btn-sm active-green" disabled>IN USE</button>
-                                ) : (
-                                  <div style={{ display: "flex", gap: "6px", justifyContent: "center" }}>
-                                    <button
-                                      className="action-btn-sm"
-                                      onClick={() => handleActivateModel(model)}
-                                      title={`Deploy to i.MX8 NPU and switch system architecture to ${model.classes || 3} Classes`}
-                                    >
-                                      ACTIVATE ({model.classes || 3}C)
-                                    </button>
-                                    <button className="action-btn-sm delete-red" onClick={() => handleDeleteModel(model)}>
-                                      DELETE
-                                    </button>
-                                  </div>
-                                )}
-                              </td>
-                            </tr>
-                          );
-                        })}
+                      {modelsList.map((model, idx) => {
+                        const isActive = model.active || model.name === benchmarkModel;
+                        return (
+                          <tr key={idx} className={isActive ? "row-active-model" : ""}>
+                            <td className="font-mono" style={{ fontWeight: "600" }}>{model.name}</td>
+                            <td className="font-mono">{model.version || "v1.0.0"}</td>
+                            <td className="font-mono">{model.size || "-"}</td>
+                            <td>
+                              <span className={`badge-result ${isActive ? "pass" : "warn"}`}>
+                                {isActive ? "ACTIVE RUNNING" : "INACTIVE"}
+                              </span>
+                            </td>
+                            <td style={{ textAlign: "center" }}>
+                              {isActive ? (
+                                <button className="action-btn-sm active-green" disabled>IN USE</button>
+                              ) : (
+                                <div style={{ display: "flex", gap: "6px", justifyContent: "center" }}>
+                                  <button
+                                    className="action-btn-sm"
+                                    onClick={() => handleActivateModel(model)}
+                                    title={`Deploy ${model.name} to i.MX8 NPU`}
+                                  >
+                                    ACTIVATE
+                                  </button>
+                                  <button className="action-btn-sm delete-red" onClick={() => handleDeleteModel(model)}>
+                                    DELETE
+                                  </button>
+                                </div>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
                     </tbody>
                   </table>
+                  </div>
                 </div>
               </div>
+
             </div>
-          </div>
-        )}
+          )}
 
         {/* -------------------------------------------------------------
             TAB 2: VALIDATION & HUMAN REVIEW LAB
@@ -383,98 +320,36 @@ export default function ModelsPage() {
             {/* 1. TOP QUALITY KPI DASHBOARD */}
             <div className="kpi-dashboard-grid" style={{ marginTop: "12px" }}>
               {/* Overkill Rate */}
-              <div className={`kpi-card ${benchmarkKpis.overkill_rate > 3 ? "alert-warning" : "highlight-info"}`}>
+              <div className={`kpi-card ${(benchmarkKpis.overkill_rate || 0) > 3 ? "alert-warning" : "highlight-info"}`}>
                 <div className="kpi-header">
-                  <span className="kpi-title">Overkill Rate (FP)</span>
-                  <span className="kpi-badge-hint badge-warn">AI Fail / Human Pass</span>
+                  <span className="kpi-title">OVERKILL RATE</span>
                 </div>
                 <div className="kpi-value-row">
-                  <span className="kpi-main-val" style={{ color: benchmarkKpis.overkill_rate > 3 ? "var(--color-warn)" : "inherit" }}>
-                    {benchmarkKpis.overkill_rate.toFixed(1)}%
+                  <span className="kpi-main-val" style={{ color: (benchmarkKpis.overkill_rate || 0) > 3 ? "var(--color-warn)" : "inherit" }}>
+                    {(benchmarkKpis.overkill_rate || 0).toFixed(1)}%
                   </span>
-                  <span className="kpi-sub-text">({benchmarkKpis.overkill_count} dies wasted)</span>
                 </div>
-                <div className="kpi-sub-text">Target: &lt; 3.0% (Minimizes false scrap)</div>
               </div>
 
-              {/* Underkill / Escape Rate */}
-              <div className={`kpi-card ${benchmarkKpis.underkill_rate > 0 ? "alert-danger" : "highlight-success"}`}>
+              {/* Underkill Rate */}
+              <div className={`kpi-card ${(benchmarkKpis.underkill_rate || 0) > 0 ? "alert-danger" : "highlight-success"}`}>
                 <div className="kpi-header">
-                  <span className="kpi-title">Underkill / Escape (FN)</span>
-                  <span className={`kpi-badge-hint ${benchmarkKpis.underkill_rate > 0 ? "badge-fail" : "badge-pass"}`}>
-                    {benchmarkKpis.underkill_rate > 0 ? "CRITICAL RISK" : "ZERO ESCAPE"}
-                  </span>
+                  <span className="kpi-title">UNDERKILL</span>
                 </div>
                 <div className="kpi-value-row">
-                  <span className="kpi-main-val" style={{ color: benchmarkKpis.underkill_rate > 0 ? "var(--color-fail)" : "var(--color-pass)" }}>
-                    {benchmarkKpis.underkill_rate.toFixed(1)}%
+                  <span className="kpi-main-val" style={{ color: (benchmarkKpis.underkill_rate || 0) > 0 ? "var(--color-fail)" : "var(--color-pass)" }}>
+                    {(benchmarkKpis.underkill_rate || 0).toFixed(1)}%
                   </span>
-                  <span className="kpi-sub-text">({benchmarkKpis.underkill_count} defect escapes)</span>
                 </div>
-                <div className="kpi-sub-text">Target: 0.0% (Zero defect leakage)</div>
-              </div>
-
-              {/* AI-Human Agreement */}
-              <div className="kpi-card highlight-info">
-                <div className="kpi-header">
-                  <span className="kpi-title">AI Agreement</span>
-                  <span className="kpi-badge-hint badge-info">Ground Truth Match</span>
-                </div>
-                <div className="kpi-value-row">
-                  <span className="kpi-main-val">{benchmarkKpis.agreement_rate.toFixed(1)}%</span>
-                  <span className="kpi-sub-text">({benchmarkKpis.agreement_count} / {benchmarkKpis.total_reviewed || 0})</span>
-                </div>
-                <div className="kpi-sub-text">Reviewed: {benchmarkKpis.total_reviewed} / {benchmarkKpis.total_tested} items</div>
               </div>
 
               {/* True Yield vs AI Yield */}
               <div className="kpi-card">
                 <div className="kpi-header">
-                  <span className="kpi-title">Yield Benchmark</span>
-                  <span className="kpi-badge-hint badge-neutral">Pass Ratio</span>
+                  <span className="kpi-title">YIELD BENCHMARK</span>
                 </div>
                 <div className="kpi-value-row">
-                  <span className="kpi-main-val">{benchmarkKpis.true_yield.toFixed(1)}%</span>
-                  <span className="kpi-sub-text">(AI: {benchmarkKpis.ai_yield.toFixed(1)}%)</span>
-                </div>
-                <div className="kpi-sub-text">Pass: {benchmarkKpis.human_pass_count} | Fail: {benchmarkKpis.human_fail_count}</div>
-              </div>
-
-              {/* NPU Latency */}
-              <div className="kpi-card">
-                <div className="kpi-header">
-                  <span className="kpi-title">NPU Latency</span>
-                  <span className="kpi-badge-hint badge-pass">i.MX8 NPU</span>
-                </div>
-                <div className="kpi-value-row">
-                  <span className="kpi-main-val">{benchmarkKpis.avg_inference_time_ms.toFixed(1)} <small style={{ fontSize: "13px" }}>ms</small></span>
-                </div>
-                <div className="kpi-sub-text">Rule Eval: {benchmarkKpis.avg_rule_time_ms.toFixed(2)} ms</div>
-              </div>
-
-              {/* Interactive Confusion Matrix */}
-              <div className="confusion-matrix-card">
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                  <span className="kpi-title" style={{ fontSize: "10px" }}>Confusion Matrix</span>
-                  <span style={{ fontSize: "9px", color: "var(--text-muted)" }}>H: Ground Truth</span>
-                </div>
-                <div className="matrix-grid">
-                  <div className="matrix-cell tp" title="True Positive: AI FAIL and Human FAIL (Confirmed Defect)">
-                    <span className="matrix-lbl">TP (Defect)</span>
-                    <span className="matrix-num" style={{ color: "#10b981" }}>{benchmarkKpis.confusion_matrix.tp}</span>
-                  </div>
-                  <div className="matrix-cell fp" title="False Positive / Overkill: AI FAIL but Human PASS (Wasted Good Die)">
-                    <span className="matrix-lbl">FP (Overkill)</span>
-                    <span className="matrix-num" style={{ color: "#f59e0b" }}>{benchmarkKpis.confusion_matrix.fp}</span>
-                  </div>
-                  <div className="matrix-cell fn" title="False Negative / Escape: AI PASS but Human FAIL (Defect Escaped)">
-                    <span className="matrix-lbl">FN (Escape)</span>
-                    <span className="matrix-num" style={{ color: "#ef4444" }}>{benchmarkKpis.confusion_matrix.fn}</span>
-                  </div>
-                  <div className="matrix-cell tn" title="True Negative: AI PASS and Human PASS (Confirmed Good Die)">
-                    <span className="matrix-lbl">TN (Good)</span>
-                    <span className="matrix-num" style={{ color: "#0ea5e9" }}>{benchmarkKpis.confusion_matrix.tn}</span>
-                  </div>
+                  <span className="kpi-main-val">{(benchmarkKpis.true_yield || 0).toFixed(1)}%</span>
                 </div>
               </div>
             </div>
@@ -485,32 +360,32 @@ export default function ModelsPage() {
               <div className="validation-setup-panel">
                 <div className="hmi-card">
                   <div className="card-header">
-                    <h3>BENCHMARK ENGINE CONFIG</h3>
-                    <span className="pill-id">CONFIG</span>
+                    <h3>TEST SETUP</h3>
                   </div>
-                  <div className="card-body" style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+                  <div className="card-body" style={{ display: "flex", flexDirection: "column", gap: "14px" }}>
                     {/* Model Selector */}
                     <div className="form-group-lab">
-                      <label>Target AI Model</label>
+                      <label style={{ fontSize: "14px", fontWeight: "700" }}>Target AI Model</label>
                       <select
                         className="lab-select"
                         value={benchmarkModel}
                         onChange={(e) => setBenchmarkModel(e.target.value)}
+                        style={{ fontSize: "15px", padding: "10px 12px" }}
                       >
                         {modelsList.map((m, idx) => (
                           <option key={idx} value={m.name}>
-                            {m.name} ({m.classes || 3} Classes - {m.engine || "TFLite"})
+                            {m.name}
                           </option>
                         ))}
                         {modelsList.length === 0 && (
-                          <option value="unet.tflite">unet.tflite (3 Classes - TFLite NPU)</option>
+                          <option value="unet.tflite">unet.tflite</option>
                         )}
                       </select>
                     </div>
 
                     {/* Test Dataset (ZIP Upload) */}
                     <div className="form-group-lab">
-                      <label>Upload Test Dataset (.zip)</label>
+                      <label style={{ fontSize: "14px", fontWeight: "700" }}>Upload Test Dataset (.zip)</label>
                       <input
                         type="file"
                         ref={benchmarkFileInputRef}
@@ -537,18 +412,25 @@ export default function ModelsPage() {
                           }}
                           onClick={() => benchmarkFileInputRef.current && benchmarkFileInputRef.current.click()}
                         >
-                          <p className="upload-main-text" style={{ fontSize: "12px", margin: 0, fontWeight: "600" }}>
+                          <div style={{ marginBottom: "10px", color: "var(--color-info)" }}>
+                            <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                              <polyline points="17 8 12 3 7 8"></polyline>
+                              <line x1="12" y1="3" x2="12" y2="15"></line>
+                            </svg>
+                          </div>
+                          <p className="upload-main-text" style={{ fontSize: "16px", margin: "0 0 6px 0", fontWeight: "700" }}>
                             Drop .ZIP file or click to browse
                           </p>
-                          <p className="upload-sub-text" style={{ fontSize: "10px", margin: "4px 0 0 0" }}>
+                          <p className="upload-sub-text" style={{ fontSize: "14px", margin: 0, color: "var(--text-muted)" }}>
                             Raw wafer images archive (.zip)
                           </p>
                         </div>
                       ) : (
-                        <div className="selected-zip-box">
+                        <div className="selected-zip-box" style={{ padding: "14px 16px" }}>
                           <div className="zip-file-info">
-                            <span className="zip-file-name" title={benchmarkZipFile.name}>{benchmarkZipFile.name}</span>
-                            <span className="zip-file-meta">
+                            <span className="zip-file-name" style={{ fontSize: "15px" }} title={benchmarkZipFile.name}>{benchmarkZipFile.name}</span>
+                            <span className="zip-file-meta" style={{ fontSize: "13px" }}>
                               {(benchmarkZipFile.size / (1024 * 1024)).toFixed(2)} MB • Ready to benchmark
                             </span>
                           </div>
@@ -567,70 +449,16 @@ export default function ModelsPage() {
                       )}
                     </div>
 
-                    {/* Rule Limit Sliders */}
-                    <div className="form-group-lab">
-                      <label>
-                        <span>Min Edge Distance</span>
-                        <span className="slider-val-badge">{benchmarkRules.fail_distance_um.toFixed(1)} µm</span>
-                      </label>
-                      <div className="lab-slider-row">
-                        <input
-                          type="range"
-                          min="1.0"
-                          max="25.0"
-                          step="0.5"
-                          className="lab-slider"
-                          value={benchmarkRules.fail_distance_um}
-                          onChange={(e) => setBenchmarkRules(prev => ({ ...prev, fail_distance_um: parseFloat(e.target.value) }))}
-                        />
-                      </div>
-                      <span style={{ fontSize: "10px", color: "var(--text-muted)" }}>Mark &lt; {benchmarkRules.fail_distance_um} µm from pad border triggers FAIL</span>
-                    </div>
-
-                    <div className="form-group-lab">
-                      <label>
-                        <span>Max Area Ratio</span>
-                        <span className="slider-val-badge">{benchmarkRules.max_area_ratio_pct.toFixed(0)}%</span>
-                      </label>
-                      <div className="lab-slider-row">
-                        <input
-                          type="range"
-                          min="5"
-                          max="60"
-                          step="1"
-                          className="lab-slider"
-                          value={benchmarkRules.max_area_ratio_pct}
-                          onChange={(e) => setBenchmarkRules(prev => ({ ...prev, max_area_ratio_pct: parseFloat(e.target.value) }))}
-                        />
-                      </div>
-                    </div>
-
-                    <div className="form-group-lab">
-                      <label>Missing Probe Mark</label>
-                      <select
-                        className="lab-select"
-                        value={benchmarkRules.missing_mark_action}
-                        onChange={(e) => setBenchmarkRules(prev => ({ ...prev, missing_mark_action: e.target.value }))}
-                      >
-                        <option value="fail">Strict: Trigger FAIL (Requires Probe Mark)</option>
-                        <option value="pass">Tolerant: Allow PASS (Untouched Pad)</option>
-                      </select>
-                    </div>
-
                     {/* Priority Queue Status Monitor */}
-                    <div className="priority-queue-card">
-                      <div className="priority-header">
-                        <span>TASK PRIORITY QUEUE</span>
-                        <span style={{ fontSize: "10px", color: "var(--text-muted)" }}>
-                          Active: <strong style={{ color: priority_dispatcher_status_color(benchmarkProgress.active_priority) }}>{benchmarkProgress.active_priority}</strong>
+                    <div className="priority-queue-card" style={{ padding: "14px 16px" }}>
+                      <div className="priority-header" style={{ fontSize: "14px" }}>
+                        <span>TASK STATUS</span>
+                        <span style={{ fontSize: "13px", fontWeight: "700", color: benchmarkProgress.status === "RUNNING" ? "#38bdf8" : "var(--text-muted)" }}>
+                          {isBenchmarkStarting ? "UPLOADING..." : benchmarkProgress.status}
                         </span>
                       </div>
-                      <div style={{ display: "flex", justifyContent: "space-between", fontSize: "10px", marginTop: "2px" }}>
-                        <span className="priority-badge-p0">P0 (Prober): {benchmarkProgress.p0_pending} in queue</span>
-                        <span className="priority-badge-p1">P1 (Validation): {benchmarkProgress.p1_pending} pending</span>
-                      </div>
                       
-                      <div className="priority-progress-bar" style={{ marginTop: "4px" }}>
+                      <div className="priority-progress-bar" style={{ marginTop: "8px", height: "8px" }}>
                         <div
                           className="priority-progress-fill"
                           style={{
@@ -638,8 +466,8 @@ export default function ModelsPage() {
                           }}
                         ></div>
                       </div>
-                      <div style={{ display: "flex", justifyContent: "space-between", fontSize: "9.5px", color: "var(--text-muted)" }}>
-                        <span>Progress: {benchmarkProgress.p1_processed} / {benchmarkProgress.p1_total} Images ({benchmarkProgress.p1_total > 0 ? Math.round((benchmarkProgress.p1_processed / benchmarkProgress.p1_total) * 100) : 0}%)</span>
+                      <div style={{ display: "flex", justifyContent: "space-between", fontSize: "13px", color: "var(--text-muted)", marginTop: "6px" }}>
+                        <span>Progress: {benchmarkProgress.p1_processed || 0} / {benchmarkProgress.p1_total || 0} Images ({benchmarkProgress.p1_total > 0 ? Math.round((benchmarkProgress.p1_processed / benchmarkProgress.p1_total) * 100) : 0}%)</span>
                         <span style={{ color: benchmarkProgress.status === "RUNNING" ? "#38bdf8" : "inherit" }}>
                           {benchmarkProgress.status}
                         </span>
@@ -647,11 +475,11 @@ export default function ModelsPage() {
                     </div>
 
                     {/* Action Buttons */}
-                    <div style={{ display: "flex", gap: "8px", marginTop: "6px" }}>
+                    <div style={{ display: "flex", gap: "10px", marginTop: "8px" }}>
                       <button
                         type="button"
                         className="btn-start-benchmark"
-                        style={{ flex: 1 }}
+                        style={{ flex: 1, padding: "12px 16px", fontSize: "15px" }}
                         disabled={isBenchmarkStarting || benchmarkProgress.status === "RUNNING"}
                         onClick={handleStartBenchmark}
                       >
@@ -661,6 +489,7 @@ export default function ModelsPage() {
                         <button
                           type="button"
                           className="btn-stop-benchmark"
+                          style={{ padding: "12px 16px", fontSize: "15px" }}
                           onClick={handleStopBenchmark}
                         >
                           STOP
@@ -677,69 +506,66 @@ export default function ModelsPage() {
                   <div className="card-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "8px" }}>
                     <div>
                       <h3>HUMAN REVIEW STATION</h3>
-                      <span style={{ fontSize: "10px", color: "var(--text-muted)" }}>
+                      <span style={{ fontSize: "14px", color: "var(--text-muted)" }}>
                         Compare AI Decision vs QA Ground Truth ({benchmarkResults.length} Items)
                       </span>
                     </div>
-                    <div style={{ display: "flex", gap: "6px" }}>
-                      <button className="review-action-btn" onClick={handleExportBenchmarkCSV} title="Export CSV summary report">
+                    <div style={{ display: "flex", gap: "8px" }}>
+                      <button className="review-action-btn" style={{ fontSize: "14px", padding: "7px 16px" }} onClick={handleExportBenchmarkCSV} title="Export CSV summary report">
                         EXPORT CSV
                       </button>
-                      <button className="review-action-btn" onClick={handleViewReport} title="Open analytical validation report card">
+                      <button className="review-action-btn" style={{ fontSize: "14px", padding: "7px 16px" }} onClick={handleViewReport} title="Open analytical validation report card">
                         VIEW REPORT
                       </button>
                     </div>
                   </div>
 
-                  <div className="card-body" style={{ display: "flex", flexDirection: "column", gap: "10px", flex: 1, overflow: "hidden" }}>
+                  <div className="card-body" style={{ display: "flex", flexDirection: "column", gap: "12px", flex: 1, overflow: "hidden" }}>
                     {/* Review Toolbar & Filter Tabs */}
                     <div className="review-toolbar">
                       <div className="review-filter-group">
                         <button
                           className={`review-filter-btn ${benchmarkFilter === "ALL" ? "active" : ""}`}
+                          style={{ fontSize: "14px", padding: "7px 14px" }}
                           onClick={() => { setBenchmarkFilter("ALL"); fetchBenchmarkResults(benchmarkProgress.active_session_id, "ALL"); }}
                         >
                           All ({benchmarkResults.length})
                         </button>
                         <button
                           className={`review-filter-btn warn ${benchmarkFilter === "DISAGREEMENT" ? "active" : ""}`}
+                          style={{ fontSize: "14px", padding: "7px 14px" }}
                           onClick={() => { setBenchmarkFilter("DISAGREEMENT"); fetchBenchmarkResults(benchmarkProgress.active_session_id, "DISAGREEMENT"); }}
                         >
-                          Disagreements ({benchmarkKpis.overkill_count + benchmarkKpis.underkill_count})
+                          Disagreements ({(benchmarkKpis.overkill_count || 0) + (benchmarkKpis.underkill_count || 0)})
                         </button>
                         <button
                           className={`review-filter-btn ${benchmarkFilter === "UNREVIEWED" ? "active" : ""}`}
+                          style={{ fontSize: "14px", padding: "7px 14px" }}
                           onClick={() => { setBenchmarkFilter("UNREVIEWED"); fetchBenchmarkResults(benchmarkProgress.active_session_id, "UNREVIEWED"); }}
                         >
-                          Pending Review ({benchmarkKpis.unreviewed_count})
+                          Pending Review ({benchmarkKpis.unreviewed_count || 0})
                         </button>
                         <button
                           className={`review-filter-btn ${benchmarkFilter === "HUMAN_PASS" ? "active" : ""}`}
+                          style={{ fontSize: "14px", padding: "7px 14px" }}
                           onClick={() => { setBenchmarkFilter("HUMAN_PASS"); fetchBenchmarkResults(benchmarkProgress.active_session_id, "HUMAN_PASS"); }}
                         >
-                          Human PASS ({benchmarkKpis.human_pass_count})
+                          Human PASS ({benchmarkKpis.human_pass_count || 0})
                         </button>
                         <button
                           className={`review-filter-btn ${benchmarkFilter === "HUMAN_FAIL" ? "active" : ""}`}
+                          style={{ fontSize: "14px", padding: "7px 14px" }}
                           onClick={() => { setBenchmarkFilter("HUMAN_FAIL"); fetchBenchmarkResults(benchmarkProgress.active_session_id, "HUMAN_FAIL"); }}
                         >
-                          Human FAIL ({benchmarkKpis.human_fail_count})
+                          Human FAIL ({benchmarkKpis.human_fail_count || 0})
                         </button>
                       </div>
 
-                      {/* Batch Action Helpers */}
-                      <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
+                      {/* Search & Batch Action Helpers */}
+                      <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
                         <button
                           className="review-action-btn"
-                          style={{ fontSize: "10.5px" }}
-                          onClick={() => handleBatchReview("CONFIRM_ALL_AI")}
-                          title="Auto-fill human decision to match AI prediction for all unreviewed items"
-                        >
-                          Auto-Confirm AI
-                        </button>
-                        <button
-                          className="review-action-btn"
-                          style={{ fontSize: "10.5px" }}
+                          style={{ fontSize: "13px", padding: "6px 12px" }}
                           onClick={() => handleBatchReview("MARK_UNREVIEWED_PASS")}
                           title="Set all unreviewed items to PASS"
                         >
@@ -747,7 +573,7 @@ export default function ModelsPage() {
                         </button>
                         <button
                           className="review-action-btn"
-                          style={{ fontSize: "10.5px" }}
+                          style={{ fontSize: "13px", padding: "6px 12px" }}
                           onClick={() => handleBatchReview("MARK_UNREVIEWED_FAIL")}
                           title="Set all unreviewed items to FAIL"
                         >
@@ -755,7 +581,7 @@ export default function ModelsPage() {
                         </button>
                         <button
                           className="review-action-btn"
-                          style={{ fontSize: "10.5px" }}
+                          style={{ fontSize: "13px", padding: "6px 12px" }}
                           onClick={() => handleBatchReview("RESET_ALL")}
                           title="Reset all reviews back to UNREVIEWED"
                         >
@@ -766,24 +592,24 @@ export default function ModelsPage() {
 
                     {/* Results Table */}
                     <div className="table-container" style={{ flex: 1, overflowY: "auto" }}>
-                      <table className="history-table">
+                      <table className="history-table benchmark-review-table">
                         <thead>
                           <tr>
-                            <th style={{ width: "60px" }}>Visual</th>
-                            <th>Sample / Wafer ID</th>
-                            <th>AI Decision</th>
-                            <th>Violations / Reason</th>
-                            <th>Min Edge</th>
-                            <th>Area %</th>
-                            <th>Latency</th>
-                            <th>Human Review</th>
-                            <th style={{ textAlign: "center", width: "150px" }}>Grade Action</th>
+                            <th style={{ width: "74px", fontSize: "14px" }}>Visual</th>
+                            <th style={{ minWidth: "160px", maxWidth: "220px", fontSize: "14px" }}>Sample / Wafer ID</th>
+                            <th style={{ width: "95px", fontSize: "14px", textAlign: "center" }}>AI Decision</th>
+                            <th style={{ minWidth: "180px", maxWidth: "230px", fontSize: "14px" }}>Violations / Reason</th>
+                            <th style={{ width: "85px", fontSize: "14px", whiteSpace: "nowrap" }}>Min Edge</th>
+                            <th style={{ width: "75px", fontSize: "14px", whiteSpace: "nowrap" }}>Area %</th>
+                            <th style={{ width: "85px", fontSize: "14px", whiteSpace: "nowrap" }}>Latency</th>
+                            <th style={{ width: "115px", fontSize: "14px", textAlign: "center" }}>Human Review</th>
+                            <th style={{ textAlign: "center", width: "145px", fontSize: "14px" }}>Grade Action</th>
                           </tr>
                         </thead>
                         <tbody>
                           {benchmarkResults.length === 0 ? (
                             <tr>
-                              <td colSpan={9} style={{ textAlign: "center", padding: "30px", color: "var(--text-muted)" }}>
+                              <td colSpan={9} style={{ textAlign: "center", padding: "40px", color: "var(--text-muted)", fontSize: "15px" }}>
                                 {benchmarkProgress.status === "RUNNING"
                                   ? "Processing benchmark images on i.MX8 NPU... Results will stream in real-time."
                                   : "No benchmark validation results found. Select a dataset and click 'START BENCHMARK ON i.MX8' to begin."}
@@ -812,13 +638,14 @@ export default function ModelsPage() {
                                     <td>
                                       <div
                                         style={{
-                                          width: "44px",
-                                          height: "44px",
-                                          borderRadius: "4px",
+                                          width: "56px",
+                                          height: "56px",
+                                          borderRadius: "6px",
                                           overflow: "hidden",
                                           cursor: "pointer",
-                                          border: "1px solid var(--border-color)",
-                                          background: "#000"
+                                          border: "1.5px solid var(--border-color)",
+                                          background: "#000",
+                                          boxShadow: "0 2px 6px rgba(0,0,0,0.15)"
                                         }}
                                         onClick={() => {
                                           setBenchmarkSplitModalItem(item);
@@ -838,62 +665,63 @@ export default function ModelsPage() {
                                     </td>
 
                                     {/* Sample Name */}
-                                    <td>
+                                    <td style={{ maxWidth: "220px" }}>
                                       <div
-                                        style={{ cursor: "pointer", fontWeight: "600" }}
+                                        style={{ cursor: "pointer", fontWeight: "600", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
                                         onClick={() => {
                                           setBenchmarkSplitModalItem(item);
                                           setBenchmarkSplitModalIndex(idx);
                                         }}
+                                        title={item.image_name}
                                       >
-                                        <span className="font-mono" style={{ fontSize: "11px" }}>{item.image_name}</span>
+                                        <span className="font-mono" style={{ fontSize: "13.5px" }}>{item.image_name}</span>
                                       </div>
                                     </td>
 
                                     {/* AI Decision */}
-                                    <td>
-                                      <span className={`badge-result ${item.ai_decision.toLowerCase()}`}>
+                                    <td style={{ textAlign: "center" }}>
+                                      <span className={`badge-result ${item.ai_decision.toLowerCase()}`} style={{ fontSize: "13px", padding: "4px 8px" }}>
                                         {item.ai_decision}
                                       </span>
                                     </td>
 
-                                    {/* Violation / Reason */}
-                                    <td style={{ fontSize: "11px", color: "var(--text-muted)", maxWidth: "200px" }}>
+                                    {/* Violation / Reason (with clean wrap & no column overlap) */}
+                                    <td style={{ fontSize: "13.5px", color: "var(--text-muted)", maxWidth: "230px", minWidth: "180px", wordBreak: "break-word", whiteSpace: "normal", lineHeight: "1.3" }}>
                                       <span title={item.ai_reason}>{item.ai_reason || "-"}</span>
                                     </td>
 
                                     {/* Min Edge Distance */}
-                                    <td className="font-mono" style={{ fontSize: "11px" }}>
-                                      <span style={{ color: item.min_edge_distance_um < benchmarkRules.fail_distance_um ? "#ef4444" : "inherit" }}>
-                                        {item.min_edge_distance_um ? `${item.min_edge_distance_um.toFixed(1)} µm` : "-"}
+                                    <td className="font-mono" style={{ fontSize: "13.5px", whiteSpace: "nowrap" }}>
+                                      <span>
+                                        {item.min_edge_distance_um != null ? `${Number(item.min_edge_distance_um).toFixed(1)} µm` : "-"}
                                       </span>
                                     </td>
 
                                     {/* Mark Area Ratio */}
-                                    <td className="font-mono" style={{ fontSize: "11px" }}>
-                                      {item.mark_area_ratio_pct ? `${item.mark_area_ratio_pct.toFixed(1)}%` : "-"}
+                                    <td className="font-mono" style={{ fontSize: "13.5px", whiteSpace: "nowrap" }}>
+                                      {item.mark_area_ratio_pct != null ? `${Number(item.mark_area_ratio_pct).toFixed(1)}%` : "-"}
                                     </td>
 
                                     {/* NPU Latency */}
-                                    <td className="font-mono" style={{ fontSize: "11px" }}>
-                                      {item.inference_time_ms ? `${item.inference_time_ms.toFixed(1)} ms` : "-"}
+                                    <td className="font-mono" style={{ fontSize: "13.5px", whiteSpace: "nowrap" }}>
+                                      {item.inference_time_ms ? `${Number(item.inference_time_ms).toFixed(1)} ms` : "-"}
                                     </td>
 
                                     {/* Human Decision Badge */}
-                                    <td>
+                                    <td style={{ textAlign: "center" }}>
                                       {item.human_decision === "PASS" && (
-                                        <span className="badge-result pass" style={{ fontSize: "10px" }}>PASS</span>
+                                        <span className="badge-result pass" style={{ fontSize: "13px", padding: "4px 8px" }}>PASS</span>
                                       )}
                                       {item.human_decision === "FAIL" && (
-                                        <span className="badge-result fail" style={{ fontSize: "10px" }}>FAIL</span>
+                                        <span className="badge-result fail" style={{ fontSize: "13px", padding: "4px 8px" }}>FAIL</span>
                                       )}
                                       {item.human_decision === "UNREVIEWED" && (
-                                        <span className="badge-result warn" style={{ fontSize: "10px", opacity: 0.7 }}>UNREVIEWED</span>
+                                        <span className="badge-result warn" style={{ fontSize: "13px", padding: "4px 8px", opacity: 0.7 }}>UNREVIEWED</span>
                                       )}
                                       {isDisagreement && (
-                                        <span style={{ marginLeft: "4px", fontSize: "9px", color: isUnderkill ? "#ef4444" : "#f59e0b", fontWeight: "bold" }}>
+                                        <div style={{ marginTop: "3px", fontSize: "11px", color: isUnderkill ? "#ef4444" : "#f59e0b", fontWeight: "bold" }}>
                                           {isUnderkill ? "[ESCAPE]" : "[OVERKILL]"}
-                                        </span>
+                                        </div>
                                       )}
                                     </td>
 
@@ -902,6 +730,7 @@ export default function ModelsPage() {
                                       <div style={{ display: "flex", gap: "4px", justifyContent: "center" }}>
                                         <button
                                           className={`btn-human-pass ${item.human_decision === "PASS" ? "active" : ""}`}
+                                          style={{ padding: "5px 9px", fontSize: "13px" }}
                                           onClick={() => handleSaveHumanReview(item, "PASS")}
                                           title="Mark this sample as Human PASS"
                                         >
@@ -909,6 +738,7 @@ export default function ModelsPage() {
                                         </button>
                                         <button
                                           className={`btn-human-fail ${item.human_decision === "FAIL" ? "active" : ""}`}
+                                          style={{ padding: "5px 9px", fontSize: "13px" }}
                                           onClick={() => handleSaveHumanReview(item, "FAIL")}
                                           title="Mark this sample as Human FAIL"
                                         >
@@ -916,7 +746,7 @@ export default function ModelsPage() {
                                         </button>
                                         <button
                                           className="action-btn-sm"
-                                          style={{ padding: "4px 8px", fontSize: "10px", fontWeight: "700" }}
+                                          style={{ padding: "5px 9px", fontSize: "13px", fontWeight: "700" }}
                                           onClick={() => {
                                             setBenchmarkSplitModalItem(item);
                                             setBenchmarkSplitModalIndex(idx);

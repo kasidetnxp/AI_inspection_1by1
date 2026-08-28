@@ -25,7 +25,7 @@ fi
 # Start PostgreSQL & CloudBeaver Database Containers (Docker Compose)
 if command -v docker > /dev/null 2>&1 && [ -f "docker-compose.yml" ]; then
     echo "Starting PostgreSQL Database Container via Docker Compose..."
-    docker compose up -d > /dev/null 2>&1 || sudo docker compose up -d > /dev/null 2>&1
+    docker compose up -d > /dev/null 2>&1 || true
     sleep 1
 else
     echo "Docker not available. System will fallback to local SQLite database."

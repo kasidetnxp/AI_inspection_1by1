@@ -198,7 +198,7 @@ export default function AnalyticsPage() {
           {/* Left side: KPIs + Donut + Defect Bar */}
           <div className="analytics-dashboard-col left-dashboard-col">
             <div className="analytics-kpi-subgrid">
-              <div className="analytics-stat-card">
+              <div className="analytics-stat-card span-full">
                 <span className="stat-lbl">Processed Wafers</span>
                 <span className="stat-val font-mono" id="an-total-inspected">
                   {history.length}
@@ -213,6 +213,9 @@ export default function AnalyticsPage() {
                   ).toFixed(2)}
                   %
                 </span>
+                <span className="stat-sub font-mono">
+                  ({history.filter((h) => h.decision === "PASS").length})
+                </span>
               </div>
               <div className="analytics-stat-card card-red">
                 <span className="stat-lbl">Defect Rate (Fail)</span>
@@ -223,15 +226,8 @@ export default function AnalyticsPage() {
                   ).toFixed(2)}
                   %
                 </span>
-              </div>
-              <div className="analytics-stat-card card-blue">
-                <span className="stat-lbl">Avg Confidence</span>
-                <span className="stat-val font-mono" id="an-avg-confidence">
-                  {(history.length > 0
-                    ? history.reduce((sum, h) => sum + (h.confidence || 0), 0) / history.length
-                    : 0
-                  ).toFixed(1)}
-                  %
+                <span className="stat-sub font-mono">
+                  ({history.filter((h) => h.decision !== "PASS").length})
                 </span>
               </div>
             </div>
@@ -255,18 +251,9 @@ export default function AnalyticsPage() {
             </div>
           </div>
 
-          {/* Right side: Line chart + Table */}
+          {/* Right side: Table */}
           <div className="analytics-dashboard-col right-dashboard-col">
-            <div className="hmi-card line-chart-card">
-              <div className="card-header">
-                <h3>LATENCY HISTORY (MS)</h3>
-              </div>
-              <div className="card-body chart-body" style={{ height: "180px", position: "relative" }}>
-                <Line data={lineChartData} options={lineChartOptions} />
-              </div>
-            </div>
-
-            <div className="hmi-card analytics-table-card">
+            <div className="hmi-card analytics-table-card" style={{ flex: 1, display: "flex", flexDirection: "column", height: "100%" }}>
               <div className="card-header">
                 <h3>DETAILED PRODUCTION REPORT</h3>
                 <span className="pill-id" id="report-row-count">
@@ -286,7 +273,6 @@ export default function AnalyticsPage() {
                       <th>Temp</th>
                       <th>Result</th>
                       <th>Failure Reason</th>
-                      <th>Latency</th>
                     </tr>
                   </thead>
                   <tbody id="analytics-table-body">
@@ -315,7 +301,6 @@ export default function AnalyticsPage() {
                         >
                           {rec.reason || "-"}
                         </td>
-                        <td className="font-mono">{rec.inferenceTime ?? 0} ms</td>
                       </tr>
                     ))}
                   </tbody>
