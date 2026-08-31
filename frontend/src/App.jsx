@@ -278,6 +278,7 @@ export default function App() {
   const [benchmarkSplitModalIndex, setBenchmarkSplitModalIndex] = useState(0);
   const [benchmarkModalComment, setBenchmarkModalComment] = useState("");
   const [benchmarkReportModalOpen, setBenchmarkReportModalOpen] = useState(false);
+  const [benchmarkReportData, setBenchmarkReportData] = useState(null);
   const [isBenchmarkStarting, setIsBenchmarkStarting] = useState(false);
 
   useEffect(() => {

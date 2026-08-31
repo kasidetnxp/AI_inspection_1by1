@@ -425,7 +425,7 @@ def parse_wafer_filename(filename: str, prober_default="PROBER01") -> dict:
         return {
             "machineNo": prober_default, "batch": "-", "waferNo": "-",
             "xyCoord": "-", "site": "-", "pad": "-", "dateTime": "-",
-            "productSetup": "-", "temp": "-"
+            "productSetup": "-", "temp": "-", "processCode": "-"
         }
     base = os.path.basename(filename)
     base = base.split("?")[0]
@@ -443,57 +443,59 @@ def parse_wafer_filename(filename: str, prober_default="PROBER01") -> dict:
         "pad": "-",
         "dateTime": "-",
         "productSetup": "-",
-        "temp": "-"
+        "temp": "-",
+        "processCode": "-"
     }
     
-    idx_time = ACTIVE_MACHINE_SETTING.get("input.index.processTime", 0)
-    idx_wafer = ACTIVE_MACHINE_SETTING.get("input.index.waferId", 1)
-    idx_coord = ACTIVE_MACHINE_SETTING.get("input.index.siteCoordinate", 2)
-    idx_site = ACTIVE_MACHINE_SETTING.get("input.index.probecardSite", 3)
-    idx_pad = ACTIVE_MACHINE_SETTING.get("input.index.padNo", 4)
-    idx_info = ACTIVE_MACHINE_SETTING.get("input.index.detailInfo", 5)
-    idx_dev = ACTIVE_MACHINE_SETTING.get("input.index.device", 6)
-    idx_temp = ACTIVE_MACHINE_SETTING.get("input.index.temperature", 7)
-    
-    if 0 <= idx_time < len(parts):
-        dt = parts[idx_time]
-        if len(dt) == 14 and dt.isdigit():
-            meta["dateTime"] = f"{dt[:4]}-{dt[4:6]}-{dt[6:8]} {dt[8:10]}:{dt[10:12]}:{dt[12:14]}"
-        else:
-            meta["dateTime"] = dt
-            
-    if 0 <= idx_wafer < len(parts):
-        bw = parts[idx_wafer]
-        if "-" in bw:
-            b_part, w_part = bw.split("-", 1)
-            meta["batch"] = b_part
-            meta["waferNo"] = bw
-        else:
-            m_bw = re.match(r'^([A-Z0-9]+?)(W[A-Z0-9]+)$', bw, re.IGNORECASE)
-            if m_bw:
-                meta["batch"] = m_bw.group(1)
-                meta["waferNo"] = bw
-            else:
-                meta["batch"] = bw
-                meta["waferNo"] = bw
-                
-    if 0 <= idx_coord < len(parts):
-        meta["xyCoord"] = parts[idx_coord]
-    if 0 <= idx_site < len(parts):
-        meta["site"] = parts[idx_site]
-    if 0 <= idx_pad < len(parts):
-        meta["pad"] = parts[idx_pad]
-    if 0 <= idx_info < len(parts):
-        meta["processCode"] = parts[idx_info]
-    if 0 <= idx_dev < len(parts):
-        meta["productSetup"] = parts[idx_dev]
-    if 0 <= idx_temp < len(parts):
-        raw_t = parts[idx_temp]
-        if raw_t.isdigit():
+    for i, part in enumerate(parts):
+        if not part:
+            continue
+        # Timestamp (14 digits YYYYMMDDHHMMSS or 8 digits YYYYMMDD at start)
+        if re.match(r'^\d{14}$', part):
+            meta["dateTime"] = f"{part[:4]}-{part[4:6]}-{part[6:8]} {part[8:10]}:{part[10:12]}:{part[12:14]}"
+            continue
+        if re.match(r'^\d{8}$', part) and i == 0:
+            meta["dateTime"] = f"{part[:4]}-{part[4:6]}-{part[6:8]}"
+            continue
+        # Coordinate (X...Y...)
+        if re.match(r'^X-?\d+Y-?\d+$', part, re.IGNORECASE):
+            meta["xyCoord"] = part
+            continue
+        # Site (S...)
+        if re.match(r'^S\d+$', part, re.IGNORECASE):
+            meta["site"] = f"Site {part[1:]}"
+            continue
+        # Pad (P...)
+        if re.match(r'^P\d+$', part, re.IGNORECASE):
+            meta["pad"] = f"Pad {part[1:]}"
+            continue
+        # Status / OK / NG / PASS / FAIL
+        if re.match(r'^(OK|NG|PASS|FAIL|REJECT)$', part, re.IGNORECASE):
+            meta["processCode"] = part
+            continue
+        # Temperature (2-3 digit number at the end)
+        if re.match(r'^\d{2,3}$', part) and i == len(parts) - 1:
+            raw_t = part
             meta["temp"] = f"{float(raw_t)/10.0:.1f}°C" if len(raw_t) >= 3 else f"{raw_t}°C"
-        else:
-            meta["temp"] = raw_t
-            
+            continue
+        # Wafer / Batch ID
+        if meta["batch"] == "-":
+            meta["waferNo"] = part
+            if "-" in part:
+                meta["batch"] = part.split("-", 1)[0]
+            else:
+                m_bw = re.match(r'^([A-Z0-9]+?)(W[A-Z0-9]+)$', part, re.IGNORECASE)
+                meta["batch"] = m_bw.group(1) if m_bw else part
+        elif meta["productSetup"] == "-":
+            meta["productSetup"] = part
+
+    # Fallback to index-based mapping if batch is still unassigned
+    idx_wafer = ACTIVE_MACHINE_SETTING.get("input.index.waferId", 1)
+    if meta["batch"] == "-" and 0 <= idx_wafer < len(parts):
+        bw = parts[idx_wafer]
+        meta["waferNo"] = bw
+        meta["batch"] = bw.split("-", 1)[0] if "-" in bw else bw
+
     return meta
 
 def map_reason_to_mode(reason: str) -> int:
@@ -1726,10 +1728,6 @@ async def websocket_endpoint(websocket: WebSocket):
     except WebSocketDisconnect:
         manager.disconnect(websocket)
 
-def load_history_from_db():
-    global db_type
-    prober_name = SYS_CONFIG.get("prober_name", "PROBER01")
-    records = []
 def load_history_from_db():
     prober_name = SYS_CONFIG.get("prober_name", "PROBER01")
     records = []
