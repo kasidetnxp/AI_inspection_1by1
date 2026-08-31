@@ -1635,18 +1635,19 @@ export default function App() {
   // REPORT DATA EXPORT (CSV SPREADSHEET)
   // ==========================================
   const exportToCSV = () => {
-    if (history.length === 0) {
-      alert("No data available to export.");
+    const exportList = filteredHistory.length > 0 ? filteredHistory : historyList;
+    if (exportList.length === 0) {
+      alert("No inspection records available to export.");
       return;
     }
     const csvRows = [
       ["Timestamp", "Machine no", "Batch/Wafer no", "Pad", "Site", "XY Coordinate", "Temp", "Result", "Failure Reason", "Latency (ms)"]
     ];
-    history.forEach(rec => {
+    exportList.forEach(rec => {
       const bw = formatBatchWafer(rec);
       csvRows.push([
-        `"${rec.timestamp || rec.timeShort || "-"}"`,
-        `"${rec.machineNo || "PROBER01"}"`,
+        `"${rec.dateTime || rec.timestamp || rec.timeShort || "-"}"`,
+        `"${rec.machineNo || "WP288"}"`,
         `"${bw}"`,
         `"${rec.pad || "-"}"`,
         `"${rec.site || "-"}"`,
@@ -1661,7 +1662,13 @@ export default function App() {
     const encodedUri = encodeURI(csvContent);
     const link = document.createElement("a");
     link.setAttribute("href", encodedUri);
-    link.setAttribute("download", `Wafer_Inspection_Report_${new Date().toISOString().slice(0, 10)}.csv`);
+
+    const machineStr = analyticsMachineFilter !== "ALL" ? analyticsMachineFilter : (uniqueMachines[0] || "WP288");
+    const batchStr = analyticsBatchFilter !== "ALL" ? analyticsBatchFilter : (uniqueBatches[0] || "ALL_BATCHES");
+    const dateStr = analyticsDateFilter !== "ALL" ? analyticsDateFilter : new Date().toISOString().slice(0, 10);
+    const downloadFilename = `${machineStr}_${batchStr}_${dateStr}_Report.csv`;
+
+    link.setAttribute("download", downloadFilename);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
