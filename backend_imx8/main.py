@@ -77,9 +77,9 @@ MODELS_DIR = _resolve_sim_path("models")
 # ==============================================================================
 def resolve_windows_drive_path(raw_path: str, sim_root: str = None) -> str:
     """
-    Translates Windows network drive paths (N:, M:) to Linux mount points (/mnt/n, /mnt/m)
+    Translates Windows network drive paths (N:, M:, T:) to Linux mount points (/mnt/N, /mnt/M, /mnt/T)
     or local simulation directories.
-    e.g. 'N:\\WP288\\PMI\\IMAGE' -> '/mnt/n/WP288/PMI/IMAGE' (if /mnt/n exists on i.MX8 Linux)
+    e.g. 'N:\\WP288\\PMI\\IMAGE' -> '/mnt/N/WP288/PMI/IMAGE' (if /mnt/N exists on i.MX8 Linux)
          or './simulation/drive_N/WP288/PMI/IMAGE' (in simulation mode).
     """
     if not raw_path:
@@ -88,24 +88,25 @@ def resolve_windows_drive_path(raw_path: str, sim_root: str = None) -> str:
         sim_root = os.path.join(PROJECT_ROOT, "simulation")
     clean = raw_path.replace("\\", "/")
     
-    # Check for Windows Drive format (e.g. N:/... or M:/...)
+    # Check for Windows Drive format (e.g. N:/..., M:/..., T:/...)
     match = re.match(r"^([A-Za-z]):/(.*)$", clean)
     if match:
-        drive_letter = match.group(1).lower()
+        drive_upper = match.group(1).upper()
+        drive_lower = match.group(1).lower()
         rest = match.group(2)
         
-        # Check standard Linux mount locations on i.MX8
-        linux_mount_lower = f"/mnt/{drive_letter}/{rest}"
-        linux_mount_upper = f"/mnt/{drive_letter.upper()}/{rest}"
+        linux_mount_upper = f"/mnt/{drive_upper}/{rest}"
+        linux_mount_lower = f"/mnt/{drive_lower}/{rest}"
         
-        # If running on actual i.MX8 hardware with mounts
-        if os.path.exists(f"/mnt/{drive_letter}"):
-            return linux_mount_lower
-        elif os.path.exists(f"/mnt/{drive_letter.upper()}"):
+        # Primary check: Uppercase mount path on i.MX8 (e.g. /mnt/N, /mnt/M, /mnt/T)
+        if os.path.exists(f"/mnt/{drive_upper}"):
             return linux_mount_upper
+        # Secondary check: Lowercase mount path
+        elif os.path.exists(f"/mnt/{drive_lower}"):
+            return linux_mount_lower
             
         # Fallback to local simulation workspace
-        return os.path.abspath(os.path.join(sim_root, f"drive_{drive_letter.upper()}", rest))
+        return os.path.abspath(os.path.join(sim_root, f"drive_{drive_upper}", rest))
         
     if os.path.isabs(clean):
         return clean
