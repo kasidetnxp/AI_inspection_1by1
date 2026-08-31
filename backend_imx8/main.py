@@ -1574,8 +1574,17 @@ def folder_watcher_thread():
 
                 for file in image_files:
                     src_path = os.path.join(s_dir, file)
-                    time.sleep(0.01)
                     try:
+                        # Ensure camera/network has finished writing the file
+                        if not os.path.exists(src_path):
+                            continue
+                        size1 = os.path.getsize(src_path)
+                        if size1 == 0:
+                            continue
+                        time.sleep(0.02)
+                        if not os.path.exists(src_path) or os.path.getsize(src_path) != size1:
+                            continue  # Still being written by camera, process next loop
+
                         meta = parse_wafer_filename(file)
                         raw_lot = meta.get("batch") or meta.get("waferNo") or "UNKNOWN_LOT"
                         lot_no_str = raw_lot.split("-")[0].strip() if raw_lot and raw_lot != "-" else "UNKNOWN_LOT"
@@ -1604,7 +1613,7 @@ def folder_watcher_thread():
                         print(f"Failed to ingest file {file}: {move_err}")
         except Exception as e:
             print(f"Error in watcher thread: {e}")
-        time.sleep(0.1)
+        time.sleep(0.08)
 
 
 def priority_dispatcher_thread():
