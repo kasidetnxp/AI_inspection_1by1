@@ -44,7 +44,7 @@ export function InspectionProvider({ children }) {
   const [isLight, setIsLight] = useState(true);
   const [isBackendConnected, setIsBackendConnected] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState("DISCONNECTED"); // "CONNECTED" | "CONNECTING" | "DISCONNECTED"
-  const [dbType, setDbType] = useState("SQLite");
+  const [dbType, setDbType] = useState("PostgreSQL");
 
   const [filters, setFilters] = useState({
     pad: true,

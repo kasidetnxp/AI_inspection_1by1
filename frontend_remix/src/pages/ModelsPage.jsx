@@ -562,7 +562,7 @@ export default function ModelsPage() {
                       </div>
 
                       {/* Search & Batch Action Helpers */}
-                      <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                      <div style={{ display: "flex", gap: "8px", alignItems: "center", flexWrap: "wrap" }}>
                         <button
                           className="review-action-btn"
                           style={{ fontSize: "13px", padding: "6px 12px" }}
@@ -592,7 +592,7 @@ export default function ModelsPage() {
 
                     {/* Results Table */}
                     <div className="table-container" style={{ flex: 1, overflowY: "auto" }}>
-                      <table className="history-table benchmark-review-table">
+                      <table className="history-table benchmark-review-table report-table">
                         <thead>
                           <tr>
                             <th style={{ width: "74px", fontSize: "14px" }}>Visual</th>
@@ -626,7 +626,13 @@ export default function ModelsPage() {
                                 return (
                                   <tr
                                     key={item.id || idx}
+                                    onClick={() => {
+                                      setBenchmarkSplitModalItem(item);
+                                      setBenchmarkSplitModalIndex(idx);
+                                    }}
+                                    title="Click to open Split View Inspection"
                                     style={{
+                                      cursor: "pointer",
                                       background: isUnderkill
                                         ? "rgba(239, 68, 68, 0.08)"
                                         : isOverkill
@@ -647,7 +653,8 @@ export default function ModelsPage() {
                                           background: "#000",
                                           boxShadow: "0 2px 6px rgba(0,0,0,0.15)"
                                         }}
-                                        onClick={() => {
+                                        onClick={(e) => {
+                                          e.stopPropagation();
                                           setBenchmarkSplitModalItem(item);
                                           setBenchmarkSplitModalIndex(idx);
                                         }}
@@ -668,7 +675,8 @@ export default function ModelsPage() {
                                     <td style={{ maxWidth: "220px" }}>
                                       <div
                                         style={{ cursor: "pointer", fontWeight: "600", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
-                                        onClick={() => {
+                                        onClick={(e) => {
+                                          e.stopPropagation();
                                           setBenchmarkSplitModalItem(item);
                                           setBenchmarkSplitModalIndex(idx);
                                         }}
@@ -731,7 +739,10 @@ export default function ModelsPage() {
                                         <button
                                           className={`btn-human-pass ${item.human_decision === "PASS" ? "active" : ""}`}
                                           style={{ padding: "5px 9px", fontSize: "13px" }}
-                                          onClick={() => handleSaveHumanReview(item, "PASS")}
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            handleSaveHumanReview(item, "PASS");
+                                          }}
                                           title="Mark this sample as Human PASS"
                                         >
                                           PASS
@@ -739,7 +750,10 @@ export default function ModelsPage() {
                                         <button
                                           className={`btn-human-fail ${item.human_decision === "FAIL" ? "active" : ""}`}
                                           style={{ padding: "5px 9px", fontSize: "13px" }}
-                                          onClick={() => handleSaveHumanReview(item, "FAIL")}
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            handleSaveHumanReview(item, "FAIL");
+                                          }}
                                           title="Mark this sample as Human FAIL"
                                         >
                                           FAIL
@@ -747,7 +761,8 @@ export default function ModelsPage() {
                                         <button
                                           className="action-btn-sm"
                                           style={{ padding: "5px 9px", fontSize: "13px", fontWeight: "700" }}
-                                          onClick={() => {
+                                          onClick={(e) => {
+                                            e.stopPropagation();
                                             setBenchmarkSplitModalItem(item);
                                             setBenchmarkSplitModalIndex(idx);
                                           }}

@@ -27,10 +27,10 @@ export default function HistoryDetailModal() {
       <div
         className="modal-content-box hmi-card"
         style={{
-          width: "1080px",
-          maxWidth: "95vw",
-          height: "660px",
-          maxHeight: "92vh",
+          width: "1340px",
+          maxWidth: "96vw",
+          height: "720px",
+          maxHeight: "94vh",
           display: "flex",
           flexDirection: "column",
           overflow: "hidden"
@@ -98,7 +98,7 @@ export default function HistoryDetailModal() {
           className="card-body modal-body-grid"
           style={{
             display: "grid",
-            gridTemplateColumns: "1fr 330px",
+            gridTemplateColumns: "1fr 280px",
             gap: "16px",
             padding: "16px",
             flex: 1,

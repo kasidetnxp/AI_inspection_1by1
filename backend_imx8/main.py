@@ -2,13 +2,13 @@ import os
 import sys
 import time
 import json
-import sqlite3
 import random
 import threading
 import shutil
 import asyncio
 import queue
 import numpy as np
+import psycopg2
 import matplotlib
 matplotlib.use('Agg')
 from typing import List, Optional
@@ -56,7 +56,6 @@ SYS_CONFIG = load_sys_config()
 PATHS_CFG = SYS_CONFIG.get("paths", {})
 
 # Database connection settings
-DB_NAME_SQLITE = _resolve_sim_path("simulation/inspections.db")
 POSTGRES_CONFIG = {
     "host": "localhost",
     "port": 5432,
@@ -189,7 +188,7 @@ latest_inspection = {}
 active_alarms = []
 inspection_count = 0
 active_class_mode = 3  # 2 or 3 classes detection mode
-db_type = "SQLite"
+db_type = "PostgreSQL"
 main_loop = None
 
 # Global TFLite runner + lock (pre-loaded in main thread at startup to satisfy NPU delegate)
@@ -265,249 +264,131 @@ class ConnectionManager:
 manager = ConnectionManager()
 
 # ==========================================
-# DATABASE CONNECTOR (Local SQLite / Postgres Fallback)
 # ==========================================
-def init_database():
-    global db_type
-    conn = None
-    try:
-        import psycopg2
-        conn = psycopg2.connect(
-            host=POSTGRES_CONFIG["host"],
-            port=POSTGRES_CONFIG["port"],
-            user=POSTGRES_CONFIG["user"],
-            password=POSTGRES_CONFIG["password"],
-            database=POSTGRES_CONFIG["database"],
-            connect_timeout=2
-        )
-        db_type = "PostgreSQL"
-        print("i.MX8 Node connected to PostgreSQL Database!")
-    except Exception:
-        db_type = "SQLite"
-        
-    if db_type == "PostgreSQL" and conn:
-        try:
-            cursor = conn.cursor()
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS inspections (
-                    id SERIAL PRIMARY KEY,
-                    wafer_id VARCHAR(50),
-                    timestamp VARCHAR(50),
-                    decision VARCHAR(20),
-                    pads_total INTEGER,
-                    pads_detected INTEGER,
-                    probe_marks INTEGER,
-                    grains INTEGER,
-                    confidence DOUBLE PRECISION,
-                    inference_time DOUBLE PRECISION,
-                    rule_time DOUBLE PRECISION,
-                    machine_action VARCHAR(50),
-                    reason TEXT,
-                    image_url TEXT
-                );
-            """)
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS benchmark_sessions (
-                    id VARCHAR(64) PRIMARY KEY,
-                    name VARCHAR(255),
-                    model_name VARCHAR(255),
-                    status VARCHAR(50),
-                    dataset_name VARCHAR(255),
-                    total_images INTEGER DEFAULT 0,
-                    processed_images INTEGER DEFAULT 0,
-                    rule_config TEXT,
-                    created_at VARCHAR(50),
-                    completed_at VARCHAR(50),
-                    metrics TEXT
-                );
-            """)
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS benchmark_results (
-                    id SERIAL PRIMARY KEY,
-                    session_id VARCHAR(64),
-                    image_name VARCHAR(255),
-                    image_url TEXT,
-                    annotated_image_url TEXT,
-                    raw_image_url TEXT,
-                    ai_decision VARCHAR(20),
-                    ai_confidence DOUBLE PRECISION,
-                    ai_reason TEXT,
-                    inference_time_ms DOUBLE PRECISION,
-                    rule_time_ms DOUBLE PRECISION,
-                    min_edge_distance_um DOUBLE PRECISION,
-                    mark_area_ratio_pct DOUBLE PRECISION,
-                    pads_count INTEGER,
-                    marks_count INTEGER,
-                    grains_count INTEGER,
-                    human_decision VARCHAR(20) DEFAULT 'UNREVIEWED',
-                    human_reviewer VARCHAR(100),
-                    reviewed_at VARCHAR(50),
-                    notes TEXT
-                );
-            """)
-            conn.commit()
-            cursor.close()
-            conn.close()
-        except Exception as e:
-            print("PostgreSQL benchmark init exception:", e)
-            db_type = "SQLite"
+# DATABASE CONNECTOR (PostgreSQL Exclusively)
+# ==========================================
+def get_pg_connection():
+    return psycopg2.connect(
+        host=POSTGRES_CONFIG["host"],
+        port=POSTGRES_CONFIG["port"],
+        user=POSTGRES_CONFIG["user"],
+        password=POSTGRES_CONFIG["password"],
+        database=POSTGRES_CONFIG["database"],
+        connect_timeout=3
+    )
 
-    # Always ensure SQLite schema exists for local inspection & fallback
+def init_database():
+    global db_type, inspection_count
+    db_type = "PostgreSQL"
     try:
-        conn = sqlite3.connect(DB_NAME_SQLITE)
+        conn = get_pg_connection()
         cursor = conn.cursor()
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS inspections (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                wafer_id TEXT,
-                timestamp TEXT,
-                decision TEXT,
+                id SERIAL PRIMARY KEY,
+                wafer_id VARCHAR(50),
+                timestamp VARCHAR(50),
+                decision VARCHAR(20),
                 pads_total INTEGER,
                 pads_detected INTEGER,
                 probe_marks INTEGER,
                 grains INTEGER,
-                confidence REAL,
-                inference_time REAL,
-                rule_time REAL,
-                machine_action TEXT,
+                confidence DOUBLE PRECISION,
+                inference_time DOUBLE PRECISION,
+                rule_time DOUBLE PRECISION,
+                machine_action VARCHAR(50),
                 reason TEXT,
                 image_url TEXT
             );
         """)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS benchmark_sessions (
-                id TEXT PRIMARY KEY,
-                name TEXT,
-                model_name TEXT,
-                status TEXT,
-                dataset_name TEXT,
+                id VARCHAR(64) PRIMARY KEY,
+                name VARCHAR(255),
+                model_name VARCHAR(255),
+                status VARCHAR(50),
+                dataset_name VARCHAR(255),
                 total_images INTEGER DEFAULT 0,
                 processed_images INTEGER DEFAULT 0,
                 rule_config TEXT,
-                created_at TEXT,
-                completed_at TEXT,
+                created_at VARCHAR(50),
+                completed_at VARCHAR(50),
                 metrics TEXT
             );
         """)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS benchmark_results (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                session_id TEXT,
-                image_name TEXT,
+                id SERIAL PRIMARY KEY,
+                session_id VARCHAR(64),
+                image_name VARCHAR(255),
                 image_url TEXT,
                 annotated_image_url TEXT,
                 raw_image_url TEXT,
-                ai_decision TEXT,
-                ai_confidence REAL,
+                ai_decision VARCHAR(20),
+                ai_confidence DOUBLE PRECISION,
                 ai_reason TEXT,
-                inference_time_ms REAL,
-                rule_time_ms REAL,
-                min_edge_distance_um REAL,
-                mark_area_ratio_pct REAL,
+                inference_time_ms DOUBLE PRECISION,
+                rule_time_ms DOUBLE PRECISION,
+                min_edge_distance_um DOUBLE PRECISION,
+                mark_area_ratio_pct DOUBLE PRECISION,
                 pads_count INTEGER,
                 marks_count INTEGER,
                 grains_count INTEGER,
-                human_decision TEXT DEFAULT 'UNREVIEWED',
-                human_reviewer TEXT,
-                reviewed_at TEXT,
+                human_decision VARCHAR(20) DEFAULT 'UNREVIEWED',
+                human_reviewer VARCHAR(100),
+                reviewed_at VARCHAR(50),
                 notes TEXT
             );
         """)
         conn.commit()
+        cursor.close()
         conn.close()
-    except Exception as sqlite_err:
-        print("SQLite initialization exception:", sqlite_err)
+        print("✅ i.MX8 Node connected to PostgreSQL Database exclusively!")
+    except Exception as e:
+        print("❌ PostgreSQL initialization error:", e)
 
-    global inspection_count
     inspection_count = get_initial_inspection_count()
     print(f"📊 [DB INIT] Inspection Counter initialized to: {inspection_count}")
 
 
 def get_initial_inspection_count() -> int:
-    global db_type
-    if db_type == "PostgreSQL":
-        try:
-            import psycopg2
-            conn = psycopg2.connect(
-                host=POSTGRES_CONFIG["host"], port=POSTGRES_CONFIG["port"],
-                user=POSTGRES_CONFIG["user"], password=POSTGRES_CONFIG["password"],
-                database=POSTGRES_CONFIG["database"]
-            )
-            cursor = conn.cursor()
-            cursor.execute("SELECT MAX(id) FROM inspections;")
-            res = cursor.fetchone()
-            cursor.close()
-            conn.close()
-            if res and res[0] is not None:
-                return int(res[0])
-        except Exception: pass
-
     try:
-        conn = sqlite3.connect(DB_NAME_SQLITE)
+        conn = get_pg_connection()
         cursor = conn.cursor()
         cursor.execute("SELECT MAX(id) FROM inspections;")
         res = cursor.fetchone()
+        cursor.close()
         conn.close()
         if res and res[0] is not None:
             return int(res[0])
-    except Exception: pass
-
+    except Exception as e:
+        print("[DB] Failed to get initial inspection count from PostgreSQL:", e)
     return 0
 
 
 def save_inspection_to_db(record):
-    global db_type
-    if db_type == "PostgreSQL":
-        try:
-            import psycopg2
-            conn = psycopg2.connect(
-                host=POSTGRES_CONFIG["host"],
-                port=POSTGRES_CONFIG["port"],
-                user=POSTGRES_CONFIG["user"],
-                password=POSTGRES_CONFIG["password"],
-                database=POSTGRES_CONFIG["database"]
-            )
-            cursor = conn.cursor()
-            cursor.execute("""
-                INSERT INTO inspections (
-                    wafer_id, timestamp, decision, pads_total, pads_detected, 
-                    probe_marks, grains, confidence, inference_time, rule_time, machine_action, reason, image_url
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                RETURNING id;
-            """, (
-                record["id"], record["timestamp"], record["decision"], record["padsTotal"],
-                record["padsDetected"], record["probeMarks"], record["grains"], record["confidence"],
-                record["inferenceTime"], record["ruleTime"], record["machineAction"], record.get("reason", "-"), record.get("imageUrl")
-            ))
-            new_id = cursor.fetchone()
-            if new_id:
-                record["db_id"] = new_id[0]
-            conn.commit()
-            cursor.close()
-            conn.close()
-            return
-        except Exception as pg_err:
-            print("Failed to save to PostgreSQL:", pg_err)
-            
-    # SQLite Fallback
     try:
-        conn = sqlite3.connect(DB_NAME_SQLITE)
+        conn = get_pg_connection()
         cursor = conn.cursor()
         cursor.execute("""
             INSERT INTO inspections (
                 wafer_id, timestamp, decision, pads_total, pads_detected, 
                 probe_marks, grains, confidence, inference_time, rule_time, machine_action, reason, image_url
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            RETURNING id;
         """, (
             record["id"], record["timestamp"], record["decision"], record["padsTotal"],
             record["padsDetected"], record["probeMarks"], record["grains"], record["confidence"],
             record["inferenceTime"], record["ruleTime"], record["machineAction"], record.get("reason", "-"), record.get("imageUrl")
         ))
-        record["db_id"] = cursor.lastrowid
+        new_id = cursor.fetchone()
+        if new_id:
+            record["db_id"] = new_id[0]
         conn.commit()
+        cursor.close()
         conn.close()
-    except Exception as e:
-        print("Failed to save to SQLite:", e)
+    except Exception as pg_err:
+        print("Failed to save to PostgreSQL:", pg_err)
 
 
 # ==========================================
@@ -1096,45 +977,8 @@ def process_new_file(filepath, filename):
 
 def save_benchmark_result_to_db(record: dict):
     global db_type
-    if db_type == "PostgreSQL":
-        try:
-            import psycopg2
-            conn = psycopg2.connect(
-                host=POSTGRES_CONFIG["host"], port=POSTGRES_CONFIG["port"],
-                user=POSTGRES_CONFIG["user"], password=POSTGRES_CONFIG["password"],
-                database=POSTGRES_CONFIG["database"]
-            )
-            cursor = conn.cursor()
-            cursor.execute("""
-                INSERT INTO benchmark_results (
-                    session_id, image_name, image_url, annotated_image_url, raw_image_url,
-                    ai_decision, ai_confidence, ai_reason, inference_time_ms, rule_time_ms,
-                    min_edge_distance_um, mark_area_ratio_pct, pads_count, marks_count, grains_count,
-                    human_decision, human_reviewer, reviewed_at, notes
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                RETURNING id;
-            """, (
-                record["session_id"], record["image_name"], record["image_url"],
-                record["annotated_image_url"], record["raw_image_url"],
-                record["ai_decision"], record["ai_confidence"], record["ai_reason"],
-                record["inference_time_ms"], record["rule_time_ms"],
-                record["min_edge_distance_um"], record["mark_area_ratio_pct"],
-                record["pads_count"], record["marks_count"], record["grains_count"],
-                record.get("human_decision", "UNREVIEWED"), record.get("human_reviewer", "-"),
-                record.get("reviewed_at", "-"), record.get("notes", "")
-            ))
-            new_id = cursor.fetchone()
-            if new_id:
-                record["id"] = new_id[0]
-            conn.commit()
-            cursor.close()
-            conn.close()
-            return
-        except Exception as pg_err:
-            print("Failed to save benchmark result to PostgreSQL:", pg_err)
-
     try:
-        conn = sqlite3.connect(DB_NAME_SQLITE)
+        conn = get_pg_connection()
         cursor = conn.cursor()
         cursor.execute("""
             INSERT INTO benchmark_results (
@@ -1142,7 +986,8 @@ def save_benchmark_result_to_db(record: dict):
                 ai_decision, ai_confidence, ai_reason, inference_time_ms, rule_time_ms,
                 min_edge_distance_um, mark_area_ratio_pct, pads_count, marks_count, grains_count,
                 human_decision, human_reviewer, reviewed_at, notes
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            RETURNING id;
         """, (
             record["session_id"], record["image_name"], record["image_url"],
             record["annotated_image_url"], record["raw_image_url"],
@@ -1153,48 +998,31 @@ def save_benchmark_result_to_db(record: dict):
             record.get("human_decision", "UNREVIEWED"), record.get("human_reviewer", "-"),
             record.get("reviewed_at", "-"), record.get("notes", "")
         ))
-        record["id"] = cursor.lastrowid
+        new_id = cursor.fetchone()
+        if new_id:
+            record["id"] = new_id[0]
         conn.commit()
+        cursor.close()
         conn.close()
-    except Exception as sq_err:
-        print("Failed to save benchmark result to SQLite:", sq_err)
+    except Exception as pg_err:
+        print("Failed to save benchmark result to PostgreSQL:", pg_err)
 
 
 def compute_session_kpis(session_id: str) -> dict:
     """Calculates real-time quality KPIs, Agreement, Overkill, Underkill, Yield, and Confusion Matrix."""
-    global db_type
     rows = []
-    if db_type == "PostgreSQL":
-        try:
-            import psycopg2
-            conn = psycopg2.connect(
-                host=POSTGRES_CONFIG["host"], port=POSTGRES_CONFIG["port"],
-                user=POSTGRES_CONFIG["user"], password=POSTGRES_CONFIG["password"],
-                database=POSTGRES_CONFIG["database"]
-            )
-            cursor = conn.cursor()
-            cursor.execute("""
-                SELECT ai_decision, human_decision, inference_time_ms, rule_time_ms
-                FROM benchmark_results WHERE session_id = %s;
-            """, (session_id,))
-            rows = cursor.fetchall()
-            cursor.close()
-            conn.close()
-        except Exception:
-            pass
-
-    if not rows:
-        try:
-            conn = sqlite3.connect(DB_NAME_SQLITE)
-            cursor = conn.cursor()
-            cursor.execute("""
-                SELECT ai_decision, human_decision, inference_time_ms, rule_time_ms
-                FROM benchmark_results WHERE session_id = ?;
-            """, (session_id,))
-            rows = cursor.fetchall()
-            conn.close()
-        except Exception:
-            pass
+    try:
+        conn = get_pg_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT ai_decision, human_decision, inference_time_ms, rule_time_ms
+            FROM benchmark_results WHERE session_id = %s;
+        """, (session_id,))
+        rows = cursor.fetchall()
+        cursor.close()
+        conn.close()
+    except Exception:
+        pass
 
     total_tested = len(rows)
     if total_tested == 0:
@@ -1291,80 +1119,40 @@ def compute_session_kpis(session_id: str) -> dict:
 
 def update_benchmark_session_progress(session_id: str, processed_count: int, kpis: dict):
     global db_type
+def update_benchmark_session_progress(session_id: str, processed_count: int, kpis: dict):
     metrics_str = json.dumps(kpis)
-    if db_type == "PostgreSQL":
-        try:
-            import psycopg2
-            conn = psycopg2.connect(
-                host=POSTGRES_CONFIG["host"], port=POSTGRES_CONFIG["port"],
-                user=POSTGRES_CONFIG["user"], password=POSTGRES_CONFIG["password"],
-                database=POSTGRES_CONFIG["database"]
-            )
-            cursor = conn.cursor()
-            cursor.execute("""
-                UPDATE benchmark_sessions
-                SET processed_images = %s, metrics = %s
-                WHERE id = %s;
-            """, (processed_count, metrics_str, session_id))
-            conn.commit()
-            cursor.close()
-            conn.close()
-            return
-        except Exception:
-            pass
-
     try:
-        conn = sqlite3.connect(DB_NAME_SQLITE)
+        conn = get_pg_connection()
         cursor = conn.cursor()
         cursor.execute("""
             UPDATE benchmark_sessions
-            SET processed_images = ?, metrics = ?
-            WHERE id = ?;
+            SET processed_images = %s, metrics = %s
+            WHERE id = %s;
         """, (processed_count, metrics_str, session_id))
         conn.commit()
+        cursor.close()
         conn.close()
-    except Exception:
-        pass
+    except Exception as e:
+        print("Error updating benchmark session progress:", e)
 
 
 def finalize_benchmark_session(session_id: str):
-    global db_type
     kpis = compute_session_kpis(session_id)
     metrics_str = json.dumps(kpis)
     now_str = time.strftime("%d-%b-%Y %H:%M:%S")
-    if db_type == "PostgreSQL":
-        try:
-            import psycopg2
-            conn = psycopg2.connect(
-                host=POSTGRES_CONFIG["host"], port=POSTGRES_CONFIG["port"],
-                user=POSTGRES_CONFIG["user"], password=POSTGRES_CONFIG["password"],
-                database=POSTGRES_CONFIG["database"]
-            )
-            cursor = conn.cursor()
-            cursor.execute("""
-                UPDATE benchmark_sessions
-                SET status = 'COMPLETED', completed_at = %s, metrics = %s
-                WHERE id = %s;
-            """, (now_str, metrics_str, session_id))
-            conn.commit()
-            cursor.close()
-            conn.close()
-            return
-        except Exception:
-            pass
-
     try:
-        conn = sqlite3.connect(DB_NAME_SQLITE)
+        conn = get_pg_connection()
         cursor = conn.cursor()
         cursor.execute("""
             UPDATE benchmark_sessions
-            SET status = 'COMPLETED', completed_at = ?, metrics = ?
-            WHERE id = ?;
+            SET status = 'COMPLETED', completed_at = %s, metrics = %s
+            WHERE id = %s;
         """, (now_str, metrics_str, session_id))
         conn.commit()
+        cursor.close()
         conn.close()
-    except Exception:
-        pass
+    except Exception as e:
+        print("Error finalizing benchmark session:", e)
 
 
 def process_benchmark_image(task: dict):
@@ -1942,41 +1730,11 @@ def load_history_from_db():
     global db_type
     prober_name = SYS_CONFIG.get("prober_name", "PROBER01")
     records = []
-    if db_type == "PostgreSQL":
-        try:
-            import psycopg2
-            conn = psycopg2.connect(
-                host=POSTGRES_CONFIG["host"], port=POSTGRES_CONFIG["port"],
-                user=POSTGRES_CONFIG["user"], password=POSTGRES_CONFIG["password"],
-                database=POSTGRES_CONFIG["database"]
-            )
-            cursor = conn.cursor()
-            cursor.execute("SELECT wafer_id, timestamp, decision, pads_total, pads_detected, probe_marks, grains, confidence, inference_time, rule_time, machine_action, reason, image_url FROM inspections ORDER BY id DESC")
-            rows = cursor.fetchall()
-            for r in rows:
-                t_short = r[1].split(" ")[1] if len(r[1].split(" ")) > 1 else r[1]
-                stored_url = r[12] if len(r) > 12 and r[12] else None
-                ann_url = stored_url if stored_url else None
-                raw_url = stored_url.replace("annotated_", "raw_") if stored_url else None
-                comp_url = stored_url.replace("annotated_", "inspect_") if stored_url else None
-                meta = parse_wafer_filename(stored_url or r[0], prober_name)
-                records.append({
-                    "id": r[0], "timestamp": r[1], "timeShort": t_short, "decision": r[2],
-                    "padsTotal": r[3], "padsDetected": r[4], "probeMarks": r[5], "grains": r[6],
-                    "confidence": r[7], "inferenceTime": r[8], "ruleTime": r[9], "machineAction": r[10],
-                    "reason": r[11] if len(r) > 11 and r[11] else "-",
-                    "imageUrl": ann_url, "annotatedImageUrl": ann_url, "comparisonImageUrl": comp_url, "rawImageUrl": raw_url,
-                    "machineNo": meta["machineNo"], "batch": meta["batch"], "waferNo": meta["waferNo"],
-                    "xyCoord": meta["xyCoord"], "site": meta["site"], "pad": meta["pad"],
-                    "dateTime": meta["dateTime"], "productSetup": meta["productSetup"], "temp": meta["temp"]
-                })
-            cursor.close()
-            conn.close()
-            return records
-        except Exception: pass
-
+def load_history_from_db():
+    prober_name = SYS_CONFIG.get("prober_name", "PROBER01")
+    records = []
     try:
-        conn = sqlite3.connect(DB_NAME_SQLITE)
+        conn = get_pg_connection()
         cursor = conn.cursor()
         cursor.execute("SELECT wafer_id, timestamp, decision, pads_total, pads_detected, probe_marks, grains, confidence, inference_time, rule_time, machine_action, reason, image_url FROM inspections ORDER BY id DESC")
         rows = cursor.fetchall()
@@ -1997,8 +1755,10 @@ def load_history_from_db():
                 "xyCoord": meta["xyCoord"], "site": meta["site"], "pad": meta["pad"],
                 "dateTime": meta["dateTime"], "productSetup": meta["productSetup"], "temp": meta["temp"]
             })
+        cursor.close()
         conn.close()
-    except Exception: pass
+    except Exception as e:
+        print("[DB] Failed to load history from PostgreSQL:", e)
     return records
 
 
@@ -2012,33 +1772,19 @@ async def get_history():
 
 @app.delete("/api/history")
 async def clear_history():
-    global latest_inspection, active_alarms, inspection_count, db_type
+    global latest_inspection, active_alarms, inspection_count
     latest_inspection = {}
     active_alarms = []
     inspection_count = 0
-    if db_type == "PostgreSQL":
-        try:
-            import psycopg2
-            conn = psycopg2.connect(
-                host=POSTGRES_CONFIG["host"], port=POSTGRES_CONFIG["port"],
-                user=POSTGRES_CONFIG["user"], password=POSTGRES_CONFIG["password"],
-                database=POSTGRES_CONFIG["database"]
-            )
-            cursor = conn.cursor()
-            cursor.execute("TRUNCATE TABLE inspections RESTART IDENTITY;")
-            conn.commit()
-            cursor.close()
-            conn.close()
-        except Exception: pass
-
     try:
-        conn = sqlite3.connect(DB_NAME_SQLITE)
+        conn = get_pg_connection()
         cursor = conn.cursor()
-        cursor.execute("DELETE FROM inspections;")
-        cursor.execute("DELETE FROM sqlite_sequence WHERE name='inspections';")
+        cursor.execute("TRUNCATE TABLE inspections RESTART IDENTITY;")
         conn.commit()
+        cursor.close()
         conn.close()
-    except Exception: pass
+    except Exception as e:
+        print("[DB] Failed to clear history from PostgreSQL:", e)
     return {"status": "cleared"}
 
 @app.post("/api/simulate-end")
@@ -2516,48 +2262,24 @@ async def start_benchmark(payload: dict):
         "avg_inference_time_ms": 0.0, "confusion_matrix": {"tp": 0, "fp": 0, "tn": 0, "fn": 0}
     })
 
-    if db_type == "PostgreSQL":
-        try:
-            import psycopg2
-            conn = psycopg2.connect(
-                host=POSTGRES_CONFIG["host"], port=POSTGRES_CONFIG["port"],
-                user=POSTGRES_CONFIG["user"], password=POSTGRES_CONFIG["password"],
-                database=POSTGRES_CONFIG["database"]
-            )
-            cursor = conn.cursor()
-            cursor.execute("""
-                INSERT INTO benchmark_sessions (
-                    id, name, model_name, status, dataset_name, total_images,
-                    processed_images, rule_config, created_at, completed_at, metrics
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s);
-            """, (
-                session_id, f"Validation Run ({model_name})", model_name,
-                "RUNNING", dataset_name, len(image_paths), 0, rules_json,
-                created_at, "-", initial_metrics
-            ))
-            conn.commit()
-            cursor.close()
-            conn.close()
-        except Exception as e:
-            print("Failed to insert session into PG:", e)
-    else:
-        try:
-            conn = sqlite3.connect(DB_NAME_SQLITE)
-            cursor = conn.cursor()
-            cursor.execute("""
-                INSERT INTO benchmark_sessions (
-                    id, name, model_name, status, dataset_name, total_images,
-                    processed_images, rule_config, created_at, completed_at, metrics
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
-            """, (
-                session_id, f"Validation Run ({model_name})", model_name,
-                "RUNNING", dataset_name, len(image_paths), 0, rules_json,
-                created_at, "-", initial_metrics
-            ))
-            conn.commit()
-            conn.close()
-        except Exception as e:
-            print("Failed to insert session into SQLite:", e)
+    try:
+        conn = get_pg_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO benchmark_sessions (
+                id, name, model_name, status, dataset_name, total_images,
+                processed_images, rule_config, created_at, completed_at, metrics
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s);
+        """, (
+            session_id, f"Validation Run ({model_name})", model_name,
+            "RUNNING", dataset_name, len(image_paths), 0, rules_json,
+            created_at, "-", initial_metrics
+        ))
+        conn.commit()
+        cursor.close()
+        conn.close()
+    except Exception as e:
+        print("Failed to insert session into PG:", e)
 
     # Reset P1 Queue
     while not P1_QUEUE.empty():
@@ -2691,97 +2413,48 @@ async def get_benchmark_results(
     global db_type
     target_session = session_id or priority_dispatcher_state.get("active_session_id")
     if not target_session:
-        if db_type == "PostgreSQL":
-            try:
-                import psycopg2
-                conn = psycopg2.connect(
-                    host=POSTGRES_CONFIG["host"], port=POSTGRES_CONFIG["port"],
-                    user=POSTGRES_CONFIG["user"], password=POSTGRES_CONFIG["password"],
-                    database=POSTGRES_CONFIG["database"]
-                )
-                cursor = conn.cursor()
-                cursor.execute("SELECT id FROM benchmark_sessions ORDER BY created_at DESC LIMIT 1;")
-                r = cursor.fetchone()
-                if r: target_session = r[0]
-                cursor.close()
-                conn.close()
-            except Exception: pass
-        else:
-            try:
-                conn = sqlite3.connect(DB_NAME_SQLITE)
-                cursor = conn.cursor()
-                cursor.execute("SELECT id FROM benchmark_sessions ORDER BY created_at DESC LIMIT 1;")
-                r = cursor.fetchone()
-                if r: target_session = r[0]
-                conn.close()
-            except Exception: pass
+        try:
+            conn = get_pg_connection()
+            cursor = conn.cursor()
+            cursor.execute("SELECT id FROM benchmark_sessions ORDER BY created_at DESC LIMIT 1;")
+            r = cursor.fetchone()
+            if r: target_session = r[0]
+            cursor.close()
+            conn.close()
+        except Exception: pass
 
     if not target_session:
         return {"session_id": None, "results": [], "kpis": compute_session_kpis("")}
 
     results = []
-    if db_type == "PostgreSQL":
-        try:
-            import psycopg2
-            conn = psycopg2.connect(
-                host=POSTGRES_CONFIG["host"], port=POSTGRES_CONFIG["port"],
-                user=POSTGRES_CONFIG["user"], password=POSTGRES_CONFIG["password"],
-                database=POSTGRES_CONFIG["database"]
-            )
-            cursor = conn.cursor()
-            cursor.execute("""
-                SELECT id, session_id, image_name, image_url, annotated_image_url, raw_image_url,
-                       ai_decision, ai_confidence, ai_reason, inference_time_ms, rule_time_ms,
-                       min_edge_distance_um, mark_area_ratio_pct, pads_count, marks_count, grains_count,
-                       human_decision, human_reviewer, reviewed_at, notes
-                FROM benchmark_results
-                WHERE session_id = %s
-                ORDER BY id ASC;
-            """, (target_session,))
-            rows = cursor.fetchall()
-            cursor.close()
-            conn.close()
-            for row in rows:
-                results.append({
-                    "id": row[0], "session_id": row[1], "image_name": row[2],
-                    "image_url": row[3], "annotated_image_url": row[4], "raw_image_url": row[5],
-                    "ai_decision": row[6], "ai_confidence": row[7], "ai_reason": row[8],
-                    "inference_time_ms": row[9], "rule_time_ms": row[10],
-                    "min_edge_distance_um": row[11], "mark_area_ratio_pct": row[12],
-                    "pads_count": row[13], "marks_count": row[14], "grains_count": row[15],
-                    "human_decision": row[16], "human_reviewer": row[17],
-                    "reviewed_at": row[18], "notes": row[19]
-                })
-        except Exception as e:
-            print("Error fetching PG benchmark results:", e)
-    else:
-        try:
-            conn = sqlite3.connect(DB_NAME_SQLITE)
-            cursor = conn.cursor()
-            cursor.execute("""
-                SELECT id, session_id, image_name, image_url, annotated_image_url, raw_image_url,
-                       ai_decision, ai_confidence, ai_reason, inference_time_ms, rule_time_ms,
-                       min_edge_distance_um, mark_area_ratio_pct, pads_count, marks_count, grains_count,
-                       human_decision, human_reviewer, reviewed_at, notes
-                FROM benchmark_results
-                WHERE session_id = ?
-                ORDER BY id ASC;
-            """, (target_session,))
-            rows = cursor.fetchall()
-            conn.close()
-            for row in rows:
-                results.append({
-                    "id": row[0], "session_id": row[1], "image_name": row[2],
-                    "image_url": row[3], "annotated_image_url": row[4], "raw_image_url": row[5],
-                    "ai_decision": row[6], "ai_confidence": row[7], "ai_reason": row[8],
-                    "inference_time_ms": row[9], "rule_time_ms": row[10],
-                    "min_edge_distance_um": row[11], "mark_area_ratio_pct": row[12],
-                    "pads_count": row[13], "marks_count": row[14], "grains_count": row[15],
-                    "human_decision": row[16], "human_reviewer": row[17],
-                    "reviewed_at": row[18], "notes": row[19]
-                })
-        except Exception as e:
-            print("Error fetching SQLite benchmark results:", e)
+    try:
+        conn = get_pg_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT id, session_id, image_name, image_url, annotated_image_url, raw_image_url,
+                   ai_decision, ai_confidence, ai_reason, inference_time_ms, rule_time_ms,
+                   min_edge_distance_um, mark_area_ratio_pct, pads_count, marks_count, grains_count,
+                   human_decision, human_reviewer, reviewed_at, notes
+            FROM benchmark_results
+            WHERE session_id = %s
+            ORDER BY id ASC;
+        """, (target_session,))
+        rows = cursor.fetchall()
+        cursor.close()
+        conn.close()
+        for row in rows:
+            results.append({
+                "id": row[0], "session_id": row[1], "image_name": row[2],
+                "image_url": row[3], "annotated_image_url": row[4], "raw_image_url": row[5],
+                "ai_decision": row[6], "ai_confidence": row[7], "ai_reason": row[8],
+                "inference_time_ms": row[9], "rule_time_ms": row[10],
+                "min_edge_distance_um": row[11], "mark_area_ratio_pct": row[12],
+                "pads_count": row[13], "marks_count": row[14], "grains_count": row[15],
+                "human_decision": row[16], "human_reviewer": row[17],
+                "reviewed_at": row[18], "notes": row[19]
+            })
+    except Exception as e:
+        print("Error fetching PG benchmark results:", e)
 
     # Filter results
     if filter == "DISAGREEMENT":
@@ -2817,45 +2490,22 @@ async def save_human_review(payload: dict):
     if not result_id or human_decision not in ("PASS", "FAIL", "UNREVIEWED"):
         raise HTTPException(status_code=400, detail="Invalid review payload.")
 
-    if db_type == "PostgreSQL":
-        try:
-            import psycopg2
-            conn = psycopg2.connect(
-                host=POSTGRES_CONFIG["host"], port=POSTGRES_CONFIG["port"],
-                user=POSTGRES_CONFIG["user"], password=POSTGRES_CONFIG["password"],
-                database=POSTGRES_CONFIG["database"]
-            )
-            cursor = conn.cursor()
-            cursor.execute("""
-                UPDATE benchmark_results
-                SET human_decision = %s, human_reviewer = %s, reviewed_at = %s, notes = %s
-                WHERE id = %s RETURNING session_id;
-            """, (human_decision, reviewer, reviewed_at, notes, result_id))
-            row = cursor.fetchone()
-            if row and not session_id:
-                session_id = row[0]
-            conn.commit()
-            cursor.close()
-            conn.close()
-        except Exception as e:
-            print("Error updating PG review:", e)
-    else:
-        try:
-            conn = sqlite3.connect(DB_NAME_SQLITE)
-            cursor = conn.cursor()
-            cursor.execute("""
-                UPDATE benchmark_results
-                SET human_decision = ?, human_reviewer = ?, reviewed_at = ?, notes = ?
-                WHERE id = ?;
-            """, (human_decision, reviewer, reviewed_at, notes, result_id))
-            if not session_id:
-                cursor.execute("SELECT session_id FROM benchmark_results WHERE id = ?;", (result_id,))
-                r = cursor.fetchone()
-                if r: session_id = r[0]
-            conn.commit()
-            conn.close()
-        except Exception as e:
-            print("Error updating SQLite review:", e)
+    try:
+        conn = get_pg_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            UPDATE benchmark_results
+            SET human_decision = %s, human_reviewer = %s, reviewed_at = %s, notes = %s
+            WHERE id = %s RETURNING session_id;
+        """, (human_decision, reviewer, reviewed_at, notes, result_id))
+        row = cursor.fetchone()
+        if row and not session_id:
+            session_id = row[0]
+        conn.commit()
+        cursor.close()
+        conn.close()
+    except Exception as e:
+        print("Error updating PG review:", e)
 
     kpis = compute_session_kpis(session_id) if session_id else {}
     if session_id:
@@ -2893,76 +2543,38 @@ async def batch_human_review(payload: dict):
     if not session_id:
         raise HTTPException(status_code=400, detail="Session ID is required.")
 
-    if db_type == "PostgreSQL":
-        try:
-            import psycopg2
-            conn = psycopg2.connect(
-                host=POSTGRES_CONFIG["host"], port=POSTGRES_CONFIG["port"],
-                user=POSTGRES_CONFIG["user"], password=POSTGRES_CONFIG["password"],
-                database=POSTGRES_CONFIG["database"]
-            )
-            cursor = conn.cursor()
-            if action == "CONFIRM_ALL_AI":
-                cursor.execute("""
-                    UPDATE benchmark_results
-                    SET human_decision = ai_decision, human_reviewer = %s, reviewed_at = %s
-                    WHERE session_id = %s;
-                """, (reviewer, reviewed_at, session_id))
-            elif action == "RESET_ALL":
-                cursor.execute("""
-                    UPDATE benchmark_results
-                    SET human_decision = 'UNREVIEWED', human_reviewer = '-', reviewed_at = '-'
-                    WHERE session_id = %s;
-                """, (session_id,))
-            elif action == "MARK_UNREVIEWED_PASS":
-                cursor.execute("""
-                    UPDATE benchmark_results
-                    SET human_decision = 'PASS', human_reviewer = %s, reviewed_at = %s
-                    WHERE session_id = %s AND human_decision = 'UNREVIEWED';
-                """, (reviewer, reviewed_at, session_id))
-            elif action == "MARK_UNREVIEWED_FAIL":
-                cursor.execute("""
-                    UPDATE benchmark_results
-                    SET human_decision = 'FAIL', human_reviewer = %s, reviewed_at = %s
-                    WHERE session_id = %s AND human_decision = 'UNREVIEWED';
-                """, (reviewer, reviewed_at, session_id))
-            conn.commit()
-            cursor.close()
-            conn.close()
-        except Exception as e:
-            print("Error in PG batch review:", e)
-    else:
-        try:
-            conn = sqlite3.connect(DB_NAME_SQLITE)
-            cursor = conn.cursor()
-            if action == "CONFIRM_ALL_AI":
-                cursor.execute("""
-                    UPDATE benchmark_results
-                    SET human_decision = ai_decision, human_reviewer = ?, reviewed_at = ?
-                    WHERE session_id = ?;
-                """, (reviewer, reviewed_at, session_id))
-            elif action == "RESET_ALL":
-                cursor.execute("""
-                    UPDATE benchmark_results
-                    SET human_decision = 'UNREVIEWED', human_reviewer = '-', reviewed_at = '-'
-                    WHERE session_id = ?;
-                """, (session_id,))
-            elif action == "MARK_UNREVIEWED_PASS":
-                cursor.execute("""
-                    UPDATE benchmark_results
-                    SET human_decision = 'PASS', human_reviewer = ?, reviewed_at = ?
-                    WHERE session_id = ? AND human_decision = 'UNREVIEWED';
-                """, (reviewer, reviewed_at, session_id))
-            elif action == "MARK_UNREVIEWED_FAIL":
-                cursor.execute("""
-                    UPDATE benchmark_results
-                    SET human_decision = 'FAIL', human_reviewer = ?, reviewed_at = ?
-                    WHERE session_id = ? AND human_decision = 'UNREVIEWED';
-                """, (reviewer, reviewed_at, session_id))
-            conn.commit()
-            conn.close()
-        except Exception as e:
-            print("Error in SQLite batch review:", e)
+    try:
+        conn = get_pg_connection()
+        cursor = conn.cursor()
+        if action == "CONFIRM_ALL_AI":
+            cursor.execute("""
+                UPDATE benchmark_results
+                SET human_decision = ai_decision, human_reviewer = %s, reviewed_at = %s
+                WHERE session_id = %s;
+            """, (reviewer, reviewed_at, session_id))
+        elif action == "RESET_ALL":
+            cursor.execute("""
+                UPDATE benchmark_results
+                SET human_decision = 'UNREVIEWED', human_reviewer = '-', reviewed_at = '-'
+                WHERE session_id = %s;
+            """, (session_id,))
+        elif action == "MARK_UNREVIEWED_PASS":
+            cursor.execute("""
+                UPDATE benchmark_results
+                SET human_decision = 'PASS', human_reviewer = %s, reviewed_at = %s
+                WHERE session_id = %s AND human_decision = 'UNREVIEWED';
+            """, (reviewer, reviewed_at, session_id))
+        elif action == "MARK_UNREVIEWED_FAIL":
+            cursor.execute("""
+                UPDATE benchmark_results
+                SET human_decision = 'FAIL', human_reviewer = %s, reviewed_at = %s
+                WHERE session_id = %s AND human_decision = 'UNREVIEWED';
+            """, (reviewer, reviewed_at, session_id))
+        conn.commit()
+        cursor.close()
+        conn.close()
+    except Exception as e:
+        print("Error in PG batch review:", e)
 
     kpis = compute_session_kpis(session_id)
     update_benchmark_session_progress(session_id, priority_dispatcher_state["p1_processed"], kpis)
@@ -2981,50 +2593,26 @@ async def get_benchmark_report(session_id: str):
     global db_type
     
     session_data = None
-    if db_type == "PostgreSQL":
-        try:
-            import psycopg2
-            conn = psycopg2.connect(
-                host=POSTGRES_CONFIG["host"], port=POSTGRES_CONFIG["port"],
-                user=POSTGRES_CONFIG["user"], password=POSTGRES_CONFIG["password"],
-                database=POSTGRES_CONFIG["database"]
-            )
-            cursor = conn.cursor()
-            cursor.execute("""
-                SELECT id, name, model_name, status, dataset_name, total_images,
-                       processed_images, rule_config, created_at, completed_at
-                FROM benchmark_sessions WHERE id = %s;
-            """, (session_id,))
-            row = cursor.fetchone()
-            if row:
-                session_data = {
-                    "id": row[0], "name": row[1], "model_name": row[2],
-                    "status": row[3], "dataset_name": row[4], "total_images": row[5],
-                    "processed_images": row[6], "rules": json.loads(row[7]) if row[7] else {},
-                    "created_at": row[8], "completed_at": row[9]
-                }
-            cursor.close()
-            conn.close()
-        except Exception: pass
-    else:
-        try:
-            conn = sqlite3.connect(DB_NAME_SQLITE)
-            cursor = conn.cursor()
-            cursor.execute("""
-                SELECT id, name, model_name, status, dataset_name, total_images,
-                       processed_images, rule_config, created_at, completed_at
-                FROM benchmark_sessions WHERE id = ?;
-            """, (session_id,))
-            row = cursor.fetchone()
-            if row:
-                session_data = {
-                    "id": row[0], "name": row[1], "model_name": row[2],
-                    "status": row[3], "dataset_name": row[4], "total_images": row[5],
-                    "processed_images": row[6], "rules": json.loads(row[7]) if row[7] else {},
-                    "created_at": row[8], "completed_at": row[9]
-                }
-            conn.close()
-        except Exception: pass
+    try:
+        conn = get_pg_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT id, name, model_name, status, dataset_name, total_images,
+                   processed_images, rule_config, created_at, completed_at
+            FROM benchmark_sessions WHERE id = %s;
+        """, (session_id,))
+        row = cursor.fetchone()
+        if row:
+            session_data = {
+                "id": row[0], "name": row[1], "model_name": row[2],
+                "status": row[3], "dataset_name": row[4], "total_images": row[5],
+                "processed_images": row[6], "rules": json.loads(row[7]) if row[7] else {},
+                "created_at": row[8], "completed_at": row[9]
+            }
+        cursor.close()
+        conn.close()
+    except Exception as e:
+        print("[DB] Failed to fetch benchmark report from PostgreSQL:", e)
 
     if not session_data:
         raise HTTPException(status_code=404, detail="Benchmark session not found.")

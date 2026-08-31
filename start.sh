@@ -22,13 +22,13 @@ else
     PY_BIN="python"
 fi
 
-# Start PostgreSQL & CloudBeaver Database Containers (Docker Compose)
+# Start PostgreSQL & CloudBeaver Database Containers (Docker Compose) if docker is used
 if command -v docker > /dev/null 2>&1 && [ -f "docker-compose.yml" ]; then
-    echo "Starting PostgreSQL Database Container via Docker Compose..."
+    echo "Checking/Starting PostgreSQL Database Container via Docker Compose..."
     docker compose up -d > /dev/null 2>&1 || true
     sleep 1
 else
-    echo "Docker not available. System will fallback to local SQLite database."
+    echo "PostgreSQL service is running natively on port 5432."
 fi
 
 

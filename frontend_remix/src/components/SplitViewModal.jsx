@@ -26,33 +26,83 @@ export default function SplitViewModal() {
 
   if (!benchmarkSplitModalItem) return null;
 
-  // Extract batch, wafer, xy, pad, site from image filename
+  // Extract batch, wafer, xy, pad, site, timestamp from image filename
   const parseFilenameMeta = (filename = "") => {
-    if (!filename) return { batch: "-", pad: "-", site: "-", xy: "-" };
-    const parts = filename.replace(/\.(bmp|png|jpg|jpeg)$/i, "").split("_");
+    if (!filename) return { batch: "-", waferNo: "-", pad: "-", site: "-", xy: "-", dateTime: "-" };
+    const clean = filename.replace(/\.(bmp|png|jpg|jpeg)$/i, "")
+      .replace(/^(raw_|annotated_|inspect_)+/i, "")
+      .replace(/(_mask_result|_inspect|_annotated|_raw|_result)+$/i, "");
+    const parts = clean.split("_");
+
     let batch = "-";
+    let waferNo = "-";
     let xy = "-";
     let site = "-";
     let pad = "-";
+    let dateTime = "-";
 
-    for (const part of parts) {
-      if (
-        /^C\d+W\d+/i.test(part) ||
-        (/^[A-Z0-9]{8,15}$/i.test(part) && !part.startsWith("X") && !part.startsWith("S") && !part.startsWith("P"))
-      ) {
-        batch = part;
+    for (let i = 0; i < parts.length; i++) {
+      const part = parts[i];
+      if (!part) continue;
+
+      // 1. Process Time: 14-digit or 8-digit timestamp (e.g. 20260813155201)
+      if (/^\d{14}$/.test(part)) {
+        dateTime = `${part.slice(0, 4)}-${part.slice(4, 6)}-${part.slice(6, 8)} ${part.slice(8, 10)}:${part.slice(10, 12)}:${part.slice(12, 14)}`;
+        continue;
       }
-      if (/^X-?\d+Y-?\d+/i.test(part)) {
+      if (/^\d{8}$/.test(part) && i === 0) {
+        dateTime = `${part.slice(0, 4)}-${part.slice(4, 6)}-${part.slice(6, 8)}`;
+        continue;
+      }
+
+      // 2. Coordinate: X...Y... (e.g. X68Y5)
+      if (/^X-?\d+Y-?\d+$/i.test(part)) {
         xy = part;
+        continue;
       }
-      if (/^S\d+/i.test(part)) {
+
+      // 3. Site: S... (e.g. S2, S14)
+      if (/^S\d+$/i.test(part)) {
         site = part.replace(/^S/i, "Site ");
+        continue;
       }
-      if (/^P\d+/i.test(part)) {
+
+      // 4. Pad: P... (e.g. P6, P25)
+      if (/^P\d+$/i.test(part)) {
         pad = part.replace(/^P/i, "Pad ");
+        continue;
+      }
+
+      // 5. Inspection status keyword (OK, NG, PASS, FAIL, REJECT)
+      if (/^(OK|NG|PASS|FAIL|REJECT)$/i.test(part)) {
+        continue;
+      }
+
+      // 6. Temperature (2-3 digit number at end, e.g. 300)
+      if (/^\d{2,3}$/.test(part) && i === parts.length - 1) {
+        continue;
+      }
+
+      // 7. Wafer ID / Batch identifier (e.g. SUC720-15F0, C01W02, BATCH123)
+      if (batch === "-") {
+        waferNo = part;
+        if (part.includes("-")) {
+          batch = part.split("-")[0];
+        } else {
+          const m = part.match(/^([A-Z0-9]+?)(W[A-Z0-9]+)$/i);
+          batch = m ? m[1] : part;
+        }
       }
     }
-    return { batch, xy, site, pad };
+
+    // Fallback for standard position: parts[1] is wafer/batch if not assigned
+    if (batch === "-" && parts.length > 1 && parts[1]) {
+      const part = parts[1];
+      waferNo = part;
+      batch = part.includes("-") ? part.split("-")[0] : part;
+    }
+
+    return { batch, waferNo, xy, site, pad, dateTime };
   };
 
   const meta = parseFilenameMeta(benchmarkSplitModalItem.image_name);

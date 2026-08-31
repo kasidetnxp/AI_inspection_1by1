@@ -2268,17 +2268,40 @@ body.light-theme .matrix-cell {
   border-collapse: collapse;
 }
 
-.benchmark-review-table th {
-  padding: 8px 10px !important;
+.benchmark-review-table thead th {
+  position: sticky;
+  top: 0;
+  background: var(--bg-card, #111827);
+  z-index: 5;
+  box-shadow: 0 1px 0 var(--border-color);
+  padding: 10px 10px !important;
   font-size: 13.5px !important;
   font-weight: 700 !important;
   letter-spacing: 0.3px;
+}
+
+body.light-theme .benchmark-review-table thead th {
+  background: #ffffff;
+  box-shadow: 0 1px 0 #cbd5e1;
 }
 
 .benchmark-review-table td {
   padding: 8px 10px !important;
   font-size: 13.5px !important;
   font-weight: 500 !important;
+}
+
+.benchmark-review-table tbody tr {
+  transition: background-color 0.15s ease;
+  cursor: pointer;
+}
+
+.benchmark-review-table tbody tr:hover {
+  background: rgba(2, 132, 199, 0.08) !important;
+}
+
+body.light-theme .benchmark-review-table tbody tr:hover {
+  background: rgba(2, 132, 199, 0.05) !important;
 }
 
 .review-toolbar {
