@@ -125,6 +125,7 @@ export default function App() {
   const [analyticsFilter, setAnalyticsFilter] = useState("ALL");
   const [analyticsBatchFilter, setAnalyticsBatchFilter] = useState("ALL");
   const [analyticsMachineFilter, setAnalyticsMachineFilter] = useState("ALL");
+  const [analyticsDateFilter, setAnalyticsDateFilter] = useState("ALL");
   const [historyPage, setHistoryPage] = useState(1);
   const [historyPageSize, setHistoryPageSize] = useState(25);
   const [historyViewMode, setHistoryViewMode] = useState("dashboard"); // "dashboard" or "table-full"
@@ -133,6 +134,13 @@ export default function App() {
   const [benchmarkPage, setBenchmarkPage] = useState(1);
   const [benchmarkPageSize, setBenchmarkPageSize] = useState(25);
 
+  const getRecordDate = (record) => {
+    if (!record) return "";
+    const raw = record.dateTime || record.timestamp || "";
+    if (!raw || raw === "-") return "";
+    return raw.split(" ")[0];
+  };
+
   // Filter logs logic for History Tab
   const historyList = Array.isArray(history) ? history : [];
   const filteredHistory = historyList.filter(record => {
@@ -140,6 +148,7 @@ export default function App() {
     if (analyticsFilter === "FAIL" && record.decision === "PASS") return false;
     if (analyticsBatchFilter !== "ALL" && record.batch !== analyticsBatchFilter) return false;
     if (analyticsMachineFilter !== "ALL" && (record.machineNo || "PROBER01") !== analyticsMachineFilter) return false;
+    if (analyticsDateFilter !== "ALL" && getRecordDate(record) !== analyticsDateFilter) return false;
     if (filterSearch.trim() !== "") {
       const q = filterSearch.toLowerCase().trim();
       const searchableStr = [
@@ -1659,6 +1668,7 @@ export default function App() {
   };
 
   // Filter logs logic for Analytics Tab
+  const uniqueDates = Array.from(new Set(historyList.map(getRecordDate).filter(Boolean)));
   const uniqueBatches = Array.from(new Set(historyList.map(item => item.batch).filter(b => b && b !== "-")));
   const uniqueMachines = Array.from(new Set(historyList.map(item => item.machineNo || "PROBER01").filter(m => m && m !== "-")));
 
@@ -1933,6 +1943,23 @@ export default function App() {
                     </div>
                   </div>
 
+                  {/* Date Filter */}
+                  {uniqueDates.length > 0 && (
+                    <div className="filter-item" style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                      <label style={{ fontSize: "14px", fontWeight: "bold", color: "var(--text-muted)" }}>Date:</label>
+                      <select
+                        value={analyticsDateFilter}
+                        onChange={(e) => { setAnalyticsDateFilter(e.target.value); setHistoryPage(1); }}
+                        style={{ padding: "6px 12px", borderRadius: "5px", border: "1px solid var(--border-color)", background: "var(--bg-input)", color: "var(--text-main)", fontSize: "14px" }}
+                      >
+                        <option value="ALL">All Dates ({uniqueDates.length})</option>
+                        {uniqueDates.map(d => (
+                          <option key={d} value={d}>{d}</option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+
                   {/* Machine Filter */}
                   {uniqueMachines.length > 0 && (
                     <div className="filter-item" style={{ display: "flex", alignItems: "center", gap: "6px" }}>
@@ -1980,10 +2007,10 @@ export default function App() {
                   </div>
 
                   {/* Reset Filter Button */}
-                  {(filterSearch || analyticsFilter !== "ALL" || analyticsBatchFilter !== "ALL" || analyticsMachineFilter !== "ALL") && (
+                  {(filterSearch || analyticsFilter !== "ALL" || analyticsDateFilter !== "ALL" || analyticsBatchFilter !== "ALL" || analyticsMachineFilter !== "ALL") && (
                     <button
                       style={{ padding: "6px 12px", borderRadius: "5px", border: "none", background: "rgba(239, 68, 68, 0.15)", color: "#ef4444", cursor: "pointer", fontSize: "13.5px", fontWeight: "bold" }}
-                      onClick={() => { setFilterSearch(""); setAnalyticsFilter("ALL"); setAnalyticsBatchFilter("ALL"); setAnalyticsMachineFilter("ALL"); setHistoryPage(1); }}
+                      onClick={() => { setFilterSearch(""); setAnalyticsFilter("ALL"); setAnalyticsDateFilter("ALL"); setAnalyticsBatchFilter("ALL"); setAnalyticsMachineFilter("ALL"); setHistoryPage(1); }}
                     >
                       Reset Filter
                     </button>
