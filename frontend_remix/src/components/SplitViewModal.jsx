@@ -18,11 +18,35 @@ export default function SplitViewModal() {
 
   const [commentText, setCommentText] = useState("");
 
+  // Zoom & Pan Interactive State (Split View)
+  const [zoom, setZoom] = useState(1);
+  const [pan, setPan] = useState({ x: 0, y: 0 });
+  const [isPanning, setIsPanning] = useState(false);
+  const [startPan, setStartPan] = useState({ x: 0, y: 0 });
+
   useEffect(() => {
     if (benchmarkSplitModalItem) {
       setCommentText(benchmarkSplitModalItem.notes || "");
+      setZoom(1);
+      setPan({ x: 0, y: 0 });
     }
   }, [benchmarkSplitModalItem?.id, benchmarkSplitModalItem?.notes]);
+
+  // Keyboard navigation & escape listener
+  useEffect(() => {
+    if (!benchmarkSplitModalItem) return;
+    const handleKeyDown = (e) => {
+      if (e.key === "Escape") {
+        setBenchmarkSplitModalItem(null);
+      } else if (e.key === "ArrowLeft") {
+        handlePrevBenchmarkItem();
+      } else if (e.key === "ArrowRight") {
+        handleNextBenchmarkItem();
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [benchmarkSplitModalItem, setBenchmarkSplitModalItem, handlePrevBenchmarkItem, handleNextBenchmarkItem]);
 
   if (!benchmarkSplitModalItem) return null;
 
@@ -45,7 +69,6 @@ export default function SplitViewModal() {
       const part = parts[i];
       if (!part) continue;
 
-      // 1. Process Time: 14-digit or 8-digit timestamp (e.g. 20260813155201)
       if (/^\d{14}$/.test(part)) {
         dateTime = `${part.slice(0, 4)}-${part.slice(4, 6)}-${part.slice(6, 8)} ${part.slice(8, 10)}:${part.slice(10, 12)}:${part.slice(12, 14)}`;
         continue;
@@ -54,36 +77,24 @@ export default function SplitViewModal() {
         dateTime = `${part.slice(0, 4)}-${part.slice(4, 6)}-${part.slice(6, 8)}`;
         continue;
       }
-
-      // 2. Coordinate: X...Y... (e.g. X68Y5)
       if (/^X-?\d+Y-?\d+$/i.test(part)) {
         xy = part;
         continue;
       }
-
-      // 3. Site: S... (e.g. S2, S14)
       if (/^S\d+$/i.test(part)) {
         site = part.replace(/^S/i, "Site ");
         continue;
       }
-
-      // 4. Pad: P... (e.g. P6, P25)
       if (/^P\d+$/i.test(part)) {
         pad = part.replace(/^P/i, "Pad ");
         continue;
       }
-
-      // 5. Inspection status keyword (OK, NG, PASS, FAIL, REJECT)
       if (/^(OK|NG|PASS|FAIL|REJECT)$/i.test(part)) {
         continue;
       }
-
-      // 6. Temperature (2-3 digit number at end, e.g. 300)
       if (/^\d{2,3}$/.test(part) && i === parts.length - 1) {
         continue;
       }
-
-      // 7. Wafer ID / Batch identifier (e.g. SUC720-15F0, C01W02, BATCH123)
       if (batch === "-") {
         waferNo = part;
         if (part.includes("-")) {
@@ -95,7 +106,6 @@ export default function SplitViewModal() {
       }
     }
 
-    // Fallback for standard position: parts[1] is wafer/batch if not assigned
     if (batch === "-" && parts.length > 1 && parts[1]) {
       const part = parts[1];
       waferNo = part;
@@ -112,7 +122,7 @@ export default function SplitViewModal() {
     "unet_pytorch_new.pth";
 
   return (
-    <div className="split-view-modal-backdrop" onClick={() => setBenchmarkSplitModalItem(null)}>
+    <div className="split-view-modal-backdrop modal-overlay" onClick={() => setBenchmarkSplitModalItem(null)}>
       <div
         className="split-view-modal-content hmi-card"
         style={{
@@ -151,7 +161,7 @@ export default function SplitViewModal() {
                 <button
                   className="modal-nav-btn"
                   onClick={handlePrevBenchmarkItem}
-                  title="Previous Image"
+                  title="Previous Image (Keyboard: ←)"
                   style={{ padding: "4px 12px", fontSize: "12px" }}
                 >
                   ◀ PREV
@@ -162,7 +172,7 @@ export default function SplitViewModal() {
                 <button
                   className="modal-nav-btn"
                   onClick={handleNextBenchmarkItem}
-                  title="Next Image"
+                  title="Next Image (Keyboard: →)"
                   style={{ padding: "4px 12px", fontSize: "12px" }}
                 >
                   NEXT ▶
@@ -174,7 +184,7 @@ export default function SplitViewModal() {
               className="clear-history-btn"
               style={{ marginLeft: "8px", padding: "4px 12px", fontSize: "12px" }}
               onClick={() => setBenchmarkSplitModalItem(null)}
-              title="Close modal"
+              title="Close modal (Esc)"
             >
               Close
             </button>
@@ -194,56 +204,157 @@ export default function SplitViewModal() {
             overflow: "hidden"
           }}
         >
-          {/* LEFT: 2 SPLIT IMAGES VIEWPORT WITH FLOATING ARROWS */}
+          {/* LEFT: 2 SPLIT IMAGES VIEWPORT WITH FLOATING ARROWS & ZOOM */}
           <div
+            className="zoomable-container"
             style={{
-              display: "grid",
-              gridTemplateColumns: "1fr 1fr",
-              gap: "12px",
+              position: "relative",
               height: "100%",
               minHeight: 0,
-              position: "relative"
+              overflow: "hidden",
+              borderRadius: "8px",
+              background: "#070913",
+              border: "1px solid var(--border-color)",
+              cursor: zoom > 1 ? (isPanning ? "grabbing" : "grab") : "default"
+            }}
+            onWheel={(e) => {
+              const delta = e.deltaY < 0 ? 0.2 : -0.2;
+              setZoom(prev => {
+                const next = Math.min(5.0, Math.max(1.0, Math.round((prev + delta) * 10) / 10));
+                if (next === 1.0) setPan({ x: 0, y: 0 });
+                return next;
+              });
+            }}
+            onMouseDown={(e) => {
+              if (zoom <= 1.0) return;
+              setIsPanning(true);
+              setStartPan({ x: e.clientX - pan.x, y: e.clientY - pan.y });
+            }}
+            onMouseMove={(e) => {
+              if (!isPanning || zoom <= 1.0) return;
+              setPan({ x: e.clientX - startPan.x, y: e.clientY - startPan.y });
+            }}
+            onMouseUp={() => setIsPanning(false)}
+            onMouseLeave={() => setIsPanning(false)}
+            onDoubleClick={() => {
+              if (zoom > 1.0) {
+                setZoom(1);
+                setPan({ x: 0, y: 0 });
+              } else {
+                setZoom(2);
+              }
             }}
           >
-            {/* Floating Prev / Next Slider Arrows like Historical modal */}
+            {/* Floating Zoom Controls Toolbar */}
+            <div className="zoom-toolbar-floating">
+              <button
+                className="zoom-btn"
+                aria-label="Zoom Out"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setZoom(prev => {
+                    const next = Math.max(1.0, Math.round((prev - 0.25) * 100) / 100);
+                    if (next === 1.0) setPan({ x: 0, y: 0 });
+                    return next;
+                  });
+                }}
+                title="Zoom Out"
+              >
+                −
+              </button>
+              <span
+                className="zoom-badge"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setZoom(1);
+                  setPan({ x: 0, y: 0 });
+                }}
+                title="Click to Reset 100%"
+              >
+                {Math.round(zoom * 100)}%
+              </span>
+              <button
+                className="zoom-btn"
+                aria-label="Zoom In"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setZoom(prev => Math.min(5.0, Math.round((prev + 0.25) * 100) / 100));
+                }}
+                title="Zoom In"
+              >
+                +
+              </button>
+              {zoom > 1 && (
+                <button
+                  className="zoom-btn"
+                  aria-label="Reset Zoom"
+                  style={{ fontSize: "11px", width: "22px", height: "22px" }}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setZoom(1);
+                    setPan({ x: 0, y: 0 });
+                  }}
+                  title="Reset 100%"
+                >
+                  ↺
+                </button>
+              )}
+            </div>
+
+            {/* Floating Prev / Next Slider Arrows */}
             {benchmarkResults.length > 1 && (
               <>
                 <button
                   className="modal-nav-arrow left"
                   onClick={handlePrevBenchmarkItem}
-                  title="Previous Image"
+                  title="Previous Image (←)"
                 >
                   ◀
                 </button>
                 <button
                   className="modal-nav-arrow right"
                   onClick={handleNextBenchmarkItem}
-                  title="Next Image"
+                  title="Next Image (→)"
                 >
                   ▶
                 </button>
               </>
             )}
 
-            {/* 1. RAW ORIGINAL IMAGE */}
-            <div className="split-image-box">
-              <span className="split-image-tag">1. RAW OPTICAL DIE</span>
-              <img
-                src={resolveImageUrl(benchmarkSplitModalItem.raw_image_url || benchmarkSplitModalItem.image_url)}
-                alt="Raw Wafer"
-              />
-            </div>
+            {/* Split Images Grid */}
+            <div
+              className="zoomable-target"
+              style={{
+                display: "grid",
+                gridTemplateColumns: "1fr 1fr",
+                gap: "12px",
+                height: "100%",
+                padding: "8px",
+                transform: `scale(${zoom}) translate(${pan.x / zoom}px, ${pan.y / zoom}px)`
+              }}
+            >
+              {/* 1. RAW OPTICAL DIE */}
+              <div className="split-image-box" style={{ height: "100%", display: "flex", flexDirection: "column" }}>
+                <span className="split-image-tag">1. RAW OPTICAL DIE</span>
+                <img
+                  src={resolveImageUrl(benchmarkSplitModalItem.raw_image_url || benchmarkSplitModalItem.image_url)}
+                  alt="Raw Wafer"
+                  style={{ width: "100%", height: "100%", objectFit: "contain", flex: 1 }}
+                />
+              </div>
 
-            {/* 2. AI SEGMENTATION & DISTANCE RULE */}
-            <div className="split-image-box">
-              <span className="split-image-tag">2. AI SEGMENTATION & DISTANCE RULE</span>
-              <img
-                src={resolveImageUrl(benchmarkSplitModalItem.annotated_image_url || benchmarkSplitModalItem.image_url)}
-                alt="AI Annotated"
-                onError={(e) => {
-                  e.target.src = resolveImageUrl(benchmarkSplitModalItem.raw_image_url || benchmarkSplitModalItem.image_url);
-                }}
-              />
+              {/* 2. AI SEGMENTATION & DISTANCE RULE */}
+              <div className="split-image-box" style={{ height: "100%", display: "flex", flexDirection: "column" }}>
+                <span className="split-image-tag">2. AI SEGMENTATION & DISTANCE RULE</span>
+                <img
+                  src={resolveImageUrl(benchmarkSplitModalItem.annotated_image_url || benchmarkSplitModalItem.image_url)}
+                  alt="AI Annotated"
+                  style={{ width: "100%", height: "100%", objectFit: "contain", flex: 1 }}
+                  onError={(e) => {
+                    e.target.src = resolveImageUrl(benchmarkSplitModalItem.raw_image_url || benchmarkSplitModalItem.image_url);
+                  }}
+                />
+              </div>
             </div>
           </div>
 
@@ -385,7 +496,7 @@ export default function SplitViewModal() {
                 )}
               </div>
 
-              {/* Human Decision Action Buttons (Clean without hotkey labels) */}
+              {/* Human Decision Action Buttons */}
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px", marginTop: "2px" }}>
                 <button
                   type="button"

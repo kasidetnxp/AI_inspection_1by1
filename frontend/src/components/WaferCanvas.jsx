@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useEffect } from "react";
 import { useInspection } from "../context/InspectionContext";
 
 export default function WaferCanvas() {
@@ -14,14 +14,8 @@ export default function WaferCanvas() {
     currentInspection
   } = useInspection();
 
-  // Zoom & Pan Interactive State
-  const [zoom, setZoom] = useState(1);
-  const [pan, setPan] = useState({ x: 0, y: 0 });
-  const [isPanning, setIsPanning] = useState(false);
-  const [startPan, setStartPan] = useState({ x: 0, y: 0 });
-
   useEffect(() => {
-    const canvas = canvasRef?.current;
+    const canvas = canvasRef.current;
     if (!canvas) return;
 
     const dpr = window.devicePixelRatio || 1;
@@ -50,7 +44,7 @@ export default function WaferCanvas() {
       c.fillStyle = isLight ? "#f8fafc" : "#0d0e15";
       c.fillRect(0, 0, targetW, targetH);
 
-      if (filters?.grid) {
+      if (filters.grid) {
         c.strokeStyle = isLight ? "rgba(0, 0, 0, 0.05)" : "rgba(255, 255, 255, 0.05)";
         c.lineWidth = 1;
         for (let i = 50; i < targetW; i += 50) {
@@ -110,113 +104,9 @@ export default function WaferCanvas() {
   }, [currentDieImage, compareMode, isLight, filters, loadedImage, loadedRawImage, currentInspection, canvasRef]);
 
   return (
-    <div
-      className="canvas-container zoomable-container"
-      style={{
-        position: "relative",
-        width: "100%",
-        height: "100%",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        overflow: "hidden",
-        cursor: zoom > 1 ? (isPanning ? "grabbing" : "grab") : "default"
-      }}
-      onWheel={(e) => {
-        const delta = e.deltaY < 0 ? 0.2 : -0.2;
-        setZoom(prev => {
-          const next = Math.min(4.0, Math.max(1.0, Math.round((prev + delta) * 10) / 10));
-          if (next === 1.0) setPan({ x: 0, y: 0 });
-          return next;
-        });
-      }}
-      onMouseDown={(e) => {
-        if (zoom <= 1.0) return;
-        setIsPanning(true);
-        setStartPan({ x: e.clientX - pan.x, y: e.clientY - pan.y });
-      }}
-      onMouseMove={(e) => {
-        if (!isPanning || zoom <= 1.0) return;
-        setPan({ x: e.clientX - startPan.x, y: e.clientY - startPan.y });
-      }}
-      onMouseUp={() => setIsPanning(false)}
-      onMouseLeave={() => setIsPanning(false)}
-      onDoubleClick={() => {
-        if (zoom > 1.0) {
-          setZoom(1);
-          setPan({ x: 0, y: 0 });
-        } else {
-          setZoom(2);
-        }
-      }}
-    >
-      {/* Floating Zoom Controls Toolbar */}
-      <div className="zoom-toolbar-floating">
-        <button
-          className="zoom-btn"
-          aria-label="Zoom Out"
-          onClick={(e) => {
-            e.stopPropagation();
-            setZoom(prev => {
-              const next = Math.max(1.0, Math.round((prev - 0.25) * 100) / 100);
-              if (next === 1.0) setPan({ x: 0, y: 0 });
-              return next;
-            });
-          }}
-          title="Zoom Out"
-        >
-          −
-        </button>
-        <span
-          className="zoom-badge"
-          onClick={(e) => {
-            e.stopPropagation();
-            setZoom(1);
-            setPan({ x: 0, y: 0 });
-          }}
-          title="Click to Reset 100%"
-        >
-          {Math.round(zoom * 100)}%
-        </span>
-        <button
-          className="zoom-btn"
-          aria-label="Zoom In"
-          onClick={(e) => {
-            e.stopPropagation();
-            setZoom(prev => Math.min(4.0, Math.round((prev + 0.25) * 100) / 100));
-          }}
-          title="Zoom In"
-        >
-          +
-        </button>
-        {zoom > 1 && (
-          <button
-            className="zoom-btn"
-            aria-label="Reset Zoom"
-            style={{ fontSize: "11px", width: "22px", height: "22px" }}
-            onClick={(e) => {
-              e.stopPropagation();
-              setZoom(1);
-              setPan({ x: 0, y: 0 });
-            }}
-            title="Reset 100%"
-          >
-            ↺
-          </button>
-        )}
-      </div>
-
-      <div className="canvas-wrapper" style={{ width: "100%", height: "100%", position: "relative" }}>
-        <div id="scanner-line" ref={scannerRef} className="scanning-bar"></div>
-        <canvas
-          id="waferCanvas"
-          ref={canvasRef}
-          className={`zoomable-target ${compareMode === "overlay" ? "overlay-mode" : "split-mode"}`}
-          style={{
-            transform: `scale(${zoom}) translate(${pan.x / zoom}px, ${pan.y / zoom}px)`
-          }}
-        />
-      </div>
+    <div className="canvas-wrapper">
+      <div id="scanner-line" ref={scannerRef}></div>
+      <canvas id="waferCanvas" ref={canvasRef} />
     </div>
   );
 }

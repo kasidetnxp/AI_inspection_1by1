@@ -51,3 +51,6 @@ backend_imx8/active_*.json
 .agents/
 .codegraph/
 
+# Local backups
+frontend copy/
+

@@ -566,22 +566,6 @@ export default function ModelsPage() {
                         <button
                           className="review-action-btn"
                           style={{ fontSize: "13px", padding: "6px 12px" }}
-                          onClick={() => handleBatchReview("MARK_UNREVIEWED_PASS")}
-                          title="Set all unreviewed items to PASS"
-                        >
-                          Mark All PASS
-                        </button>
-                        <button
-                          className="review-action-btn"
-                          style={{ fontSize: "13px", padding: "6px 12px" }}
-                          onClick={() => handleBatchReview("MARK_UNREVIEWED_FAIL")}
-                          title="Set all unreviewed items to FAIL"
-                        >
-                          Mark All FAIL
-                        </button>
-                        <button
-                          className="review-action-btn"
-                          style={{ fontSize: "13px", padding: "6px 12px" }}
                           onClick={() => handleBatchReview("RESET_ALL")}
                           title="Reset all reviews back to UNREVIEWED"
                         >

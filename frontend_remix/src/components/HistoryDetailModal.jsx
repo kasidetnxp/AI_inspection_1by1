@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { useInspection } from "../context/InspectionContext";
 
@@ -17,6 +17,34 @@ export default function HistoryDetailModal() {
   } = useInspection();
 
   const navigate = useNavigate();
+
+  // Zoom & Pan Interactive State
+  const [zoom, setZoom] = useState(1);
+  const [pan, setPan] = useState({ x: 0, y: 0 });
+  const [isPanning, setIsPanning] = useState(false);
+  const [startPan, setStartPan] = useState({ x: 0, y: 0 });
+
+  // Reset zoom on item switch
+  useEffect(() => {
+    setZoom(1);
+    setPan({ x: 0, y: 0 });
+  }, [selectedModalItem?.id]);
+
+  // Keyboard navigation & escape listener
+  useEffect(() => {
+    if (!selectedModalItem) return;
+    const handleKeyDown = (e) => {
+      if (e.key === "Escape") {
+        closeModal();
+      } else if (e.key === "ArrowLeft") {
+        handlePrevModalItem();
+      } else if (e.key === "ArrowRight") {
+        handleNextModalItem();
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [selectedModalItem, closeModal, handlePrevModalItem, handleNextModalItem]);
 
   if (!selectedModalItem) return null;
 
@@ -149,9 +177,9 @@ export default function HistoryDetailModal() {
               </div>
             </div>
 
-            {/* Fixed-Size Clean Image Container (No overlays blocking) */}
+            {/* Fixed-Size Clean Image Container (with Zoom & Pan) */}
             <div
-              className="modal-image-container"
+              className="modal-image-container zoomable-container"
               style={{
                 flex: 1,
                 minHeight: 0,
@@ -163,11 +191,115 @@ export default function HistoryDetailModal() {
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
-                position: "relative"
+                position: "relative",
+                cursor: zoom > 1 ? (isPanning ? "grabbing" : "grab") : "default"
+              }}
+              onWheel={(e) => {
+                const delta = e.deltaY < 0 ? 0.2 : -0.2;
+                setZoom(prev => {
+                  const next = Math.min(5.0, Math.max(1.0, Math.round((prev + delta) * 10) / 10));
+                  if (next === 1.0) setPan({ x: 0, y: 0 });
+                  return next;
+                });
+              }}
+              onMouseDown={(e) => {
+                if (zoom <= 1.0) return;
+                setIsPanning(true);
+                setStartPan({ x: e.clientX - pan.x, y: e.clientY - pan.y });
+              }}
+              onMouseMove={(e) => {
+                if (!isPanning || zoom <= 1.0) return;
+                setPan({ x: e.clientX - startPan.x, y: e.clientY - startPan.y });
+              }}
+              onMouseUp={() => setIsPanning(false)}
+              onMouseLeave={() => setIsPanning(false)}
+              onDoubleClick={() => {
+                if (zoom > 1.0) {
+                  setZoom(1);
+                  setPan({ x: 0, y: 0 });
+                } else {
+                  setZoom(2);
+                }
               }}
             >
+              {/* Floating Zoom Controls Toolbar */}
+              <div className="zoom-toolbar-floating">
+                <button
+                  className="zoom-btn"
+                  aria-label="Zoom Out"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setZoom(prev => {
+                      const next = Math.max(1.0, Math.round((prev - 0.25) * 100) / 100);
+                      if (next === 1.0) setPan({ x: 0, y: 0 });
+                      return next;
+                    });
+                  }}
+                  title="Zoom Out"
+                >
+                  −
+                </button>
+                <span
+                  className="zoom-badge"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setZoom(1);
+                    setPan({ x: 0, y: 0 });
+                  }}
+                  title="Click to Reset 100%"
+                >
+                  {Math.round(zoom * 100)}%
+                </span>
+                <button
+                  className="zoom-btn"
+                  aria-label="Zoom In"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setZoom(prev => Math.min(5.0, Math.round((prev + 0.25) * 100) / 100));
+                  }}
+                  title="Zoom In"
+                >
+                  +
+                </button>
+                {zoom > 1 && (
+                  <button
+                    className="zoom-btn"
+                    aria-label="Reset Zoom"
+                    style={{ fontSize: "11px", width: "22px", height: "22px" }}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setZoom(1);
+                      setPan({ x: 0, y: 0 });
+                    }}
+                    title="Reset 100%"
+                  >
+                    ↺
+                  </button>
+                )}
+              </div>
+
+              {currentList.length > 1 && (
+                <>
+                  <button
+                    className="modal-nav-arrow left"
+                    onClick={handlePrevModalItem}
+                    title="Previous Image (←)"
+                  >
+                    ◀
+                  </button>
+                  <button
+                    className="modal-nav-arrow right"
+                    onClick={handleNextModalItem}
+                    title="Next Image (→)"
+                  >
+                    ▶
+                  </button>
+                </>
+              )}
+
               {selectedModalItem.comparisonImageUrl || selectedModalItem.imageUrl ? (
                 <img
+                  className="zoomable-target"
                   key={selectedModalItem.id + "_" + (selectedModalItem.imageUrl || "") + "_" + modalViewMode}
                   src={resolveImageUrl(
                     modalViewMode === "raw"
@@ -181,7 +313,8 @@ export default function HistoryDetailModal() {
                     width: "100%",
                     height: "100%",
                     objectFit: "contain",
-                    display: "block"
+                    display: "block",
+                    transform: `scale(${zoom}) translate(${pan.x / zoom}px, ${pan.y / zoom}px)`
                   }}
                 />
               ) : (
