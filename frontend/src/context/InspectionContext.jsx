@@ -258,12 +258,21 @@ export function InspectionProvider({ children }) {
   const [modalViewMode, setModalViewMode] = useState("split");
 
   const getActiveModalList = () => {
-    return (activeTab === "analytics" && filteredHistory.length > 0) ? filteredHistory : historyList;
+    if (activeTab === "history" || activeTab === "analytics") {
+      return filteredHistory;
+    }
+    return filteredHistory.length > 0 ? filteredHistory : historyList;
   };
 
   const openModalWithItem = (item, idx) => {
     setSelectedModalItem(item);
-    setSelectedModalIndex(idx);
+    const currentList = getActiveModalList();
+    let trueIdx = (idx !== undefined && idx !== null) ? idx : -1;
+    if (trueIdx < 0 || trueIdx >= currentList.length || (currentList[trueIdx] && currentList[trueIdx].id !== item.id)) {
+      const foundIdx = currentList.findIndex(x => (x.id && x.id === item.id) || x === item);
+      trueIdx = foundIdx >= 0 ? foundIdx : 0;
+    }
+    setSelectedModalIndex(trueIdx);
     mapInspectionData(item);
   };
 
@@ -276,7 +285,11 @@ export function InspectionProvider({ children }) {
     if (e) e.stopPropagation();
     const currentList = getActiveModalList();
     if (currentList.length === 0) return;
-    const curIdx = selectedModalIndex !== null && selectedModalIndex >= 0 ? selectedModalIndex : 0;
+    let curIdx = selectedModalIndex !== null && selectedModalIndex >= 0 ? selectedModalIndex : 0;
+    if (selectedModalItem && currentList[curIdx]?.id !== selectedModalItem?.id) {
+      const foundIdx = currentList.findIndex(item => (item.id && item.id === selectedModalItem.id) || item === selectedModalItem);
+      if (foundIdx !== -1) curIdx = foundIdx;
+    }
     const prevIdx = (curIdx - 1 + currentList.length) % currentList.length;
     const prevItem = currentList[prevIdx];
     if (prevItem) {
@@ -290,7 +303,11 @@ export function InspectionProvider({ children }) {
     if (e) e.stopPropagation();
     const currentList = getActiveModalList();
     if (currentList.length === 0) return;
-    const curIdx = selectedModalIndex !== null && selectedModalIndex >= 0 ? selectedModalIndex : 0;
+    let curIdx = selectedModalIndex !== null && selectedModalIndex >= 0 ? selectedModalIndex : 0;
+    if (selectedModalItem && currentList[curIdx]?.id !== selectedModalItem?.id) {
+      const foundIdx = currentList.findIndex(item => (item.id && item.id === selectedModalItem.id) || item === selectedModalItem);
+      if (foundIdx !== -1) curIdx = foundIdx;
+    }
     const nextIdx = (curIdx + 1) % currentList.length;
     const nextItem = currentList[nextIdx];
     if (nextItem) {
@@ -502,6 +519,7 @@ export function InspectionProvider({ children }) {
       if (res.ok) {
         setConfigUploadStatus(data.message || "Product recipe updated");
         fetchActiveConfig();
+        fetchConfigLibrary();
       } else {
         setConfigUploadStatus(data.message || "Upload failed");
       }
@@ -528,6 +546,7 @@ export function InspectionProvider({ children }) {
       if (res.ok) {
         setConfigUploadStatus(data.message || "Machine setting updated");
         fetchActiveConfig();
+        fetchConfigLibrary();
       } else {
         setConfigUploadStatus(data.message || "Upload failed");
       }
@@ -555,6 +574,111 @@ export function InspectionProvider({ children }) {
       }
     } catch (err) {
       setConfigUploadStatus(`Error: ${err.message}`);
+    }
+  };
+
+  // ==========================================
+  // CONFIG LIBRARY & MODEL BINDING
+  // ==========================================
+  const [configLibrary, setConfigLibrary] = useState({
+    recipes: [],
+    machines: [],
+    bindings: {},
+    active_recipe: "",
+    active_machine: ""
+  });
+
+  const fetchConfigLibrary = useCallback(async () => {
+    try {
+      const res = await fetch(`${apiBase}/api/configs`);
+      if (res.ok) {
+        const data = await res.json();
+        setConfigLibrary(data);
+        return data;
+      }
+    } catch (err) {
+      console.warn("Failed fetching config library:", err);
+    }
+    return null;
+  }, [apiBase]);
+
+  const handleActivateRecipe = async (name) => {
+    try {
+      const res = await fetch(`${apiBase}/api/config/activate-recipe`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setConfigUploadStatus(`Activated Recipe: ${name}`);
+        fetchConfigLibrary();
+        fetchActiveConfig();
+      } else {
+        setConfigUploadStatus(`Failed activating recipe: ${data.detail || data.message}`);
+      }
+    } catch (err) {
+      setConfigUploadStatus(`Error: ${err.message}`);
+    }
+  };
+
+  const handleActivateMachine = async (name) => {
+    try {
+      const res = await fetch(`${apiBase}/api/config/activate-machine`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setConfigUploadStatus(`Activated Machine Setting: ${name}`);
+        fetchConfigLibrary();
+        fetchActiveConfig();
+      } else {
+        setConfigUploadStatus(`Failed activating machine setting: ${data.detail || data.message}`);
+      }
+    } catch (err) {
+      setConfigUploadStatus(`Error: ${err.message}`);
+    }
+  };
+
+  const handleBindModelConfig = async (modelName, recipeName, machineName) => {
+    try {
+      const res = await fetch(`${apiBase}/api/config/bind`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model_name: modelName,
+          recipe: recipeName,
+          machine_config: machineName
+        })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setConfigUploadStatus(`Bound model '${modelName}' to recipe '${recipeName}'`);
+        fetchConfigLibrary();
+        fetchActiveConfig();
+      }
+    } catch (err) {
+      console.error("Bind error:", err);
+    }
+  };
+
+  const handleDeleteConfigFile = async (configType, filename) => {
+    if (!window.confirm(`Delete ${configType} config '${filename}'?`)) return;
+    try {
+      const res = await fetch(`${apiBase}/api/config/${configType}/${filename}`, {
+        method: "DELETE"
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setConfigUploadStatus(`Deleted config: ${filename}`);
+        fetchConfigLibrary();
+      } else {
+        alert(data.detail || data.message || "Delete failed");
+      }
+    } catch (err) {
+      alert(`Error: ${err.message}`);
     }
   };
 
@@ -919,8 +1043,12 @@ export function InspectionProvider({ children }) {
         return res.json();
       })
       .then(data => {
+        setModelsList(prev => prev.map(m => ({ ...m, active: m.name === model.name })));
+        setBenchmarkModel(model.name);
         alert(`[NPU HOT-SWAP SUCCESS]\nModel '${model.name}' activated on i.MX8 NPU Delegate!`);
         fetchModels();
+        fetchConfigLibrary();
+        fetchActiveConfig();
       })
       .catch(err => {
         console.error("Activation error:", err);
@@ -940,6 +1068,7 @@ export function InspectionProvider({ children }) {
       .then(data => {
         alert(`Deleted model '${model.name}' successfully!`);
         fetchModels();
+        fetchConfigLibrary();
       })
       .catch(err => {
         setModelsList(prev => prev.filter(m => m.name !== model.name));
@@ -992,7 +1121,8 @@ export function InspectionProvider({ children }) {
 
   useEffect(() => {
     fetchModels();
-  }, [edgeIp]);
+    fetchConfigLibrary();
+  }, [edgeIp, fetchConfigLibrary]);
 
   // ==========================================
   // CONNECTED MODE: WEBSOCKETS & API CLIENT
@@ -1106,6 +1236,8 @@ export function InspectionProvider({ children }) {
         } else if (payload.event === "BENCHMARK_REVIEW_UPDATED" && payload.data) {
           if (payload.data.kpis) setBenchmarkKpis(payload.data.kpis);
           setBenchmarkResults(prev => (Array.isArray(prev) ? prev : []).map(r => r.id === payload.data.result_id ? { ...r, human_decision: payload.data.human_decision } : r));
+        } else if (payload.event === "MODEL_ACTIVATED") {
+          fetchModels();
         }
       };
 
@@ -1827,6 +1959,7 @@ export function InspectionProvider({ children }) {
     clockStr,
     closeModal,
     compareMode,
+    configLibrary,
     configUploadStatus,
     convertingModelName,
     currentDieImage,
@@ -1845,6 +1978,7 @@ export function InspectionProvider({ children }) {
     fetchBenchmarkDatasets,
     fetchBenchmarkProgress,
     fetchBenchmarkResults,
+    fetchConfigLibrary,
     fetchModels,
     fileInputRef,
     filterSearch,
@@ -1855,10 +1989,14 @@ export function InspectionProvider({ children }) {
     getActiveModalList,
     getDefaultEdgeIp,
     getRecordDate,
+    handleActivateMachine,
     handleActivateModel,
+    handleActivateRecipe,
     handleApplyPreset,
     handleBatchReview,
+    handleBindModelConfig,
     handleCustomBenchmarkUpload,
+    handleDeleteConfigFile,
     handleDeleteModel,
     handleExportBenchmarkCSV,
     handleMachineUpload,

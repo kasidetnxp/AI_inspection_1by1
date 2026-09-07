@@ -6,11 +6,17 @@ export default function SettingsPage() {
     activeConfig,
     apiBase,
     benchmarkRules,
+    configLibrary,
     configUploadStatus,
     dbType,
     edgeIp,
     fetchActiveConfig,
+    fetchConfigLibrary,
+    handleActivateMachine,
+    handleActivateRecipe,
     handleApplyPreset,
+    handleBindModelConfig,
+    handleDeleteConfigFile,
     handleMachineUpload,
     handleProductUpload,
     handleSaveIp,
@@ -22,6 +28,7 @@ export default function SettingsPage() {
     isSimRunning,
     isUploadingMachine,
     isUploadingProduct,
+    modelsList,
     pingResult,
     runSingleOfflineInspection,
     saveIpSuccess,
@@ -47,10 +54,37 @@ export default function SettingsPage() {
 
   useEffect(() => {
     fetchActiveConfig();
-  }, [fetchActiveConfig]);
+    fetchConfigLibrary();
+  }, [fetchActiveConfig, fetchConfigLibrary]);
 
   return (
-          <div className="tab-content active-tab" id="view-settings" style={{ padding: "24px 28px", maxWidth: "1500px", margin: "0 auto", overflowY: "auto", display: "flex", flexDirection: "column", gap: "24px", width: "100%", boxSizing: "border-box" }}>
+    <div
+      className="tab-content active-tab"
+      id="view-settings"
+      style={{
+        flex: "1 1 0%",
+        minHeight: 0,
+        height: "calc(100vh - var(--header-height))",
+        maxHeight: "calc(100vh - var(--header-height))",
+        overflowY: "auto",
+        overflowX: "hidden",
+        width: "100%",
+        display: "block",
+        boxSizing: "border-box"
+      }}
+    >
+      <div
+        style={{
+          padding: "24px 28px 80px 28px",
+          maxWidth: "1500px",
+          margin: "0 auto",
+          width: "100%",
+          display: "flex",
+          flexDirection: "column",
+          gap: "24px",
+          boxSizing: "border-box"
+        }}
+      >
             
             {/* TOP ROW: 2 BALANCED CARDS */}
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(460px, 1fr))", gap: "24px" }}>
@@ -381,8 +415,183 @@ export default function SettingsPage() {
 
               </div>
 
+              {/* STORED CONFIGURATIONS & MODEL BINDINGS LIBRARY */}
+              <div style={{ marginTop: "12px", borderTop: "1px solid var(--border-color)", paddingTop: "20px", display: "flex", flexDirection: "column", gap: "16px" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "10px" }}>
+                  <div>
+                    <h4 style={{ margin: 0, fontSize: "16px", fontWeight: "700", letterSpacing: "0.5px" }}>STORED CONFIGURATIONS & MODEL BINDINGS</h4>
+                    <div style={{ fontSize: "13px", color: "var(--text-muted)", marginTop: "2px" }}>
+                      Select active configuration profiles or bind recipes to specific AI models for automated loading upon model activation.
+                    </div>
+                  </div>
+                  <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                    <span className="badge-result pass font-mono" style={{ fontSize: "11px", padding: "4px 10px" }}>
+                      Active Recipe: {configLibrary.active_recipe || "Product_Settine.txt"}
+                    </span>
+                    <span className="badge-result info font-mono" style={{ fontSize: "11px", padding: "4px 10px" }}>
+                      Active Machine: {configLibrary.active_machine || "Machine_Setting.txt"}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="table-container" style={{ border: "1px solid var(--border-color)", borderRadius: "8px", overflow: "hidden" }}>
+                  <table className="history-table models-table" style={{ width: "100%", borderCollapse: "collapse" }}>
+                    <thead>
+                      <tr>
+                        <th style={{ width: "120px" }}>Type</th>
+                        <th>Config File</th>
+                        <th style={{ width: "90px" }}>Size</th>
+                        <th style={{ width: "160px" }}>Last Modified</th>
+                        <th style={{ minWidth: "220px" }}>Bound AI Model</th>
+                        <th style={{ width: "110px", textAlign: "center" }}>Status</th>
+                        <th style={{ width: "180px", textAlign: "center" }}>Action</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {/* Recipes */}
+                      {(configLibrary.recipes || []).map((rec, idx) => {
+                        const boundModelName = (modelsList || []).find(m => {
+                          const b = configLibrary.bindings?.[m.name];
+                          return b?.recipe === rec.name;
+                        })?.name || "";
+
+                        return (
+                          <tr key={`rec-${idx}`} className={rec.active ? "row-active-model" : ""}>
+                            <td>
+                              <span style={{ fontSize: "11px", fontWeight: "700", padding: "3px 8px", borderRadius: "4px", background: "rgba(14, 165, 233, 0.12)", color: "var(--color-info)" }}>
+                                RECIPE
+                              </span>
+                            </td>
+                            <td className="font-mono" style={{ fontWeight: "700" }}>{rec.name}</td>
+                            <td className="font-mono" style={{ fontSize: "12px" }}>{rec.size}</td>
+                            <td className="font-mono" style={{ fontSize: "12px", color: "var(--text-muted)" }}>{rec.updatedAt}</td>
+                            <td>
+                              <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                                <select
+                                  className="lab-select"
+                                  style={{ padding: "4px 8px", fontSize: "12px", borderRadius: "4px", background: "rgba(255,255,255,0.04)", border: "1px solid var(--border-color)", color: "var(--text-main)" }}
+                                  value={boundModelName}
+                                  onChange={(e) => {
+                                    if (e.target.value) {
+                                      handleBindModelConfig(e.target.value, rec.name, configLibrary.active_machine);
+                                    }
+                                  }}
+                                >
+                                  <option value="">-- Assign to Model --</option>
+                                  {(modelsList || []).map((m, mIdx) => (
+                                    <option key={mIdx} value={m.name}>
+                                      {m.name} {configLibrary.bindings?.[m.name]?.recipe === rec.name ? "(Bound)" : ""}
+                                    </option>
+                                  ))}
+                                </select>
+                                {rec.boundModels && rec.boundModels.length > 0 && (
+                                  <span style={{ fontSize: "11px", color: "var(--color-info)", fontWeight: "600" }}>
+                                    {rec.boundModels.join(", ")}
+                                  </span>
+                                )}
+                              </div>
+                            </td>
+                            <td style={{ textAlign: "center" }}>
+                              <span className={`badge-result ${rec.active ? "pass" : "warn"}`} style={{ fontSize: "11px", padding: "3px 8px" }}>
+                                {rec.active ? "ACTIVE" : "SAVED"}
+                              </span>
+                            </td>
+                            <td style={{ textAlign: "center" }}>
+                              <div style={{ display: "flex", gap: "6px", justifyContent: "center" }}>
+                                {rec.active ? (
+                                  <button className="action-btn-sm active-green" disabled style={{ fontSize: "11px", padding: "4px 8px" }}>
+                                    CURRENT
+                                  </button>
+                                ) : (
+                                  <button
+                                    className="action-btn-sm"
+                                    style={{ fontSize: "11px", padding: "4px 8px" }}
+                                    onClick={() => handleActivateRecipe(rec.name)}
+                                    title={`Apply ${rec.name}`}
+                                  >
+                                    ACTIVATE
+                                  </button>
+                                )}
+                                {!rec.active && (
+                                  <button
+                                    className="action-btn-sm delete-red"
+                                    style={{ fontSize: "11px", padding: "4px 8px" }}
+                                    onClick={() => handleDeleteConfigFile("product", rec.name)}
+                                    title={`Delete ${rec.name}`}
+                                  >
+                                    DELETE
+                                  </button>
+                                )}
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+
+                      {/* Machine Settings */}
+                      {(configLibrary.machines || []).map((mach, idx) => (
+                        <tr key={`mach-${idx}`} className={mach.active ? "row-active-model" : ""}>
+                          <td>
+                            <span style={{ fontSize: "11px", fontWeight: "700", padding: "3px 8px", borderRadius: "4px", background: "rgba(245, 158, 11, 0.12)", color: "var(--color-warn)" }}>
+                              MACHINE
+                            </span>
+                          </td>
+                          <td className="font-mono" style={{ fontWeight: "700" }}>{mach.name}</td>
+                          <td className="font-mono" style={{ fontSize: "12px" }}>{mach.size}</td>
+                          <td className="font-mono" style={{ fontSize: "12px", color: "var(--text-muted)" }}>{mach.updatedAt}</td>
+                          <td style={{ fontSize: "12px", color: "var(--text-muted)" }}>Applied to system runtime</td>
+                          <td style={{ textAlign: "center" }}>
+                            <span className={`badge-result ${mach.active ? "pass" : "warn"}`} style={{ fontSize: "11px", padding: "3px 8px" }}>
+                              {mach.active ? "ACTIVE" : "SAVED"}
+                            </span>
+                          </td>
+                          <td style={{ textAlign: "center" }}>
+                            <div style={{ display: "flex", gap: "6px", justifyContent: "center" }}>
+                              {mach.active ? (
+                                <button className="action-btn-sm active-green" disabled style={{ fontSize: "11px", padding: "4px 8px" }}>
+                                  CURRENT
+                                </button>
+                              ) : (
+                                <button
+                                  className="action-btn-sm"
+                                  style={{ fontSize: "11px", padding: "4px 8px" }}
+                                  onClick={() => handleActivateMachine(mach.name)}
+                                  title={`Apply ${mach.name}`}
+                                >
+                                  ACTIVATE
+                                </button>
+                              )}
+                              {!mach.active && (
+                                <button
+                                  className="action-btn-sm delete-red"
+                                  style={{ fontSize: "11px", padding: "4px 8px" }}
+                                  onClick={() => handleDeleteConfigFile("machine", mach.name)}
+                                  title={`Delete ${mach.name}`}
+                                >
+                                  DELETE
+                                </button>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+
+                      {(!configLibrary.recipes || configLibrary.recipes.length === 0) &&
+                       (!configLibrary.machines || configLibrary.machines.length === 0) && (
+                        <tr>
+                          <td colSpan={7} style={{ textAlign: "center", padding: "24px", color: "var(--text-muted)" }}>
+                            No configurations stored in library. Upload Product Recipe or Machine Setting above.
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
             </div>
 
           </div>
+        </div>
   );
 }

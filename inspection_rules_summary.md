@@ -98,9 +98,11 @@ flowchart TD
 
 | Parameter | ค่าปัจจุบัน | คำอธิบาย |
 |---|---|---|
-| `min_overlap_pct` | **0.5** (50%) | % overlap ขั้นต่ำของ probemark ที่ต้องทับกับ pad จึงจะจับคู่และตรวจสอบ |
+| `min_overlap_pct` | **0.0** (ปิดการข้าม) | % overlap ขั้นต่ำของ probemark ที่ต้องทับกับ pad จึงจะจับคู่และตรวจสอบ (ตั้ง 0.0 = ไม่กรองทิ้ง) |
 
-**ผล:** Probemark ที่ overlap กับ pad ทุก pad น้อยกว่า 50% จะถูก**ข้ามไป** (ไม่นำมาตรวจสอบ ไม่ FAIL)
+**ผล:** 
+- Probemark ที่มี overlap กับ Pad แม้แต่น้อย หรือชิดขอบนอกขอบ จะถูกจับคู่กับ Pad เสมอ และถูกส่งไปตรวจระยะขอบ (Distance Check) ทำให้ได้ผล **FAIL** ทันทีถ้าชิดขอบหรือกินขอบออกนอก Pad
+- Probemark ที่อยู่นอก Pad ทั้งหมด (0% overlap) จะถูกจับคู่กับ Pad ที่ใกล้ที่สุด และถูกตัดสินเป็น **FAIL** (`distance = 0.0 um`)
 
 ---
 
@@ -159,6 +161,16 @@ Grain ถูกนำไปใช้ใน **Pad Shape Correction** เท่า
 | ไม่มี PM บน pad | **FAIL** | No probemark detected on pad (strict mode) |
 | ไม่พบ pad เลย | **FAIL** | Unknown (Cannot classify pad) |
 | Greyscale < 0 (ปิด) | — | (ไม่ใช้งาน) |
-| PM overlap < 50% | **ข้ามไป** | (ไม่ตรวจ PM นี้) |
+| PM overlap < 50% หรือชิดขอบนอกขอบ | **FAIL** | ตรวจทุก PM เสมอ (`min_overlap_pct=0.0`) ไม่ข้ามรอยชิดขอบ/นอกขอบ |
 | Grain | **ไม่กระทบ** | Visual only |
 | ผ่านทุกเงื่อนไข | **PASS** | - |
+
+---
+
+## AI Model Format & Quantization (i.MX8 NPU)
+
+- **Target Deployment:** ระบบใช้งานเฉพาะโมเดล **TensorFlow Lite INT8 (`.tflite`)** เพื่อเร่งความเร็วผ่าน NPU Hardware Acceleration บนบอร์ด i.MX8
+- **Model Upload Pipeline:**
+  - รองรับการอัปโหลดไฟล์โมเดล `.pth` (PyTorch) หรือ `.tflite` (INT8 พร้อมใช้งาน)
+  - เมื่ออัปโหลดไฟล์ `.pth` ระบบจะทำ Full INT8 Post-Training Quantization แปลงเป็น `.tflite` อัตโนมัติ โดยใช้ภาพตัวอย่างจริงสำหรับ Calibration
+  - **ยกเลิกการแปลงและบันทึกไฟล์ `.onnx`**: ปิดการ Export ไฟล์ ONNX ออกจากระบบแล้ว เนื่องจากฮาร์ดแวร์ NPU บน i.MX8 ใช้งานเฉพาะ TFLite INT8

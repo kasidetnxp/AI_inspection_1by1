@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useRef } from "react";
+import React, { createContext, useContext, useState, useEffect, useRef, useCallback } from "react";
 import {
   Chart as ChartJS,
   CategoryScale,
@@ -12,6 +12,17 @@ import {
   Legend,
   Filler
 } from "chart.js";
+import { Doughnut, Bar, Line } from "react-chartjs-2";
+import {
+  formatBatchWafer,
+  normalizeRecordDate,
+  getRecordTimestampMs,
+  getNumericValue,
+  sortRecords,
+  getRecordDisplayDateTime,
+  generateExportFilename,
+  isDateRangeInvalid
+} from "../utils/historyHelpers";
 
 ChartJS.register(
   CategoryScale,
@@ -40,10 +51,37 @@ export function InspectionProvider({ children }) {
   // ==========================================
   // STATE MANAGEMENT
   // ==========================================
+  const [activeTab, setActiveTab] = useState("inspect");
   const [compareMode, setCompareMode] = useState("split");
   const [isLight, setIsLight] = useState(true);
+
+  const getDefaultEdgeIp = () => {
+    const saved = typeof localStorage !== "undefined" ? localStorage.getItem("IMX8_EDGE_IP") : null;
+    if (saved && saved !== "10.42.0.1" && saved !== "10.42.0.95") return saved;
+    const hostname = typeof window !== "undefined" ? (window.location.hostname || "localhost") : "localhost";
+    return (hostname === "0.0.0.0" || hostname === "::") ? "localhost" : hostname;
+  };
+
+  const [edgeIp, setEdgeIp] = useState(getDefaultEdgeIp);
+  const apiBase = `http://${edgeIp}:8001`;
+
+  const resolveImageUrl = (url) => {
+    if (!url) return null;
+    if (url.startsWith("http://") || url.startsWith("https://")) {
+      return url.replace(/^https?:\/\/[^/]+/, apiBase);
+    }
+    if (url.startsWith("/")) {
+      return `${apiBase}${url}`;
+    }
+    return `${apiBase}/${url}`;
+  };
+
+  const updateEdgeIp = (newIp) => {
+    setEdgeIp(newIp);
+    localStorage.setItem("IMX8_EDGE_IP", newIp);
+  };
+
   const [isBackendConnected, setIsBackendConnected] = useState(false);
-  const [connectionStatus, setConnectionStatus] = useState("DISCONNECTED"); // "CONNECTED" | "CONNECTING" | "DISCONNECTED"
   const [dbType, setDbType] = useState("PostgreSQL");
 
   const [filters, setFilters] = useState({
@@ -95,33 +133,205 @@ export function InspectionProvider({ children }) {
   // Time clock
   const [clockStr, setClockStr] = useState("");
 
-  // DOM Canvas & Scanner Refs
+  // DOM Canvas Refs
   const canvasRef = useRef(null);
+  const donutCanvasRef = useRef(null);
+  const barCanvasRef = useRef(null);
+  const lineCanvasRef = useRef(null);
   const scannerRef = useRef(null);
 
-  // Analytics Tab Filters
+  // History Tab Filters & Enhanced Pagination & Sorting
   const [filterSearch, setFilterSearch] = useState("");
   const [analyticsFilter, setAnalyticsFilter] = useState("ALL");
   const [analyticsBatchFilter, setAnalyticsBatchFilter] = useState("ALL");
   const [analyticsMachineFilter, setAnalyticsMachineFilter] = useState("ALL");
+  const [analyticsDateFilter, setAnalyticsDateFilter] = useState("ALL");
+  const [dateRangePreset, setDateRangePreset] = useState("ALL"); // "ALL" | "TODAY" | "7D" | "30D" | "CUSTOM"
+  const [startDate, setStartDate] = useState("");
+  const [endDate, setEndDate] = useState("");
+  const [sortField, setSortField] = useState("timestamp");
+  const [sortOrder, setSortOrder] = useState("desc"); // "desc" | "asc"
+  const [historyPage, setHistoryPage] = useState(1);
+  const [historyPageSize, setHistoryPageSize] = useState(25);
+  const [historyViewMode, setHistoryViewMode] = useState("dashboard"); // "dashboard" or "table-full"
+
+  // Benchmark / Test Tab Pagination State (mirrors history pagination)
+  const [benchmarkPage, setBenchmarkPage] = useState(1);
+  const [benchmarkPageSize, setBenchmarkPageSize] = useState(25);
+
+  const getRecordDate = (record) => {
+    return normalizeRecordDate(record);
+  };
+
+  const handleSort = (field) => {
+    if (sortField === field) {
+      setSortOrder(prev => (prev === "asc" ? "desc" : "asc"));
+    } else {
+      setSortField(field);
+      setSortOrder(field === "timestamp" ? "desc" : "asc");
+    }
+    setHistoryPage(1);
+  };
+
+  const setDatePreset = (preset) => {
+    setDateRangePreset(preset);
+    if (preset !== "CUSTOM") {
+      setStartDate("");
+      setEndDate("");
+    }
+    setHistoryPage(1);
+  };
+
+  const resetAllFilters = () => {
+    setFilterSearch("");
+    setAnalyticsFilter("ALL");
+    setAnalyticsBatchFilter("ALL");
+    setAnalyticsMachineFilter("ALL");
+    setAnalyticsDateFilter("ALL");
+    setDateRangePreset("ALL");
+    setStartDate("");
+    setEndDate("");
+    setSortField("timestamp");
+    setSortOrder("desc");
+    setHistoryPage(1);
+  };
+
+  // Filter logs logic for History Tab with sorting & date range
+  const historyList = Array.isArray(history) ? history : [];
+  
+  const todayStr = (() => {
+    const now = new Date();
+    const y = now.getFullYear();
+    const m = String(now.getMonth() + 1).padStart(2, "0");
+    const d = String(now.getDate()).padStart(2, "0");
+    return `${y}-${m}-${d}`;
+  })();
+
+  const rawFilteredHistory = historyList.filter(record => {
+    if (analyticsFilter === "PASS" && record.decision !== "PASS") return false;
+    if (analyticsFilter === "FAIL" && record.decision === "PASS") return false;
+    if (analyticsBatchFilter !== "ALL" && record.batch !== analyticsBatchFilter) return false;
+    if (analyticsMachineFilter !== "ALL" && (record.machineNo || "PROBER01") !== analyticsMachineFilter) return false;
+    
+    // Date Filtering
+    const recDate = normalizeRecordDate(record);
+    const recMs = getRecordTimestampMs(record);
+    const nowMs = Date.now();
+
+    if (dateRangePreset === "TODAY") {
+      if (recDate && recDate !== todayStr) return false;
+    } else if (dateRangePreset === "7D") {
+      if (recMs > 0 && recMs < (nowMs - 7 * 86400000)) return false;
+    } else if (dateRangePreset === "30D") {
+      if (recMs > 0 && recMs < (nowMs - 30 * 86400000)) return false;
+    } else if (dateRangePreset === "CUSTOM") {
+      if (startDate && recDate && recDate < startDate) return false;
+      if (endDate && recDate && recDate > endDate) return false;
+    } else if (analyticsDateFilter !== "ALL") {
+      if (recDate !== analyticsDateFilter) return false;
+    }
+
+    // Search Filtering
+    if (filterSearch.trim() !== "") {
+      const q = filterSearch.toLowerCase().trim();
+      const searchableStr = [
+        record.machineNo, record.batch, record.waferNo, record.xyCoord,
+        record.site, record.pad, record.timeShort, record.timestamp, record.dateTime,
+        record.decision, record.reason, record.productSetup, record.temp, record.id
+      ].join(" ").toLowerCase();
+      if (!searchableStr.includes(q)) return false;
+    }
+    return true;
+  });
+
+  const filteredHistory = sortRecords(rawFilteredHistory, sortField, sortOrder);
+
+  const totalHistoryPages = Math.max(1, Math.ceil(filteredHistory.length / (historyPageSize === "ALL" ? Math.max(1, filteredHistory.length) : Number(historyPageSize))));
+  const effectiveHistoryPage = Math.min(historyPage, totalHistoryPages);
+  const paginatedHistory = (historyPageSize === "ALL")
+    ? filteredHistory
+    : filteredHistory.slice((effectiveHistoryPage - 1) * Number(historyPageSize), effectiveHistoryPage * Number(historyPageSize));
 
   // Historical Inspection Image Modal State
   const [selectedModalItem, setSelectedModalItem] = useState(null);
   const [selectedModalIndex, setSelectedModalIndex] = useState(null);
   const [modalViewMode, setModalViewMode] = useState("split");
 
-  // Model validation lab states
+  const getActiveModalList = () => {
+    if (activeTab === "history" || activeTab === "analytics") {
+      return filteredHistory;
+    }
+    return filteredHistory.length > 0 ? filteredHistory : historyList;
+  };
+
+  const openModalWithItem = (item, idx) => {
+    setSelectedModalItem(item);
+    const currentList = getActiveModalList();
+    let trueIdx = (idx !== undefined && idx !== null) ? idx : -1;
+    if (trueIdx < 0 || trueIdx >= currentList.length || (currentList[trueIdx] && currentList[trueIdx].id !== item.id)) {
+      const foundIdx = currentList.findIndex(x => (x.id && x.id === item.id) || x === item);
+      trueIdx = foundIdx >= 0 ? foundIdx : 0;
+    }
+    setSelectedModalIndex(trueIdx);
+    mapInspectionData(item);
+  };
+
+  const closeModal = () => {
+    setSelectedModalItem(null);
+    setSelectedModalIndex(null);
+  };
+
+  const handlePrevModalItem = (e) => {
+    if (e) e.stopPropagation();
+    const currentList = getActiveModalList();
+    if (currentList.length === 0) return;
+    let curIdx = selectedModalIndex !== null && selectedModalIndex >= 0 ? selectedModalIndex : 0;
+    if (selectedModalItem && currentList[curIdx]?.id !== selectedModalItem?.id) {
+      const foundIdx = currentList.findIndex(item => (item.id && item.id === selectedModalItem.id) || item === selectedModalItem);
+      if (foundIdx !== -1) curIdx = foundIdx;
+    }
+    const prevIdx = (curIdx - 1 + currentList.length) % currentList.length;
+    const prevItem = currentList[prevIdx];
+    if (prevItem) {
+      setSelectedModalIndex(prevIdx);
+      setSelectedModalItem(prevItem);
+      mapInspectionData(prevItem);
+    }
+  };
+
+  const handleNextModalItem = (e) => {
+    if (e) e.stopPropagation();
+    const currentList = getActiveModalList();
+    if (currentList.length === 0) return;
+    let curIdx = selectedModalIndex !== null && selectedModalIndex >= 0 ? selectedModalIndex : 0;
+    if (selectedModalItem && currentList[curIdx]?.id !== selectedModalItem?.id) {
+      const foundIdx = currentList.findIndex(item => (item.id && item.id === selectedModalItem.id) || item === selectedModalItem);
+      if (foundIdx !== -1) curIdx = foundIdx;
+    }
+    const nextIdx = (curIdx + 1) % currentList.length;
+    const nextItem = currentList[nextIdx];
+    if (nextItem) {
+      setSelectedModalIndex(nextIdx);
+      setSelectedModalItem(nextItem);
+      mapInspectionData(nextItem);
+    }
+  };
+
+  // ==============================================================================
+  // MODEL VALIDATION LAB & HUMAN REVIEW STATE
+  // ==============================================================================
   const fileInputRef = useRef(null);
   const benchmarkFileInputRef = useRef(null);
   const [isDragging, setIsDragging] = useState(false);
   const [isBenchmarkDragging, setIsBenchmarkDragging] = useState(false);
   const [loadedImage, setLoadedImage] = useState(null);
   const [loadedRawImage, setLoadedRawImage] = useState(null);
+  const [selectedClasses, setSelectedClasses] = useState(3);
   const [modelsList, setModelsList] = useState([]);
   const [isModelConverting, setIsModelConverting] = useState(false);
   const [convertingModelName, setConvertingModelName] = useState("");
 
-  const [benchmarkActiveSubTab, setBenchmarkActiveSubTab] = useState("hub");
+  const [benchmarkActiveSubTab, setBenchmarkActiveSubTab] = useState("hub"); // "hub" | "validation" | "registry"
   const [benchmarkModel, setBenchmarkModel] = useState("unet.tflite");
   const [benchmarkZipFile, setBenchmarkZipFile] = useState(null);
   const [benchmarkDataset, setBenchmarkDataset] = useState("all_wafers");
@@ -167,151 +377,359 @@ export function InspectionProvider({ children }) {
     confusion_matrix: { tp: 0, fp: 0, tn: 0, fn: 0 }
   });
 
+  const priority_dispatcher_status_color = (status) => {
+    if (status === "P0_PRODUCTION") return "#ef4444";
+    if (status === "P1_BENCHMARK") return "#0ea5e9";
+    return "var(--text-muted)";
+  };
+
   const [benchmarkFilter, setBenchmarkFilter] = useState("ALL");
   const [benchmarkSearch, setBenchmarkSearch] = useState("");
   const [benchmarkSplitModalItem, setBenchmarkSplitModalItem] = useState(null);
   const [benchmarkSplitModalIndex, setBenchmarkSplitModalIndex] = useState(0);
+  const [benchmarkModalComment, setBenchmarkModalComment] = useState("");
   const [benchmarkReportModalOpen, setBenchmarkReportModalOpen] = useState(false);
   const [benchmarkReportData, setBenchmarkReportData] = useState(null);
   const [isBenchmarkStarting, setIsBenchmarkStarting] = useState(false);
 
-  // Edge Node IP Configuration
-  const getDefaultEdgeIp = () => {
-    const saved = localStorage.getItem("IMX8_EDGE_IP");
-    if (saved && saved !== "10.42.0.1" && saved !== "10.42.0.95") return saved;
-    const hostname = typeof window !== "undefined" ? (window.location.hostname || "localhost") : "localhost";
-    return (hostname === "0.0.0.0" || hostname === "::") ? "localhost" : hostname;
-  };
-
-  const [edgeIp, setEdgeIp] = useState(getDefaultEdgeIp);
-  const apiBase = `http://${edgeIp}:8001`;
-
-  const resolveImageUrl = (url) => {
-    if (!url) return null;
-    if (url.startsWith("http://") || url.startsWith("https://")) {
-      return url.replace(/^https?:\/\/[^/]+/, apiBase);
+  useEffect(() => {
+    if (benchmarkSplitModalItem) {
+      setBenchmarkModalComment(benchmarkSplitModalItem.notes || "");
     }
-    if (url.startsWith("/")) {
-      return `${apiBase}${url}`;
+  }, [benchmarkSplitModalItem?.id, benchmarkSplitModalItem?.notes]);
+
+  // Configuration Management State (Product_Settine & Machine_Setting)
+  const [activeConfig, setActiveConfig] = useState({
+    product: {},
+    machine: {},
+    computed: {}
+  });
+  const [configUploadStatus, setConfigUploadStatus] = useState("");
+  const [isUploadingProduct, setIsUploadingProduct] = useState(false);
+  const [isUploadingMachine, setIsUploadingMachine] = useState(false);
+
+  // Settings State: Edge IP & Live Thresholds
+  const [tempIp, setTempIp] = useState(edgeIp);
+  const [saveIpSuccess, setSaveIpSuccess] = useState(false);
+  const [pingResult, setPingResult] = useState(null);
+  const [isPinging, setIsPinging] = useState(false);
+  const [settingsFailDist, setSettingsFailDist] = useState(8.0);
+  const [settingsMaxArea, setSettingsMaxArea] = useState(25.0);
+  const [isSavingThresholds, setIsSavingThresholds] = useState(false);
+  const [hasInitializedThresholds, setHasInitializedThresholds] = useState(false);
+
+  useEffect(() => {
+    setTempIp(edgeIp);
+  }, [edgeIp]);
+
+  useEffect(() => {
+    if (activeConfig?.computed && !hasInitializedThresholds) {
+      if (activeConfig.computed.failDistanceUm != null) {
+        setSettingsFailDist(Number(activeConfig.computed.failDistanceUm));
+      }
+      if (activeConfig.computed.maxAreaRatioPct != null) {
+        setSettingsMaxArea(Number(activeConfig.computed.maxAreaRatioPct));
+      }
+      setHasInitializedThresholds(true);
     }
-    return `${apiBase}/${url}`;
+  }, [activeConfig, hasInitializedThresholds]);
+
+  const handleSaveIp = (e) => {
+    if (e && e.preventDefault) e.preventDefault();
+    const sanitized = tempIp.trim();
+    if (!sanitized) return;
+    updateEdgeIp(sanitized);
+    setSaveIpSuccess(true);
+    setTimeout(() => setSaveIpSuccess(false), 2500);
+    handleTestPing(sanitized);
   };
 
-  const updateEdgeIp = (newIp) => {
-    const sanitized = (newIp || "").trim();
-    setIsBackendConnected(false);
-    setConnectionStatus("CONNECTING");
-    setEdgeIp(sanitized);
-    localStorage.setItem("IMX8_EDGE_IP", sanitized);
-  };
-
-  // Active Health Check Probe
-  const testConnection = async (targetIp) => {
-    const ip = (targetIp || edgeIp).trim();
-    const url = `http://${ip}:8001/api/sys-stats`;
-    const startTime = performance.now();
+  const handleTestPing = async (ipToTest) => {
+    const target = (ipToTest || tempIp || edgeIp).trim();
+    setIsPinging(true);
+    setPingResult(null);
     try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 2500);
-      const res = await fetch(url, { signal: controller.signal });
-      clearTimeout(timeoutId);
-      const latency = Math.round(performance.now() - startTime);
+      const t0 = performance.now();
+      const res = await fetch(`http://${target}:8001/api/models`, { signal: AbortSignal.timeout(3500) });
+      const latency = Math.round(performance.now() - t0);
+      if (res.ok) {
+        setPingResult({ ok: true, message: `${latency} ms (Online)` });
+      } else {
+        setPingResult({ ok: false, message: `HTTP ${res.status}` });
+      }
+    } catch (err) {
+      setPingResult({ ok: false, message: "Offline / Unreachable" });
+    } finally {
+      setIsPinging(false);
+    }
+  };
+
+  const fetchActiveConfig = useCallback(async () => {
+    try {
+      const res = await fetch(`${apiBase}/api/config/active`);
       if (res.ok) {
         const data = await res.json();
-        return { ok: true, latency, data, message: `Connected (${latency} ms)` };
+        setActiveConfig(data);
+        return data;
       }
-      return { ok: false, latency, message: `HTTP ${res.status}: ${res.statusText}` };
     } catch (err) {
-      const latency = Math.round(performance.now() - startTime);
-      if (err.name === "AbortError") {
-        return { ok: false, latency, message: "Connection timed out (Host Unreachable / Power Off)" };
+      console.warn("Failed fetching active config:", err);
+    }
+    return null;
+  }, [apiBase]);
+
+  const handleSaveThresholds = async () => {
+    setIsSavingThresholds(true);
+    try {
+      const res = await fetch(`${apiBase}/api/config/update-thresholds`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          fail_distance_um: settingsFailDist,
+          max_area_ratio_pct: settingsMaxArea
+        })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setConfigUploadStatus(data.message || "Thresholds updated successfully");
+        fetchActiveConfig();
+      } else {
+        setConfigUploadStatus(data.message || "Failed updating thresholds");
       }
-      return { ok: false, latency, message: err.message || "Connection refused / Offline" };
+    } catch (err) {
+      setConfigUploadStatus(`Error: ${err.message}`);
+    } finally {
+      setIsSavingThresholds(false);
     }
   };
 
-  // Filter logs logic
-  const historyList = Array.isArray(history) ? history : [];
-  const filteredHistory = historyList.filter(record => {
-    if (analyticsFilter === "PASS" && record.decision !== "PASS") return false;
-    if (analyticsFilter === "FAIL" && record.decision === "PASS") return false;
-    if (analyticsBatchFilter !== "ALL" && record.batch !== analyticsBatchFilter) return false;
-    if (analyticsMachineFilter !== "ALL" && (record.machineNo || "PROBER01") !== analyticsMachineFilter) return false;
-    if (filterSearch.trim() !== "") {
-      const q = filterSearch.toLowerCase().trim();
-      const searchableStr = [
-        record.machineNo, record.batch, record.waferNo, record.xyCoord,
-        record.site, record.pad, record.timeShort, record.timestamp,
-        record.decision, record.reason, record.productSetup, record.temp, record.id
-      ].join(" ").toLowerCase();
-      if (!searchableStr.includes(q)) return false;
+  const handleProductUpload = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setIsUploadingProduct(true);
+    setConfigUploadStatus("Uploading Product Recipe...");
+    const formData = new FormData();
+    formData.append("file", file);
+    try {
+      const res = await fetch(`${apiBase}/api/config/upload-product`, {
+        method: "POST",
+        body: formData
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setConfigUploadStatus(data.message || "Product recipe updated");
+        fetchActiveConfig();
+        fetchConfigLibrary();
+      } else {
+        setConfigUploadStatus(data.message || "Upload failed");
+      }
+    } catch (err) {
+      setConfigUploadStatus(`Error: ${err.message}`);
+    } finally {
+      setIsUploadingProduct(false);
+    }
+  };
+
+  const handleMachineUpload = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setIsUploadingMachine(true);
+    setConfigUploadStatus("Uploading Machine Setting...");
+    const formData = new FormData();
+    formData.append("file", file);
+    try {
+      const res = await fetch(`${apiBase}/api/config/upload-machine`, {
+        method: "POST",
+        body: formData
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setConfigUploadStatus(data.message || "Machine setting updated");
+        fetchActiveConfig();
+        fetchConfigLibrary();
+      } else {
+        setConfigUploadStatus(data.message || "Upload failed");
+      }
+    } catch (err) {
+      setConfigUploadStatus(`Error: ${err.message}`);
+    } finally {
+      setIsUploadingMachine(false);
+    }
+  };
+
+  const handleApplyPreset = async (presetName) => {
+    try {
+      setConfigUploadStatus(`Applying preset '${presetName}'...`);
+      const res = await fetch(`${apiBase}/api/config/apply-preset`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ preset_name: presetName })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setConfigUploadStatus(data.message || "Preset applied");
+        fetchActiveConfig();
+      } else {
+        setConfigUploadStatus(`Failed applying preset: ${data.message}`);
+      }
+    } catch (err) {
+      setConfigUploadStatus(`Error: ${err.message}`);
+    }
+  };
+
+  // ==========================================
+  // CONFIG LIBRARY & MODEL BINDING
+  // ==========================================
+  const [configLibrary, setConfigLibrary] = useState({
+    recipes: [],
+    machines: [],
+    bindings: {},
+    active_recipe: "",
+    active_machine: ""
+  });
+
+  const fetchConfigLibrary = useCallback(async () => {
+    try {
+      const res = await fetch(`${apiBase}/api/configs`);
+      if (res.ok) {
+        const data = await res.json();
+        setConfigLibrary(data);
+        return data;
+      }
+    } catch (err) {
+      console.warn("Failed fetching config library:", err);
+    }
+    return null;
+  }, [apiBase]);
+
+  const handleActivateRecipe = async (name) => {
+    try {
+      const res = await fetch(`${apiBase}/api/config/activate-recipe`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setConfigUploadStatus(`Activated Recipe: ${name}`);
+        fetchConfigLibrary();
+        fetchActiveConfig();
+      } else {
+        setConfigUploadStatus(`Failed activating recipe: ${data.detail || data.message}`);
+      }
+    } catch (err) {
+      setConfigUploadStatus(`Error: ${err.message}`);
+    }
+  };
+
+  const handleActivateMachine = async (name) => {
+    try {
+      const res = await fetch(`${apiBase}/api/config/activate-machine`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setConfigUploadStatus(`Activated Machine Setting: ${name}`);
+        fetchConfigLibrary();
+        fetchActiveConfig();
+      } else {
+        setConfigUploadStatus(`Failed activating machine setting: ${data.detail || data.message}`);
+      }
+    } catch (err) {
+      setConfigUploadStatus(`Error: ${err.message}`);
+    }
+  };
+
+  const handleBindModelConfig = async (modelName, recipeName, machineName) => {
+    try {
+      const res = await fetch(`${apiBase}/api/config/bind`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model_name: modelName,
+          recipe: recipeName,
+          machine_config: machineName
+        })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setConfigUploadStatus(`Bound model '${modelName}' to recipe '${recipeName}'`);
+        fetchConfigLibrary();
+        fetchActiveConfig();
+      }
+    } catch (err) {
+      console.error("Bind error:", err);
+    }
+  };
+
+  const handleDeleteConfigFile = async (configType, filename) => {
+    if (!window.confirm(`Delete ${configType} config '${filename}'?`)) return;
+    try {
+      const res = await fetch(`${apiBase}/api/config/${configType}/${filename}`, {
+        method: "DELETE"
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setConfigUploadStatus(`Deleted config: ${filename}`);
+        fetchConfigLibrary();
+      } else {
+        alert(data.detail || data.message || "Delete failed");
+      }
+    } catch (err) {
+      alert(`Error: ${err.message}`);
+    }
+  };
+
+  // Client-side filtering on master benchmarkResults for instant, glitch-free filtering & search
+  const filteredBenchmarkResults = (benchmarkResults || []).filter(item => {
+    if (benchmarkFilter === "DISAGREEMENT") {
+      const isDisagreement = item.human_decision !== "UNREVIEWED" && item.human_decision !== item.ai_decision;
+      if (!isDisagreement) return false;
+    } else if (benchmarkFilter === "UNREVIEWED") {
+      if (item.human_decision !== "UNREVIEWED") return false;
+    } else if (benchmarkFilter === "HUMAN_PASS") {
+      if (item.human_decision !== "PASS") return false;
+    } else if (benchmarkFilter === "HUMAN_FAIL") {
+      if (item.human_decision !== "FAIL") return false;
+    }
+    if (benchmarkSearch.trim() !== "") {
+      const q = benchmarkSearch.toLowerCase().trim();
+      const matchName = (item.image_name || "").toLowerCase().includes(q);
+      const matchReason = (item.ai_reason || "").toLowerCase().includes(q);
+      if (!matchName && !matchReason) return false;
     }
     return true;
   });
 
-  const getActiveModalList = () => {
-    return filteredHistory.length > 0 ? filteredHistory : historyList;
-  };
-
-  const openModalWithItem = (item, idx) => {
-    setSelectedModalItem(item);
-    setSelectedModalIndex(idx);
-    mapInspectionData(item);
-  };
-
-  const closeModal = () => {
-    setSelectedModalItem(null);
-    setSelectedModalIndex(null);
-  };
-
-  const handlePrevModalItem = (e) => {
-    if (e) e.stopPropagation();
-    const currentList = getActiveModalList();
-    if (currentList.length === 0) return;
-    const curIdx = selectedModalIndex !== null && selectedModalIndex >= 0 ? selectedModalIndex : 0;
-    const prevIdx = (curIdx - 1 + currentList.length) % currentList.length;
-    const prevItem = currentList[prevIdx];
-    if (prevItem) {
-      setSelectedModalIndex(prevIdx);
-      setSelectedModalItem(prevItem);
-      mapInspectionData(prevItem);
-    }
-  };
-
-  const handleNextModalItem = (e) => {
-    if (e) e.stopPropagation();
-    const currentList = getActiveModalList();
-    if (currentList.length === 0) return;
-    const curIdx = selectedModalIndex !== null && selectedModalIndex >= 0 ? selectedModalIndex : 0;
-    const nextIdx = (curIdx + 1) % currentList.length;
-    const nextItem = currentList[nextIdx];
-    if (nextItem) {
-      setSelectedModalIndex(nextIdx);
-      setSelectedModalItem(nextItem);
-      mapInspectionData(nextItem);
-    }
-  };
+  const totalBenchmarkPages = Math.max(1, Math.ceil(filteredBenchmarkResults.length / (benchmarkPageSize === "ALL" ? Math.max(1, filteredBenchmarkResults.length) : Number(benchmarkPageSize))));
+  const effectiveBenchmarkPage = Math.min(benchmarkPage, totalBenchmarkPages);
+  const paginatedBenchmarkResults = (benchmarkPageSize === "ALL")
+    ? filteredBenchmarkResults
+    : filteredBenchmarkResults.slice((effectiveBenchmarkPage - 1) * Number(benchmarkPageSize), effectiveBenchmarkPage * Number(benchmarkPageSize));
 
   const handlePrevBenchmarkItem = () => {
-    if (!benchmarkResults || benchmarkResults.length === 0) return;
+    const list = filteredBenchmarkResults.length > 0 ? filteredBenchmarkResults : benchmarkResults;
+    if (!list || list.length === 0) return;
     const curIdx = benchmarkSplitModalIndex >= 0 ? benchmarkSplitModalIndex : 0;
-    const prevIdx = (curIdx - 1 + benchmarkResults.length) % benchmarkResults.length;
+    const prevIdx = (curIdx - 1 + list.length) % list.length;
     setBenchmarkSplitModalIndex(prevIdx);
-    setBenchmarkSplitModalItem(benchmarkResults[prevIdx]);
+    setBenchmarkSplitModalItem(list[prevIdx]);
   };
 
   const handleNextBenchmarkItem = () => {
-    if (!benchmarkResults || benchmarkResults.length === 0) return;
+    const list = filteredBenchmarkResults.length > 0 ? filteredBenchmarkResults : benchmarkResults;
+    if (!list || list.length === 0) return;
     const curIdx = benchmarkSplitModalIndex >= 0 ? benchmarkSplitModalIndex : 0;
-    const nextIdx = (curIdx + 1) % benchmarkResults.length;
+    const nextIdx = (curIdx + 1) % list.length;
     setBenchmarkSplitModalIndex(nextIdx);
-    setBenchmarkSplitModalItem(benchmarkResults[nextIdx]);
+    setBenchmarkSplitModalItem(list[nextIdx]);
   };
 
-  // Keyboard Hotkeys
   useEffect(() => {
     const handleKeyDown = (e) => {
-      // Ignore single-character hotkeys if typing in inputs/textareas
+      // Ignore hotkeys when typing in text fields
       if (["INPUT", "TEXTAREA"].includes(e.target?.tagName)) {
         if (e.key === "Escape") {
           e.target.blur();
@@ -334,10 +752,10 @@ export function InspectionProvider({ children }) {
       if (benchmarkSplitModalItem) {
         if (e.key === "p" || e.key === "P") {
           e.preventDefault();
-          handleSaveHumanReview(benchmarkSplitModalItem, "PASS", benchmarkSplitModalItem.notes || "");
+          handleSaveHumanReview(benchmarkSplitModalItem, "PASS", benchmarkModalComment);
         } else if (e.key === "f" || e.key === "F") {
           e.preventDefault();
-          handleSaveHumanReview(benchmarkSplitModalItem, "FAIL", benchmarkSplitModalItem.notes || "");
+          handleSaveHumanReview(benchmarkSplitModalItem, "FAIL", benchmarkModalComment);
         } else if (e.key === "ArrowLeft") {
           e.preventDefault();
           handlePrevBenchmarkItem();
@@ -351,19 +769,7 @@ export function InspectionProvider({ children }) {
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [selectedModalItem, selectedModalIndex, benchmarkSplitModalItem, benchmarkSplitModalIndex, benchmarkResults, history, analyticsFilter, analyticsBatchFilter, analyticsMachineFilter, filterSearch]);
-
-  // Model & Benchmark API calls
-  const fetchModels = () => {
-    fetch(`${apiBase}/api/models`)
-      .then(res => res.json())
-      .then(data => {
-        if (data && data.length > 0) {
-          setModelsList(data);
-        }
-      })
-      .catch(err => console.error("Error fetching models:", err));
-  };
+  }, [selectedModalItem, selectedModalIndex, benchmarkSplitModalItem, benchmarkSplitModalIndex, benchmarkResults, history, activeTab, analyticsFilter, analyticsBatchFilter, analyticsMachineFilter, filterSearch, benchmarkModalComment]);
 
   const fetchBenchmarkDatasets = () => {
     fetch(`${apiBase}/api/model/benchmark/datasets`)
@@ -384,17 +790,30 @@ export function InspectionProvider({ children }) {
       .then(res => res.ok ? res.json() : null)
       .then(data => {
         if (data) {
-          setBenchmarkProgress(data);
-          if (data.kpis && data.kpis.total_tested > 0) setBenchmarkKpis(data.kpis);
+          setBenchmarkProgress(prev => {
+            const updated = {
+              ...prev,
+              ...data,
+              p1_total: data.p1_total ?? data.total ?? prev.p1_total ?? 0,
+              p1_processed: data.p1_processed ?? data.processed ?? prev.p1_processed ?? 0,
+              status: data.status || prev.status
+            };
+            return JSON.stringify(prev) === JSON.stringify(updated) ? prev : updated;
+          });
+          if (data.kpis && data.kpis.total_tested > 0) {
+            setBenchmarkKpis(prev => {
+              const next = JSON.stringify(data.kpis);
+              return JSON.stringify(prev) === next ? prev : data.kpis;
+            });
+          }
         }
       })
       .catch(err => console.error("Error fetching benchmark progress:", err));
   };
 
-  const fetchBenchmarkResults = (sessionId, filter = "ALL") => {
+  const fetchBenchmarkResults = (sessionId) => {
     const query = new URLSearchParams();
     if (sessionId) query.append("session_id", sessionId);
-    if (filter) query.append("filter", filter);
 
     fetch(`${apiBase}/api/model/benchmark/results?${query.toString()}`)
       .then(res => res.ok ? res.json() : { results: [], kpis: null })
@@ -415,10 +834,27 @@ export function InspectionProvider({ children }) {
     handleCustomBenchmarkUpload([benchmarkZipFile]);
   };
 
+  const handlePauseBenchmark = () => {
+    setBenchmarkProgress(prev => ({ ...prev, status: "PAUSED" }));
+    fetch(`${apiBase}/api/model/benchmark/pause`, { method: "POST" })
+      .then(res => res.json())
+      .then(() => fetchBenchmarkProgress())
+      .catch(err => console.error("Error pausing benchmark:", err));
+  };
+
+  const handleResumeBenchmark = () => {
+    setBenchmarkProgress(prev => ({ ...prev, status: "RUNNING" }));
+    fetch(`${apiBase}/api/model/benchmark/resume`, { method: "POST" })
+      .then(res => res.json())
+      .then(() => fetchBenchmarkProgress())
+      .catch(err => console.error("Error resuming benchmark:", err));
+  };
+
   const handleStopBenchmark = () => {
+    setBenchmarkProgress(prev => ({ ...prev, status: "STOPPED", active_priority: "IDLE" }));
     fetch(`${apiBase}/api/model/benchmark/stop`, { method: "POST" })
       .then(res => res.json())
-      .then(() => {
+      .then(data => {
         fetchBenchmarkProgress();
       })
       .catch(err => console.error("Error stopping benchmark:", err));
@@ -478,12 +914,10 @@ export function InspectionProvider({ children }) {
       formData.append("files", filesList[i]);
     }
     formData.append("model_name", benchmarkModel);
-    formData.append("fail_distance_um", benchmarkRules.fail_distance_um);
-    formData.append("max_area_ratio_pct", benchmarkRules.max_area_ratio_pct);
-    formData.append("min_area_ratio_pct", benchmarkRules.min_area_ratio_pct);
-    formData.append("missing_mark_action", benchmarkRules.missing_mark_action);
+    // ponytail: rule params now read from config file on backend side
 
     setIsBenchmarkStarting(true);
+    setBenchmarkProgress(prev => ({ ...prev, status: "RUNNING", p1_processed: 0 }));
     fetch(`${apiBase}/api/model/benchmark/upload-images`, {
       method: "POST",
       body: formData
@@ -492,13 +926,14 @@ export function InspectionProvider({ children }) {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         return res.json();
       })
-      .then(() => {
+      .then(data => {
         setIsBenchmarkStarting(false);
         setBenchmarkResults([]);
         fetchBenchmarkProgress();
       })
       .catch(err => {
         setIsBenchmarkStarting(false);
+        setBenchmarkProgress(prev => ({ ...prev, status: "IDLE" }));
         console.error("Custom benchmark upload error:", err);
         alert(`Failed to upload images: ${err.message}`);
       });
@@ -584,7 +1019,7 @@ export function InspectionProvider({ children }) {
         }
         return res.json();
       })
-      .then((data) => {
+      .then(data => {
         setIsModelConverting(false);
         const finalName = data.name || file.name;
         alert(`[UPLOAD SUCCESS] อัปโหลดโมเดล '${finalName}' สำเร็จ!\n\n${isPth ? "ระบบได้แปลงไฟล์เป็น TFLite (INT8) สำหรับรันบน NPU เรียบร้อยแล้ว" : ""}`);
@@ -608,8 +1043,12 @@ export function InspectionProvider({ children }) {
         return res.json();
       })
       .then(data => {
+        setModelsList(prev => prev.map(m => ({ ...m, active: m.name === model.name })));
+        setBenchmarkModel(model.name);
         alert(`[NPU HOT-SWAP SUCCESS]\nModel '${model.name}' activated on i.MX8 NPU Delegate!`);
         fetchModels();
+        fetchConfigLibrary();
+        fetchActiveConfig();
       })
       .catch(err => {
         console.error("Activation error:", err);
@@ -626,16 +1065,21 @@ export function InspectionProvider({ children }) {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         return res.json();
       })
-      .then(() => {
+      .then(data => {
         alert(`Deleted model '${model.name}' successfully!`);
         fetchModels();
+        fetchConfigLibrary();
       })
-      .catch(() => {
+      .catch(err => {
         setModelsList(prev => prev.filter(m => m.name !== model.name));
       });
   };
 
-  // Sync Theming
+
+
+  // ==========================================
+  // SYNC THEMING & ROLE WITH DOCUMENT BODY
+  // ==========================================
   useEffect(() => {
     if (isLight) {
       document.body.classList.add("light-theme");
@@ -644,7 +1088,9 @@ export function InspectionProvider({ children }) {
     }
   }, [isLight]);
 
-  // Real-time Clock
+  // ==========================================
+  // REAL-TIME DATETIME CLOCK
+  // ==========================================
   useEffect(() => {
     const updateClock = () => {
       const now = new Date();
@@ -662,172 +1108,164 @@ export function InspectionProvider({ children }) {
     return () => clearInterval(interval);
   }, []);
 
+  const fetchModels = () => {
+    fetch(`${apiBase}/api/models`)
+      .then(res => res.json())
+      .then(data => {
+        if (data && data.length > 0) {
+          setModelsList(data);
+        }
+      })
+      .catch(err => console.error("Error fetching models:", err));
+  };
+
   useEffect(() => {
     fetchModels();
-  }, [edgeIp]);
+    fetchConfigLibrary();
+  }, [edgeIp, fetchConfigLibrary]);
 
-  // Connected Mode: WebSockets & API client with quiet exponential backoff
+  // ==========================================
+  // CONNECTED MODE: WEBSOCKETS & API CLIENT
+  // ==========================================
   useEffect(() => {
     let ws = null;
     let pollStats = null;
     let reconnectTimeout = null;
-    let isCancelled = false;
-    let backoffDelay = 4000;
 
-    setIsBackendConnected(false);
-    setConnectionStatus("CONNECTING");
+    const connectBackend = () => {
+      console.log(`Attempting connection to FastAPI server at ${edgeIp}:8001...`);
+      ws = new WebSocket(`ws://${edgeIp}:8001/ws`);
 
-    const tryConnect = async () => {
-      if (isCancelled) return;
+      ws.onopen = () => {
+        console.log("WebSocket connection established with NXP i.MX8 backend.");
+        setIsBackendConnected(true);
+        setIsSimRunning(false); // Stop local simulation
+        fetchModels();
 
-      // ponytail: silent fetch probe prevents browser console ERR_CONNECTION_REFUSED spam
-      try {
-        const probe = await fetch(`${apiBase}/api/sys-stats`, {
-          signal: AbortSignal.timeout(2000)
-        });
-        if (!probe.ok) throw new Error("Endpoint returned non-200");
-      } catch (err) {
-        if (isCancelled) return;
-        setIsBackendConnected(false);
-        setConnectionStatus("DISCONNECTED");
-        backoffDelay = Math.min(backoffDelay * 1.5, 20000);
-        reconnectTimeout = setTimeout(tryConnect, backoffDelay);
-        return;
-      }
+        // Fetch initial logs
+        fetch(`${apiBase}/api/history`)
+          .then(r => r.json())
+          .then(data => setHistory(Array.isArray(data) ? data : []))
+          .catch(e => setHistory([]));
 
-      // If probe succeeds, backend is verified live -> open WebSocket cleanly
-      backoffDelay = 4000;
-      setConnectionStatus("CONNECTING");
-
-      try {
-        ws = new WebSocket(`ws://${edgeIp}:8001/ws`);
-
-        ws.onopen = () => {
-          if (isCancelled) {
-            try { ws.close(); } catch (e) {}
-            return;
-          }
-          setIsBackendConnected(true);
-          setConnectionStatus("CONNECTED");
-          setIsSimRunning(false);
-          fetchModels();
-
-          // Fetch initial logs
-          fetch(`${apiBase}/api/history`)
-            .then(r => r.json())
-            .then(data => setHistory(Array.isArray(data) ? data : []))
-            .catch(() => setHistory([]));
-
-          // Fetch latest scan data
-          fetch(`${apiBase}/api/latest-inspection`)
-            .then(r => r.json())
-            .then(data => {
-              if (data && data.id) {
-                mapInspectionData(data);
-              }
-            })
-            .catch(() => {});
-
-          fetchBenchmarkDatasets();
-          fetchBenchmarkProgress();
-          fetchBenchmarkResults();
-
-          pollStats = setInterval(() => {
-            fetch(`${apiBase}/api/sys-stats`)
-              .then(r => r.json())
-              .then(stats => {
-                setSysStats(prev => ({
-                  ...prev,
-                  cpu: stats.cpu ?? prev.cpu,
-                  npu: stats.npu ?? prev.npu,
-                  ram: stats.ram ?? prev.ram,
-                  temp: stats.temp ?? prev.temp
-                }));
-                setDbType(stats.db);
-              })
-              .catch(() => {
-                setIsBackendConnected(false);
-                setConnectionStatus("DISCONNECTED");
-              });
-
-            fetchBenchmarkProgress();
-          }, 3000);
-        };
-
-        ws.onmessage = (event) => {
-          if (isCancelled) return;
-          try {
-            const payload = JSON.parse(event.data);
-            if (payload.event === "NEW_INSPECTION" && payload.data) {
-              mapInspectionData(payload.data);
-              setHistory(prev => {
-                const list = Array.isArray(prev) ? prev : [];
-                const combined = [payload.data, ...list];
-                const seen = new Set();
-                return combined.filter(item => {
-                  const key = item.imageUrl || (item.id + "_" + item.timestamp + "_" + (item.pad || "") + "_" + (item.xyCoord || ""));
-                  if (seen.has(key)) return false;
-                  seen.add(key);
-                  return true;
-                });
-              });
-            } else if (payload.event === "BENCHMARK_PROGRESS" && payload.data) {
-              setBenchmarkProgress(payload.data);
-              if (payload.data.kpis && payload.data.kpis.total_tested > 0) {
-                setBenchmarkKpis(payload.data.kpis);
-              }
-              if (payload.data.latest_result) {
-                setBenchmarkResults(prev => {
-                  const list = Array.isArray(prev) ? prev : [];
-                  const exists = list.some(r => r.id === payload.data.latest_result.id);
-                  if (exists) return list.map(r => r.id === payload.data.latest_result.id ? payload.data.latest_result : r);
-                  return [payload.data.latest_result, ...list];
-                });
-              }
-            } else if (payload.event === "BENCHMARK_REVIEW_UPDATED" && payload.data) {
-              if (payload.data.kpis) setBenchmarkKpis(payload.data.kpis);
-              setBenchmarkResults(prev => (Array.isArray(prev) ? prev : []).map(r => r.id === payload.data.result_id ? { ...r, human_decision: payload.data.human_decision } : r));
+        // Fetch latest scan data
+        fetch(`${apiBase}/api/latest-inspection`)
+          .then(r => r.json())
+          .then(data => {
+            if (data && data.id) {
+              mapInspectionData(data);
             }
-          } catch (e) {}
-        };
+          })
+          .catch(e => console.error(e));
 
-        ws.onerror = () => {
-          setIsBackendConnected(false);
-          setConnectionStatus("DISCONNECTED");
-          if (ws) ws.close();
-        };
+        // Fetch benchmark datasets & progress
+        fetchBenchmarkDatasets();
+        fetchBenchmarkProgress();
+        fetchBenchmarkResults();
 
-        ws.onclose = () => {
-          if (isCancelled) return;
-          setIsBackendConnected(false);
-          setConnectionStatus("DISCONNECTED");
-          if (pollStats) clearInterval(pollStats);
-          reconnectTimeout = setTimeout(tryConnect, backoffDelay);
-        };
-      } catch (err) {
-        setIsBackendConnected(false);
-        setConnectionStatus("DISCONNECTED");
-        if (!isCancelled) {
-          reconnectTimeout = setTimeout(tryConnect, backoffDelay);
+        // Fallback polling loop if real-time hardware WS is inactive
+        pollStats = setInterval(() => {
+          fetch(`${apiBase}/api/sys-stats`)
+            .then(r => r.json())
+            .then(stats => {
+              setSysStats(prev => ({
+                ...prev,
+                cpu: stats.cpu ?? prev.cpu,
+                npu: stats.npu ?? prev.npu,
+                ram: stats.ram ?? prev.ram,
+                temp: stats.temp ?? prev.temp
+              }));
+              setDbType(stats.db);
+            })
+            .catch(e => console.error(e));
+
+          fetchBenchmarkProgress();
+        }, 2500);
+      };
+
+      ws.onmessage = (event) => {
+        const payload = JSON.parse(event.data);
+        if (payload.event === "NEW_INSPECTION" && payload.data) {
+          mapInspectionData(payload.data);
+          setHistory(prev => {
+            const list = Array.isArray(prev) ? prev : [];
+            const combined = [payload.data, ...list];
+            const seen = new Set();
+            return combined.filter(item => {
+              const key = item.imageUrl || (item.id + "_" + item.timestamp + "_" + (item.pad || "") + "_" + (item.xyCoord || ""));
+              if (seen.has(key)) return false;
+              seen.add(key);
+              return true;
+            });
+          });
+        } else if (payload.event === "BENCHMARK_PROGRESS" && payload.data) {
+          const pData = payload.data;
+          setBenchmarkProgress(prev => {
+            const currentTotal = pData.p1_total ?? pData.total ?? prev.p1_total ?? 0;
+            const currentProcessed = pData.p1_processed ?? pData.processed ?? prev.p1_processed ?? 0;
+            const newStatus = pData.status || (currentProcessed < currentTotal && currentTotal > 0 ? "RUNNING" : prev.status);
+
+            const updated = {
+              ...prev,
+              status: newStatus,
+              p1_total: currentTotal,
+              p1_processed: currentProcessed,
+              p0_pending: pData.p0_pending ?? prev.p0_pending ?? 0,
+              p1_pending: pData.p1_pending ?? prev.p1_pending ?? 0,
+              active_priority: pData.active_priority || prev.active_priority || "IDLE",
+              p1_current_image: pData.current_image || pData.p1_current_image || prev.p1_current_image || "",
+              active_session_id: pData.session_id || pData.active_session_id || prev.active_session_id
+            };
+
+            return JSON.stringify(prev) === JSON.stringify(updated) ? prev : updated;
+          });
+          if (payload.data.kpis && payload.data.kpis.total_tested > 0) {
+            setBenchmarkKpis(prev => {
+              const next = JSON.stringify(payload.data.kpis);
+              return JSON.stringify(prev) === next ? prev : payload.data.kpis;
+            });
+          }
+          if (payload.data.latest_result) {
+            setBenchmarkResults(prev => {
+              const list = Array.isArray(prev) ? prev : [];
+              const exists = list.some(r => r.id === payload.data.latest_result.id);
+              if (exists) return list.map(r => r.id === payload.data.latest_result.id ? payload.data.latest_result : r);
+              return [...list, payload.data.latest_result];
+            });
+          }
+        } else if (payload.event === "BENCHMARK_REVIEW_UPDATED" && payload.data) {
+          if (payload.data.kpis) setBenchmarkKpis(payload.data.kpis);
+          setBenchmarkResults(prev => (Array.isArray(prev) ? prev : []).map(r => r.id === payload.data.result_id ? { ...r, human_decision: payload.data.human_decision } : r));
+        } else if (payload.event === "MODEL_ACTIVATED") {
+          fetchModels();
         }
-      }
+      };
+
+
+      ws.onerror = () => {
+        ws.close();
+      };
+
+      ws.onclose = () => {
+        console.log("FastAPI backend is offline. Running in offline client simulator mode.");
+        setIsBackendConnected(false);
+        if (pollStats) clearInterval(pollStats);
+        reconnectTimeout = setTimeout(connectBackend, 5000);
+      };
     };
 
-    tryConnect();
+    connectBackend();
 
     return () => {
-      isCancelled = true;
-      if (ws) {
-        try { ws.close(); } catch (e) {}
-      }
+      if (ws) ws.close();
       if (pollStats) clearInterval(pollStats);
       if (reconnectTimeout) clearTimeout(reconnectTimeout);
-      setIsBackendConnected(false);
-      setConnectionStatus("DISCONNECTED");
     };
   }, [edgeIp]);
 
-  // Real-time Hardware Monitoring WebSocket
+  // ==========================================
+  // REAL-TIME HARDWARE MONITORING WEBSOCKET
+  // ==========================================
   useEffect(() => {
     let hwWs = null;
     let reconnectTimeout = null;
@@ -836,8 +1274,12 @@ export function InspectionProvider({ children }) {
     const connectHardwareMonitor = () => {
       const hostname = typeof window !== "undefined" ? (window.location.hostname || "localhost") : "localhost";
       const pcWsUrl = `ws://${hostname}:3000/ws/hardware`;
+      const imx8WsUrl = `ws://${edgeIp}:8001/ws/hardware`;
+
+      // Try PC NestJS relay first, with fallback to direct i.MX8 WebSocket
       const targetUrl = pcWsUrl;
 
+      console.log(`[HMI] Connecting to Real-time Hardware WS at ${targetUrl}...`);
       try {
         hwWs = new WebSocket(targetUrl);
 
@@ -848,35 +1290,34 @@ export function InspectionProvider({ children }) {
         hwWs.onmessage = (event) => {
           if (!isSubscribed) return;
           try {
-            const msg = JSON.parse(event.data);
-            if (msg.event === "SYS_STATS_STREAM" && msg.data) {
-              setSysStats(prev => ({
-                ...prev,
-                cpu: msg.data.cpu ?? prev.cpu,
-                npu: msg.data.npu ?? prev.npu,
-                ram: msg.data.ram ?? prev.ram,
-                temp: msg.data.temp ?? prev.temp
-              }));
-              if (msg.data.db) setDbType(msg.data.db);
+            const parsed = JSON.parse(event.data);
+            const data = parsed.data || parsed;
+            if (data && typeof data.cpu !== "undefined") {
+              setSysStats({
+                cpu: data.cpu,
+                ram: data.ram,
+                temp: data.temp,
+                npu: data.npu
+              });
             }
           } catch (e) {
-            console.error("[HMI] Failed to parse hardware telemetry frame:", e);
+            console.error("[HMI] Error parsing hardware metrics payload:", e);
           }
         };
 
         hwWs.onerror = () => {
-          hwWs.close();
+          if (hwWs) hwWs.close();
         };
 
         hwWs.onclose = () => {
-          if (isSubscribed) {
-            reconnectTimeout = setTimeout(connectHardwareMonitor, 3000);
-          }
+          if (!isSubscribed) return;
+          console.warn("[HMI] Real-time Hardware WS closed. Reconnecting in 2s...");
+          reconnectTimeout = setTimeout(connectHardwareMonitor, 2000);
         };
       } catch (err) {
-        console.error("[HMI] Hardware WebSocket creation error:", err);
+        console.error("[HMI] Failed to initiate Real-time Hardware WS:", err);
         if (isSubscribed) {
-          reconnectTimeout = setTimeout(connectHardwareMonitor, 3000);
+          reconnectTimeout = setTimeout(connectHardwareMonitor, 2000);
         }
       }
     };
@@ -888,49 +1329,79 @@ export function InspectionProvider({ children }) {
       if (hwWs) hwWs.close();
       if (reconnectTimeout) clearTimeout(reconnectTimeout);
     };
-  }, []);
+  }, [edgeIp]);
 
-  const animateScannerLine = () => {
-    if (scannerRef.current) {
-      scannerRef.current.style.transition = "none";
-      scannerRef.current.style.top = "0%";
-      scannerRef.current.style.opacity = "1";
-      setTimeout(() => {
-        if (scannerRef.current) {
-          scannerRef.current.style.transition = "top 0.6s cubic-bezier(0.4, 0, 0.2, 1)";
-          scannerRef.current.style.top = "100%";
+
+  const preloadImages = (annotatedUrl, rawUrl) => {
+    return new Promise((resolve) => {
+      let loadedAnn = null;
+      let loadedRaw = null;
+      let pending = 0;
+      let resolved = false;
+
+      const finish = () => {
+        if (!resolved) {
+          resolved = true;
+          resolve({ loadedAnn, loadedRaw });
         }
-      }, 50);
-    }
+      };
+
+      const timer = setTimeout(finish, 1500);
+
+      const checkDone = () => {
+        pending--;
+        if (pending <= 0) {
+          clearTimeout(timer);
+          finish();
+        }
+      };
+
+      const loadImageWithRetry = (url, callback, retries = 3) => {
+        if (!url) { callback(null); return; }
+        const img = new Image();
+        img.crossOrigin = "anonymous";
+        img.onload = () => callback(img);
+        img.onerror = () => {
+          if (retries > 0) {
+            setTimeout(() => loadImageWithRetry(url, callback, retries - 1), 150);
+          } else {
+            callback(null);
+          }
+        };
+        img.src = url;
+      };
+
+      if (annotatedUrl) {
+        pending++;
+        loadImageWithRetry(annotatedUrl, (img) => { loadedAnn = img; checkDone(); });
+      }
+
+      if (rawUrl) {
+        pending++;
+        loadImageWithRetry(rawUrl, (img) => { loadedRaw = img; checkDone(); });
+      }
+
+      if (pending === 0) {
+        clearTimeout(timer);
+        finish();
+      }
+    });
   };
 
   const mapInspectionData = (data) => {
-    if (!data) return;
+    const annUrl = resolveImageUrl(data.imageUrl || data.annotatedImageUrl);
+    const rawUrl = resolveImageUrl(data.rawImageUrl);
 
-    if (data.imageUrl || data.annotated_image_url || data.rawImageUrl || data.raw_image_url) {
-      const imgTarget = data.annotated_image_url || data.imageUrl;
-      const rawTarget = data.raw_image_url || data.rawImageUrl;
+    if (annUrl || rawUrl) {
+      preloadImages(annUrl, rawUrl).then(({ loadedAnn, loadedRaw }) => {
+        // 1. Set preloaded images
+        setLoadedImage(loadedAnn);
+        setLoadedRawImage(loadedRaw);
 
-      const img = new Image();
-      img.src = resolveImageUrl(imgTarget);
-      img.onload = () => {
-        setLoadedImage(img);
-        if (rawTarget) {
-          const rawImg = new Image();
-          rawImg.src = resolveImageUrl(rawTarget);
-          rawImg.onload = () => setLoadedRawImage(rawImg);
-          rawImg.onerror = () => setLoadedRawImage(img);
-        } else {
-          setLoadedRawImage(img);
-        }
-      };
-      img.onerror = () => {
-        setLoadedImage(null);
-        setLoadedRawImage(null);
-      };
+        // 2. Trigger scanner beam animation
+        animateScannerLine();
 
-      animateScannerLine();
-      setTimeout(() => {
+        // 3. Atomically update decision banner, full-screen theme and result text at the exact same frame!
         setCurrentInspection({
           id: data.id,
           batch: data.batch,
@@ -963,7 +1434,7 @@ export function InspectionProvider({ children }) {
           grains: data.grainList || []
         });
         setActiveAlarms(data.alarms || []);
-      }, 400);
+      });
     } else {
       animateScannerLine();
       setLoadedImage(null);
@@ -1003,7 +1474,14 @@ export function InspectionProvider({ children }) {
     }
   };
 
-  // Offline Simulation
+  // ==========================================
+  // OFFLINE MODE: CLIENT SIMULATION GENERATORS
+  // ==========================================
+  useEffect(() => {
+    if (isBackendConnected) return;
+    // ponytail: no mock data — history comes from API only
+  }, [isBackendConnected]);
+
   useEffect(() => {
     if (!isSimRunning || isBackendConnected) return;
     const interval = setInterval(() => {
@@ -1038,119 +1516,218 @@ export function InspectionProvider({ children }) {
       alarms.push({ name: "Critical Passivation Scratch", time: clockStr.split(" ")[1] });
     } else if (anomalyType === 5) {
       marksList = [
-        { dx: -70, dy: -60, rx: 26, ry: 18, rot: 0.8 }
+        { dx: 165, dy: -140, rx: 26, ry: 18, rot: 0.4 }
       ];
-      alarms.push({ name: "Edge Clearance Violation (<8µm)", time: clockStr.split(" ")[1] });
+      alarms.push({ name: "Probe Mark Misaligned (Border Hit)", time: clockStr.split(" ")[1] });
     } else {
-      marksList = [
-        { dx: 5, dy: -5, rx: 25, ry: 18, rot: 0.1 }
-      ];
+      const dx = -15 + Math.random() * 30;
+      const dy = -15 + Math.random() * 30;
+      marksList = [{ dx, dy, rx: 24, ry: 16, rot: 0.1 }];
     }
 
-    const isPass = anomalyType === 0;
-    const padNames = ["VDD_CORE", "GND_SENSE", "OUT_CH1", "GPIO_12", "CLK_IN", "VREF_P", "TEST_EN"];
-    const reasonText = isPass ? "All probe marks verified inside clearance limits" : (alarms[0]?.name || "Clearance Rule Violation");
+    let grains = [];
+    let grainCount = 0;
+    if (anomalyType === 4) {
+      grainCount = Math.floor(Math.random() * 4) + 3;
+      alarms.push({ name: "Dust Contamination Alert", time: clockStr.split(" ")[1] });
+    } else if (Math.random() < 0.22) {
+      grainCount = Math.floor(Math.random() * 2) + 1;
+    }
 
-    setTimeout(() => {
-      const newScan = {
-        id: `#WF-${String(Math.floor(Math.random() * 89999 + 10000))}`,
-        batch: "B2026-NXP",
-        waferNo: "W04",
-        xyCoord: `X${Math.floor(Math.random() * 160 + 20)}:Y${Math.floor(Math.random() * 160 + 20)}`,
-        site: `SITE-${Math.floor(Math.random() * 4) + 1}`,
-        pad: padNames[Math.floor(Math.random() * padNames.length)],
-        temp: `${(54 + Math.random() * 6).toFixed(1)}°C`,
-        padsTotal: 1,
-        padsDetected: 1,
-        probeMarks: marksList.length,
-        grains: isPass ? 0 : (anomalyType === 3 ? 4 : 1),
-        confidence: confidence,
-        inferenceTime: infTime,
-        ruleTime: 1.2,
-        decision: isPass ? "PASS" : "FAIL",
-        machineAction: isPass ? "PROBE_NEXT_DIE" : "HALT_NOTIFY",
-        reason: reasonText,
-        timeShort: clockStr.split(" ")[1] || "12:00:00",
-        timestamp: clockStr || "19-Aug-2026 12:00:00",
-        machineNo: "PROBER01",
-        productSetup: "NXP_AUTOMOTIVE_S32G",
-        alarms: alarms
-      };
-
-      setCurrentInspection(newScan);
-      setCurrentDieImage({
-        pads: [{
-          id: 1,
-          x: 300,
-          y: 300,
-          detected: true,
-          marks: marksList
-        }],
-        grains: Array(newScan.grains).fill(0).map((_, i) => ({
-          id: i,
-          x: 300 + (Math.random() - 0.5) * 80,
-          y: 300 + (Math.random() - 0.5) * 80
-        }))
+    for (let i = 0; i < grainCount; i++) {
+      grains.push({
+        x: 180 + Math.random() * 240,
+        y: 180 + Math.random() * 240,
+        radius: 4 + Math.random() * 6
       });
-
-      setActiveAlarms(alarms);
-      setHistory(prev => {
-        const list = Array.isArray(prev) ? prev : [];
-        return [newScan, ...list.slice(0, 499)];
-      });
-      setSimIndex(s => s + 1);
-    }, 400);
-  };
-
-  // Helper to format Batch/Wafer
-  const formatBatchWafer = (item) => {
-    if (!item) return "-";
-    const b = (item.batch && item.batch !== "-") ? item.batch : "";
-    const w = (item.waferNo && item.waferNo !== "-") ? item.waferNo : (item.id && !item.id.startsWith("#WF") ? item.id : "");
-    if (b && w) {
-      if (w.includes(b)) return w;
-      return `${b}${w}`;
     }
-    return w || b || item.waferNo || item.batch || item.id || "-";
-  };
 
-  // CSV Export
-  const exportToCSV = () => {
-    if (history.length === 0) {
-      alert("No data available to export.");
-      return;
+    let decision = "PASS";
+    let action = "CONTINUE PROCESS";
+    if (anomalyType === 1 || anomalyType === 3 || anomalyType === 4 || grains.length >= 3) {
+      decision = "FAIL";
+      action = "STOP MACHINE";
+    } else if (anomalyType === 2 || anomalyType === 5 || grains.length > 0) {
+      decision = "WARNING";
+      action = "WARN OPERATOR";
     }
-    const csvRows = [
-      ["Timestamp", "Machine no", "Batch/Wafer no", "Pad", "Site", "XY Coordinate", "Temp", "Result", "Failure Reason", "Latency (ms)"]
-    ];
-    history.forEach(rec => {
-      const bw = formatBatchWafer(rec);
-      csvRows.push([
-        `"${rec.timestamp || rec.timeShort || "-"}"`,
-        `"${rec.machineNo || "PROBER01"}"`,
-        `"${bw}"`,
-        `"${rec.pad || "-"}"`,
-        `"${rec.site || "-"}"`,
-        `"${rec.xyCoord || "-"}"`,
-        `"${rec.temp || "-"}"`,
-        `"${rec.decision}"`,
-        `"${rec.reason || "-"}"`,
-        rec.inferenceTime ?? 0
-      ]);
+
+    const nextId = simIndex + 1;
+    setSimIndex(nextId);
+
+    const waferId = `#WF-${2940 + nextId}`;
+    const newRecord = {
+      id: waferId,
+      machineNo: "PROBER01",
+      batch: "B2940",
+      waferNo: waferId,
+      pad: "P1",
+      site: "S1",
+      xyCoord: `X${Math.floor(Math.random() * 50)}Y${Math.floor(Math.random() * 50)}`,
+      timestamp: clockStr,
+      timeShort: clockStr.split(" ")[1],
+      decision: decision,
+      padsTotal: 1,
+      padsDetected: 1,
+      probeMarks: marksList.length,
+      grains: grains.length,
+      confidence: confidence,
+      inferenceTime: infTime,
+      ruleTime: 0.2,
+      machineAction: action
+    };
+
+    setCurrentInspection(newRecord);
+    setCurrentDieImage({
+      pads: [{ id: 1, x: 300, y: 300, detected: true, marks: marksList }],
+      grains: grains
     });
-    const csvContent = "data:text/csv;charset=utf-8," + csvRows.map(e => e.join(",")).join("\n");
-    const encodedUri = encodeURI(csvContent);
-    const link = document.createElement("a");
-    link.setAttribute("href", encodedUri);
-    link.setAttribute("download", `Wafer_Inspection_Report_${new Date().toISOString().slice(0, 10)}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+    setActiveAlarms(alarms);
+    setHistory(prev => [...prev, newRecord]);
+
+    setSysStats({
+      cpu: Math.floor(45 + Math.random() * 18),
+      npu: Math.floor(84 + Math.random() * 8),
+      ram: Math.floor(512 + Math.random() * 15),
+      temp: +(54.5 + Math.random() * 3).toFixed(1)
+    });
   };
 
-  // Chart data calculations
-  const passCountChart = historyList.filter(r => r.decision === "PASS").length;
-  const failCountChart = historyList.filter(r => r.decision !== "PASS").length;
+  const animateScannerLine = () => {
+    if (!scannerRef.current) return;
+    scannerRef.current.style.top = "0%";
+    scannerRef.current.style.opacity = "1";
+    scannerRef.current.style.transition = "none";
+    setTimeout(() => {
+      if (!scannerRef.current) return;
+      scannerRef.current.style.transition = "top 0.4s cubic-bezier(0.2, 0.8, 0.2, 1)";
+      scannerRef.current.style.top = "100%";
+      setTimeout(() => {
+        if (!scannerRef.current) return;
+        scannerRef.current.style.opacity = "0";
+      }, 400);
+    }, 50);
+  };
+
+  // ==========================================
+  // WAFER GRAPHICS DRAWING ENGINE (Canvas)
+  // ==========================================
+  const renderCanvas = useCallback(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const dpr = window.devicePixelRatio || 1;
+    const isSplit = compareMode !== "overlay";
+    const baseW = isSplit ? 1200 : 600;
+    const baseH = 600;
+
+    canvas.width = baseW * dpr;
+    canvas.height = baseH * dpr;
+
+    const ctx = canvas.getContext("2d");
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.scale(dpr, dpr);
+
+    const drawDieContent = (c, showOverlays, targetW = 600, targetH = 600, label = "") => {
+      if (!showOverlays && loadedRawImage) {
+        c.drawImage(loadedRawImage, 0, 0, targetW, targetH);
+        return;
+      }
+      if (showOverlays && loadedImage) {
+        c.drawImage(loadedImage, 0, 0, targetW, targetH);
+        return;
+      }
+
+      // High-contrast Standby viewport
+      c.fillStyle = isLight ? "#e2e8f0" : "#0a0d14";
+      c.fillRect(0, 0, targetW, targetH);
+
+      // Subtle inner background grid
+      c.strokeStyle = isLight ? "rgba(0, 0, 0, 0.07)" : "rgba(255, 255, 255, 0.05)";
+      c.lineWidth = 1;
+      const gridStep = 40;
+      for (let x = gridStep; x < targetW; x += gridStep) {
+        c.beginPath(); c.moveTo(x, 0); c.lineTo(x, targetH); c.stroke();
+      }
+      for (let y = gridStep; y < targetH; y += gridStep) {
+        c.beginPath(); c.moveTo(0, y); c.lineTo(targetW, y); c.stroke();
+      }
+
+      // Reticle / Alignment corner brackets
+      c.strokeStyle = isLight ? "rgba(71, 85, 105, 0.6)" : "rgba(99, 102, 241, 0.6)";
+      c.lineWidth = 2.5;
+      const rl = 36, rPad = 18;
+      c.beginPath(); c.moveTo(rPad, rPad + rl); c.lineTo(rPad, rPad); c.lineTo(rPad + rl, rPad); c.stroke();
+      c.beginPath(); c.moveTo(targetW - rPad, rPad + rl); c.lineTo(targetW - rPad, rPad); c.lineTo(targetW - rPad - rl, rPad); c.stroke();
+      c.beginPath(); c.moveTo(rPad, targetH - rPad - rl); c.lineTo(rPad, targetH - rPad); c.lineTo(rPad + rl, targetH - rPad); c.stroke();
+      c.beginPath(); c.moveTo(targetW - rPad, targetH - rPad - rl); c.lineTo(targetW - rPad, targetH - rPad); c.lineTo(targetW - rPad - rl, targetH - rPad); c.stroke();
+
+      // Center crosshair
+      c.strokeStyle = isLight ? "rgba(71, 85, 105, 0.35)" : "rgba(255, 255, 255, 0.18)";
+      c.lineWidth = 1.5;
+      const cx = targetW / 2, cy = targetH / 2;
+      c.beginPath(); c.moveTo(cx - 20, cy); c.lineTo(cx + 20, cy); c.stroke();
+      c.beginPath(); c.moveTo(cx, cy - 20); c.lineTo(cx, cy + 20); c.stroke();
+
+      // Standby title text & Subtitle
+      c.fillStyle = isLight ? "#0f172a" : "#f1f5f9";
+      c.font = "bold 14px 'Inter', sans-serif";
+      c.textAlign = "center";
+      c.fillText(label || "STANDBY • WAITING FOR PROBER SCAN", cx, cy - 24);
+
+      c.fillStyle = isLight ? "#475569" : "#94a3b8";
+      c.font = "600 11px 'Inter', sans-serif";
+      c.fillText("OPTICAL CAMERA & NPU INFERENCE READY", cx, cy + 30);
+    };
+
+    if (compareMode === "overlay") {
+      drawDieContent(ctx, true, 600, 600, "AI MASK OVERLAY FEED");
+    } else {
+      // Split mode: 1200 x 600
+      ctx.strokeStyle = isLight ? "rgba(0, 0, 0, 0.15)" : "rgba(255, 255, 255, 0.15)";
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(600, 0); ctx.lineTo(600, 600); ctx.stroke();
+
+      const paneSize = 530;
+      const leftX = (600 - paneSize) / 2;
+      const rightX = 600 + (600 - paneSize) / 2;
+      const topY = 50;
+
+      // Header Label 1: RAW CAMERA FEED
+      ctx.fillStyle = isLight ? "#1e293b" : "#cbd5e1";
+      ctx.font = "bold 16px 'Inter', sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText("1. RAW CAMERA FEED", 300, 32);
+
+      ctx.save();
+      ctx.translate(leftX, topY);
+      drawDieContent(ctx, false, paneSize, paneSize, "RAW DIE OPTICAL CAPTURE");
+      ctx.restore();
+
+      // Header Label 2: AI SEGMENTATION
+      ctx.fillStyle = isLight ? "#0284c7" : "#38bdf8";
+      ctx.font = "bold 16px 'Inter', sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText("2. AI SEGMENTATION & RULES", 900, 32);
+
+      ctx.save();
+      ctx.translate(rightX, topY);
+      drawDieContent(ctx, true, paneSize, paneSize, "AI DEFECT SEGMENTATION");
+      ctx.restore();
+    }
+  }, [compareMode, isLight, filters, loadedImage, loadedRawImage, currentInspection, canvasRef]);
+
+  useEffect(() => {
+    renderCanvas();
+  }, [renderCanvas]);
+
+  // ==========================================
+  // CHARTS CONFIGURATION ENGINE (Chart.js React)
+  // Dynamic calculation based on filteredHistory
+  // ==========================================
+  const chartDataSource = filteredHistory.length > 0 ? filteredHistory : [];
+  const passCountChart = chartDataSource.filter(r => r.decision === "PASS").length;
+  const failCountChart = chartDataSource.filter(r => r.decision !== "PASS").length;
 
   const donutChartData = {
     labels: ["PASS", "FAIL"],
@@ -1179,118 +1756,86 @@ export function InspectionProvider({ children }) {
         position: "right",
         labels: {
           color: isLight ? "#334155" : "#cbd5e1",
-          font: { size: 11, weight: "600", family: "'JetBrains Mono', monospace" },
-          padding: 14,
-          usePointStyle: true,
-          pointStyle: "circle"
+          font: { family: "'Outfit', sans-serif", size: 12, weight: "bold" }
         }
       },
       tooltip: {
-        backgroundColor: "rgba(15, 23, 42, 0.95)",
-        titleFont: { size: 12, weight: "bold" },
-        bodyFont: { size: 12 },
-        padding: 10,
-        borderColor: "rgba(255,255,255,0.1)",
-        borderWidth: 1
+        callbacks: {
+          label: (context) => {
+            const total = passCountChart + failCountChart;
+            const val = context.raw || 0;
+            const pct = total > 0 ? ((val / total) * 100).toFixed(1) : 0;
+            return ` ${context.label}: ${val} (${pct}%)`;
+          }
+        }
       }
     }
   };
 
-  const defectCounts = {
-    "Edge Clearance": 0,
-    "Missing Mark": 0,
-    "Double Hit": 0,
-    "Scratch Defect": 0,
-    "Surface Particle": 0
-  };
-
-  historyList.filter(r => r.decision === "FAIL").forEach(r => {
-    const reason = r.reason || "";
-    if (reason.includes("Clearance") || reason.includes("<8µm") || reason.includes("Edge")) {
-      defectCounts["Edge Clearance"]++;
-    } else if (reason.includes("Missing")) {
-      defectCounts["Missing Mark"]++;
-    } else if (reason.includes("Double")) {
-      defectCounts["Double Hit"]++;
-    } else if (reason.includes("Scratch")) {
-      defectCounts["Scratch Defect"]++;
-    } else {
-      defectCounts["Surface Particle"]++;
+  let bigMarkChart = 0, closeEdgeChart = 0, noMarkChart = 0;
+  chartDataSource.forEach(r => {
+    const r_str = (r.reason || "").toLowerCase();
+    const a_str = (r.alarms || []).map(a => a.name.toLowerCase()).join(" ");
+    if (r_str.includes("big") || r_str.includes("area too large") || a_str.includes("big")) {
+      bigMarkChart++;
+    } else if (r_str.includes("no probe") || r_str.includes("missing") || r_str.includes("cannot classify") || a_str.includes("no probe") || a_str.includes("missing")) {
+      noMarkChart++;
+    } else if (r.decision === "FAIL") {
+      closeEdgeChart++;
     }
   });
 
   const barChartData = {
-    labels: Object.keys(defectCounts),
+    labels: ["Big Probe Mark", "Close to Edge", "No Probe Mark"],
     datasets: [
       {
-        label: "Defect Instances",
-        data: Object.values(defectCounts),
-        backgroundColor: [
-          "rgba(239, 68, 68, 0.8)",
-          "rgba(245, 158, 11, 0.8)",
-          "rgba(168, 85, 247, 0.8)",
-          "rgba(236, 72, 153, 0.8)",
-          "rgba(100, 116, 139, 0.8)"
-        ],
-        borderRadius: 4,
-        borderWidth: 1,
-        borderColor: [
-          "#ef4444",
-          "#f59e0b",
-          "#a855f7",
-          "#ec4899",
-          "#64748b"
-        ]
+        label: "Defects",
+        data: [bigMarkChart, closeEdgeChart, noMarkChart],
+        backgroundColor: ["#ef4444", "#f97316", "#a855f7"],
+        borderRadius: 4
       }
     ]
   };
 
   const barChartOptions = {
+    indexAxis: "y",
     responsive: true,
     maintainAspectRatio: false,
+    animation: { duration: 500 },
     plugins: {
       legend: { display: false },
       tooltip: {
-        backgroundColor: "rgba(15, 23, 42, 0.95)",
-        titleFont: { size: 12, weight: "bold" },
-        bodyFont: { size: 12 },
-        padding: 10
+        callbacks: {
+          label: (context) => ` Defects: ${context.raw}`
+        }
       }
     },
     scales: {
       x: {
-        grid: { display: false },
-        ticks: {
-          color: isLight ? "#64748b" : "#94a3b8",
-          font: { size: 10, family: "'JetBrains Mono', monospace" }
-        }
+        grid: { color: isLight ? "rgba(0,0,0,0.05)" : "rgba(255,255,255,0.05)" },
+        ticks: { color: isLight ? "#64748b" : "#94a3b8", font: { family: "'JetBrains Mono'" } }
       },
       y: {
-        beginAtZero: true,
-        grid: { color: isLight ? "rgba(0,0,0,0.05)" : "rgba(255,255,255,0.05)" },
-        ticks: {
-          precision: 0,
-          color: isLight ? "#64748b" : "#94a3b8",
-          font: { size: 10, family: "'JetBrains Mono', monospace" }
-        }
+        grid: { display: false },
+        ticks: { color: isLight ? "#334155" : "#cbd5e1", font: { family: "'Outfit'", weight: "600" } }
       }
     }
   };
 
-  const recentTen = historyList.slice(0, 15).reverse();
+  const latencyRecent = chartDataSource.slice(0, 15).reverse();
   const lineChartData = {
-    labels: recentTen.map((_, i) => `#${i + 1}`),
+    labels: latencyRecent.map(d => (d.id || "").replace("#WF-", "")),
     datasets: [
       {
-        label: "Latency (ms)",
-        data: recentTen.map(r => r.inferenceTime ?? 18.5),
+        label: "Inference Latency (ms)",
+        data: latencyRecent.map(d => Number(d.inferenceTime) || 0),
+        borderColor: isLight ? "#0284c7" : "#38bdf8",
+        backgroundColor: isLight ? "rgba(2, 132, 199, 0.15)" : "rgba(56, 189, 248, 0.15)",
         fill: true,
-        borderColor: "#0ea5e9",
-        backgroundColor: "rgba(14, 165, 233, 0.12)",
         tension: 0.35,
-        pointBackgroundColor: "#0ea5e9",
-        pointRadius: 3,
-        pointHoverRadius: 5
+        pointBackgroundColor: isLight ? "#0284c7" : "#38bdf8",
+        pointRadius: 4,
+        pointHoverRadius: 6
       }
     ]
   };
@@ -1298,106 +1843,315 @@ export function InspectionProvider({ children }) {
   const lineChartOptions = {
     responsive: true,
     maintainAspectRatio: false,
+    animation: { duration: 400 },
     plugins: {
       legend: { display: false },
       tooltip: {
-        backgroundColor: "rgba(15, 23, 42, 0.95)",
-        padding: 10
+        callbacks: {
+          label: (context) => ` Latency: ${context.raw} ms`
+        }
       }
     },
     scales: {
       x: {
-        grid: { display: false },
-        ticks: {
-          color: isLight ? "#64748b" : "#94a3b8",
-          font: { size: 9, family: "'JetBrains Mono', monospace" }
-        }
+        grid: { color: isLight ? "rgba(0,0,0,0.05)" : "rgba(255,255,255,0.05)" },
+        ticks: { color: isLight ? "#64748b" : "#94a3b8", font: { family: "'JetBrains Mono'", size: 10 } }
       },
       y: {
-        beginAtZero: false,
         grid: { color: isLight ? "rgba(0,0,0,0.05)" : "rgba(255,255,255,0.05)" },
-        ticks: {
-          color: isLight ? "#64748b" : "#94a3b8",
-          font: { size: 9, family: "'JetBrains Mono', monospace" }
-        }
+        ticks: { color: isLight ? "#64748b" : "#94a3b8", font: { family: "'JetBrains Mono'" } },
+        beginAtZero: true
       }
     }
   };
 
-  const uniqueBatches = [...new Set(historyList.map(r => r.batch).filter(Boolean))];
-  const uniqueMachines = [...new Set(historyList.map(r => r.machineNo || "PROBER01").filter(Boolean))];
+  // ==========================================
+  // REPORT DATA EXPORT (CSV SPREADSHEET)
+  // ==========================================
+  const exportToCSV = () => {
+    const exportList = filteredHistory.length > 0 ? filteredHistory : historyList;
+    if (exportList.length === 0) {
+      alert("No inspection records available to export.");
+      return;
+    }
+    const csvRows = [
+      ["Timestamp", "Machine no", "Batch/Wafer no", "Pad", "Site", "XY Coordinate", "Temp", "Result", "Failure Reason", "Latency (ms)"]
+    ];
+    exportList.forEach(rec => {
+      const bw = formatBatchWafer(rec);
+      csvRows.push([
+        `"${getRecordDisplayDateTime(rec)}"`,
+        `"${rec.machineNo || "WP288"}"`,
+        `"${bw}"`,
+        `"${rec.pad || "-"}"`,
+        `"${rec.site || "-"}"`,
+        `"${rec.xyCoord || "-"}"`,
+        `"${rec.temp || "-"}"`,
+        `"${rec.decision}"`,
+        `"${rec.reason || "-"}"`,
+        rec.inferenceTime ?? 0
+      ]);
+    });
+    const csvContent = "data:text/csv;charset=utf-8," + csvRows.map(e => e.join(",")).join("\n");
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement("a");
+    link.setAttribute("href", encodedUri);
 
+    const downloadFilename = generateExportFilename({
+      machine: analyticsMachineFilter,
+      batch: analyticsBatchFilter,
+      now: new Date()
+    });
+
+    link.setAttribute("download", downloadFilename);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  // Filter logs logic for Analytics Tab
+  const uniqueDates = Array.from(new Set(historyList.map(getRecordDate).filter(Boolean)));
+  const uniqueBatches = Array.from(new Set(historyList.map(item => item.batch).filter(b => b && b !== "-")));
+  const uniqueMachines = Array.from(new Set(historyList.map(item => item.machineNo || "PROBER01").filter(m => m && m !== "-")));
+
+  // Calculate local yields
   const totalScans = historyList.length;
-  const passCount = historyList.filter(r => r.decision === "PASS").length;
-  const failCount = historyList.filter(r => r.decision !== "PASS").length;
+  const passCount = historyList.filter(h => h.decision === "PASS").length;
+  const failCount = historyList.filter(h => h.decision !== "PASS").length;
   const yieldRate = totalScans > 0 ? ((passCount / totalScans) * 100).toFixed(2) : "0.00";
 
+
   const value = {
-    compareMode, setCompareMode,
-    isLight, setIsLight,
-    isBackendConnected,
-    connectionStatus,
-    testConnection,
-    dbType,
-    filters, setFilters,
-    currentInspection, setCurrentInspection,
-    currentDieImage, setCurrentDieImage,
-    activeAlarms, setActiveAlarms,
-    history, setHistory,
-    historyList, filteredHistory,
-    sysStats, setSysStats,
-    isSimRunning, setIsSimRunning,
-    simIndex, setSimIndex,
-    simSpeed, setSimSpeed,
-    runSingleOfflineInspection,
+    activeAlarms,
+    activeConfig,
+    activeTab,
+    analyticsBatchFilter,
+    analyticsDateFilter,
+    analyticsFilter,
+    analyticsMachineFilter,
+    animateScannerLine,
+    apiBase,
+    barCanvasRef,
+    barChartData,
+    barChartOptions,
+    benchmarkActiveSubTab,
+    benchmarkDataset,
+    benchmarkDatasetsList,
+    benchmarkFileInputRef,
+    benchmarkFilter,
+    benchmarkKpis,
+    benchmarkLimit,
+    benchmarkModalComment,
+    benchmarkModel,
+    benchmarkPage,
+    benchmarkPageSize,
+    benchmarkProgress,
+    benchmarkReportData,
+    benchmarkReportModalOpen,
+    benchmarkResults,
+    benchmarkRules,
+    benchmarkSearch,
+    benchmarkSplitModalIndex,
+    benchmarkSplitModalItem,
+    benchmarkZipFile,
+    bigMarkChart,
+    canvasRef,
     clockStr,
-    canvasRef, scannerRef, animateScannerLine,
-    filterSearch, setFilterSearch,
-    analyticsFilter, setAnalyticsFilter,
-    analyticsBatchFilter, setAnalyticsBatchFilter,
-    analyticsMachineFilter, setAnalyticsMachineFilter,
-    selectedModalItem, setSelectedModalItem,
-    selectedModalIndex, setSelectedModalIndex,
-    modalViewMode, setModalViewMode,
-    openModalWithItem, closeModal,
-    handlePrevModalItem, handleNextModalItem,
-    fileInputRef, benchmarkFileInputRef,
-    isDragging, setIsDragging,
-    isBenchmarkDragging, setIsBenchmarkDragging,
-    loadedImage, setLoadedImage,
-    loadedRawImage, setLoadedRawImage,
-    modelsList, setModelsList,
-    isModelConverting, setIsModelConverting,
-    convertingModelName, setConvertingModelName,
-    benchmarkActiveSubTab, setBenchmarkActiveSubTab,
-    benchmarkModel, setBenchmarkModel,
-    benchmarkZipFile, setBenchmarkZipFile,
-    benchmarkDataset, setBenchmarkDataset,
-    benchmarkDatasetsList, setBenchmarkDatasetsList,
-    benchmarkLimit, setBenchmarkLimit,
-    benchmarkRules, setBenchmarkRules,
-    benchmarkProgress, setBenchmarkProgress,
-    benchmarkResults, setBenchmarkResults,
-    benchmarkKpis, setBenchmarkKpis,
-    benchmarkFilter, setBenchmarkFilter,
-    benchmarkSearch, setBenchmarkSearch,
-    benchmarkSplitModalItem, setBenchmarkSplitModalItem,
-    benchmarkSplitModalIndex, setBenchmarkSplitModalIndex,
-    benchmarkReportModalOpen, setBenchmarkReportModalOpen,
-    benchmarkReportData, setBenchmarkReportData,
-    isBenchmarkStarting, setIsBenchmarkStarting,
-    handlePrevBenchmarkItem, handleNextBenchmarkItem,
-    fetchModels, fetchBenchmarkDatasets, fetchBenchmarkProgress, fetchBenchmarkResults,
-    handleStartBenchmark, handleStopBenchmark, handleSaveHumanReview, handleBatchReview,
-    handleCustomBenchmarkUpload, handleViewReport, handleExportBenchmarkCSV,
-    handleUploadFile, handleActivateModel, handleDeleteModel,
-    edgeIp, setEdgeIp, updateEdgeIp, apiBase, resolveImageUrl,
-    mapInspectionData, formatBatchWafer, exportToCSV,
-    donutChartData, donutChartOptions,
-    barChartData, barChartOptions,
-    lineChartData, lineChartOptions,
-    uniqueBatches, uniqueMachines,
-    totalScans, passCount, failCount, yieldRate
+    closeModal,
+    compareMode,
+    configLibrary,
+    configUploadStatus,
+    convertingModelName,
+    currentDieImage,
+    currentInspection,
+    dbType,
+    donutCanvasRef,
+    donutChartData,
+    donutChartOptions,
+    edgeIp,
+    effectiveBenchmarkPage,
+    effectiveHistoryPage,
+    exportToCSV,
+    failCount,
+    failCountChart,
+    fetchActiveConfig,
+    fetchBenchmarkDatasets,
+    fetchBenchmarkProgress,
+    fetchBenchmarkResults,
+    fetchConfigLibrary,
+    fetchModels,
+    fileInputRef,
+    filterSearch,
+    filteredBenchmarkResults,
+    filteredHistory,
+    filters,
+    formatBatchWafer,
+    getActiveModalList,
+    getDefaultEdgeIp,
+    getRecordDate,
+    handleActivateMachine,
+    handleActivateModel,
+    handleActivateRecipe,
+    handleApplyPreset,
+    handleBatchReview,
+    handleBindModelConfig,
+    handleCustomBenchmarkUpload,
+    handleDeleteConfigFile,
+    handleDeleteModel,
+    handleExportBenchmarkCSV,
+    handleMachineUpload,
+    handleNextBenchmarkItem,
+    handleNextModalItem,
+    handlePauseBenchmark,
+    handlePrevBenchmarkItem,
+    handlePrevModalItem,
+    handleProductUpload,
+    handleResumeBenchmark,
+    handleSaveHumanReview,
+    handleSaveIp,
+    handleSaveThresholds,
+    handleStartBenchmark,
+    handleStopBenchmark,
+    handleTestPing,
+    handleUploadFile,
+    handleViewReport,
+    history,
+    historyList,
+    historyPage,
+    historyPageSize,
+    historyViewMode,
+    isBackendConnected,
+    isBenchmarkDragging,
+    isBenchmarkStarting,
+    isDragging,
+    isLight,
+    isModelConverting,
+    isPinging,
+    isSavingThresholds,
+    isSimRunning,
+    isUploadingMachine,
+    isUploadingProduct,
+    latencyRecent,
+    lineCanvasRef,
+    lineChartData,
+    lineChartOptions,
+    loadedImage,
+    loadedRawImage,
+    mapInspectionData,
+    modalViewMode,
+    modelsList,
+    openModalWithItem,
+    paginatedBenchmarkResults,
+    paginatedHistory,
+    passCount,
+    passCountChart,
+    pingResult,
+    preloadImages,
+    priority_dispatcher_status_color,
+    renderCanvas,
+    resolveImageUrl,
+    runSingleOfflineInspection,
+    saveIpSuccess,
+    scannerRef,
+    selectedClasses,
+    selectedModalIndex,
+    selectedModalItem,
+    setActiveAlarms,
+    setActiveConfig,
+    setActiveTab,
+    setAnalyticsBatchFilter,
+    setAnalyticsDateFilter,
+    setAnalyticsFilter,
+    setAnalyticsMachineFilter,
+    setBenchmarkActiveSubTab,
+    setBenchmarkDataset,
+    setBenchmarkDatasetsList,
+    setBenchmarkFilter,
+    setBenchmarkKpis,
+    setBenchmarkLimit,
+    setBenchmarkModalComment,
+    setBenchmarkModel,
+    setBenchmarkPage,
+    setBenchmarkPageSize,
+    setBenchmarkProgress,
+    setBenchmarkReportData,
+    setBenchmarkReportModalOpen,
+    setBenchmarkResults,
+    setBenchmarkRules,
+    setBenchmarkSearch,
+    setBenchmarkSplitModalIndex,
+    setBenchmarkSplitModalItem,
+    setBenchmarkZipFile,
+    setClockStr,
+    setCompareMode,
+    setConfigUploadStatus,
+    setConvertingModelName,
+    setCurrentDieImage,
+    setCurrentInspection,
+    setDbType,
+    setEdgeIp,
+    setFilterSearch,
+    setFilters,
+    setHistory,
+    setHistoryPage,
+    setHistoryPageSize,
+    setHistoryViewMode,
+    setIsBackendConnected,
+    setIsBenchmarkDragging,
+    setIsBenchmarkStarting,
+    setIsDragging,
+    setIsLight,
+    setIsModelConverting,
+    setIsPinging,
+    setIsSavingThresholds,
+    setIsSimRunning,
+    setIsUploadingMachine,
+    setIsUploadingProduct,
+    setLoadedImage,
+    setLoadedRawImage,
+    setModalViewMode,
+    setModelsList,
+    setPingResult,
+    setSaveIpSuccess,
+    setSelectedClasses,
+    setSelectedModalIndex,
+    setSelectedModalItem,
+    setSettingsFailDist,
+    setSettingsMaxArea,
+    setSimIndex,
+    setSimSpeed,
+    setSysStats,
+    setTempIp,
+    settingsFailDist,
+    settingsMaxArea,
+    simIndex,
+    simSpeed,
+    sysStats,
+    tempIp,
+    totalBenchmarkPages,
+    totalHistoryPages,
+    totalScans,
+    getRecordDisplayDateTime,
+    generateExportFilename,
+    isDateRangeInvalid,
+    dateRangePreset,
+    setDateRangePreset,
+    setDatePreset,
+    startDate,
+    setStartDate,
+    endDate,
+    setEndDate,
+    sortField,
+    setSortField,
+    sortOrder,
+    setSortOrder,
+    handleSort,
+    resetAllFilters,
+    uniqueBatches,
+    uniqueDates,
+    uniqueMachines,
+    updateEdgeIp,
+    yieldRate
   };
 
   return (

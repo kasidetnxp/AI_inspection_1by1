@@ -36,16 +36,22 @@ confuse/
 *.weights
 *.tflite
 models/
+**/models/
 backend_imx8/models/
+backend_imx8_test/models/
 
 # Datasets, raw images, and simulation outputs
+simulation
 simulation/
 backend_imx8/simulation
 **/simulation/
+**/simulation
 Pun_for_Accuracy/
 *.bmp
 *.zip
-backend_imx8/active_*.json
+**/active_*.json
+image (*).png
+image*.png
 
 # Agent & IDE caches
 .agents/

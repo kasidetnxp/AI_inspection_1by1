@@ -22,6 +22,7 @@ export default function ModelsPage() {
     benchmarkRules,
     benchmarkSearch,
     benchmarkZipFile,
+    configLibrary,
     convertingModelName,
     currentInspection,
     effectiveBenchmarkPage,
@@ -29,6 +30,7 @@ export default function ModelsPage() {
     filteredBenchmarkResults,
     handleActivateModel,
     handleBatchReview,
+    handleBindModelConfig,
     handleDeleteModel,
     handleExportBenchmarkCSV,
     handlePauseBenchmark,
@@ -808,17 +810,41 @@ export default function ModelsPage() {
                               <th>Model Name</th>
                               <th>Version</th>
                               <th>Size</th>
+                              <th>Bound Recipe</th>
                               <th>Status</th>
                               <th style={{ textAlign: "center" }}>Action</th>
                             </tr>
                           </thead>
                           <tbody id="models-table-body">
                             {modelsList.map((model, idx) => {
+                              const boundRecipe = configLibrary?.bindings?.[model.name]?.recipe || "Product_Settine.txt";
+
                               return (
                                 <tr key={idx} className={model.active ? "row-active-model" : ""}>
                                   <td className="font-mono" style={{ fontWeight: "600" }}>{model.name}</td>
                                   <td className="font-mono">{model.version || "v1.0.0"}</td>
                                   <td className="font-mono">{model.size || "-"}</td>
+                                  <td>
+                                    <select
+                                      className="lab-select"
+                                      style={{ padding: "4px 8px", fontSize: "12px", borderRadius: "4px", background: "rgba(255,255,255,0.04)", border: "1px solid var(--border-color)", color: "var(--text-main)" }}
+                                      value={boundRecipe}
+                                      onChange={(e) => {
+                                        if (e.target.value) {
+                                          handleBindModelConfig(model.name, e.target.value, configLibrary?.active_machine || "Machine_Setting.txt");
+                                        }
+                                      }}
+                                    >
+                                      {(configLibrary?.recipes || []).map((r, rIdx) => (
+                                        <option key={rIdx} value={r.name}>
+                                          {r.name} {r.name === boundRecipe ? "(Current)" : ""}
+                                        </option>
+                                      ))}
+                                      {(!configLibrary?.recipes || configLibrary.recipes.length === 0) && (
+                                        <option value="Product_Settine.txt">Product_Settine.txt</option>
+                                      )}
+                                    </select>
+                                  </td>
                                   <td>
                                     <span className={`badge-result ${model.active ? "pass" : "warn"}`}>
                                       {model.active ? "ACTIVE RUNNING" : "INACTIVE"}
@@ -826,7 +852,9 @@ export default function ModelsPage() {
                                   </td>
                                   <td style={{ textAlign: "center" }}>
                                     {model.active ? (
-                                      <button className="action-btn-sm active-green" disabled>IN USE</button>
+                                      <button className="action-btn-sm active-green" disabled title="Currently active model on NPU">
+                                        ACTIVE (IN USE)
+                                      </button>
                                     ) : (
                                       <div style={{ display: "flex", gap: "6px", justifyContent: "center" }}>
                                         <button

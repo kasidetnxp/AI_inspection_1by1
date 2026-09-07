@@ -312,6 +312,34 @@ body.light-theme .zoom-toolbar-header {
   display: flex;
 }
 
+#view-settings {
+  flex: 1 1 0% !important;
+  min-height: 0 !important;
+  height: calc(100vh - var(--header-height)) !important;
+  max-height: calc(100vh - var(--header-height)) !important;
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
+  width: 100% !important;
+  display: block !important;
+}
+
+#view-settings::-webkit-scrollbar {
+  width: 8px;
+}
+
+#view-settings::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.1);
+}
+
+#view-settings::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.25);
+  border-radius: 4px;
+}
+
+body.light-theme #view-settings::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.25);
+}
+
 .status-indicator-group {
   display: flex;
   gap: 12px;
