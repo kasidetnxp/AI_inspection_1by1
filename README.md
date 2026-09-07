@@ -81,22 +81,42 @@ graph TD
 
 ## 📂 4. โครงสร้างโฟลเดอร์ของโปรเจกต์ (Project Directory Structure)
 
-```
+```text
 UIIU/
-├── backend_imx8/             # 🧠 [Edge AI Node] FastAPI Backend บน NXP i.MX8
-│   ├── main.py               # Machine Shared Folder Pipeline, NPU AI & .txt Judgement Writer
-│   ├── config.yaml           # i.MX8 Edge Configuration
-│   └── start_imx8.sh         # Launcher Script สำหรับ i.MX8 Node (Port 8001)
-├── backend_pc/               # 🪺 [Central Server Node] NestJS Backend บน PC
+├── docs/                     # 📚 เอกสารสถาปัตยกรรม คู่มือ และรายงานสรุปทั้งหมด
+│   ├── inspection_rules_summary.md        # สรุปตรรกะและเงื่อนไขการตรวจจับ Pass/Fail
+│   ├── FRONTEND_IMX8_DEV_GUIDE.md         # คู่มือการเชื่อมต่อ Web HMI กับ i.MX8
+│   ├── IMX8_PMI_FRONTEND_INTEGRATION_PLAN.md
+│   ├── INFERENCER_CONFIG_ANALYSIS.md      # การวิเคราะห์พารามิเตอร์ Recipe & Machine
+│   ├── FUTURE_TRAINING_AND_VALIDATION_PLAN.md
+│   ├── MODEL_VALIDATION_LAB_PLAN.md
+│   └── screenshots/                       # ภาพหน้าจออ้างอิง UI
+├── backend_imx8/             # 🧠 [Edge AI Node] FastAPI Backend บน NXP i.MX8 (Port 8001)
+│   ├── configs/              # Recipe & Machine Configuration Library
+│   │   ├── machines/
+│   │   ├── recipes/
+│   │   └── model_recipe_bindings.json
+│   ├── models/               # จัดเก็บโมเดล AI (.tflite, .pth)
+│   ├── simulation/           # โฟลเดอร์จำลองการทำงานของเครื่องจักร (image, process, output, judge)
+│   ├── main.py               # API Server, Pipeline, NPU AI & Judgement Writer
+│   └── config.yaml           # i.MX8 Edge Configuration
+├── backend_pc/               # 🪺 [Central Server Node] NestJS Backend บน PC (Port 3000)
 │   ├── src/                  # NestJS Modules, Controllers, Services & Socket.io Gateway
 │   ├── package.json          # NestJS Dependencies
-│   └── start_pc.sh           # Launcher Script สำหรับ PC Node (Port 3000)
-├── frontend/                 # 💻 [HMI Dashboard] React 19 + Vite HMI Web App
-├── simulation/               # Machine Shared Folders (image, process, output, judge)
+│   └── tsconfig.json
+├── frontend/                 # 💻 [HMI Dashboard] React 19 + Vite HMI Web App (Port 5173)
+├── datasets/                 # ข้อมูลชุดภาพสำหรับ Train และ Benchmark
+├── docker/                   # ข้อมูล Container Persistence (PostgreSQL, CloudBeaver)
 ├── start.sh / stop.sh        # One-Click System Launcher / Shutdown (Multi-Node)
-└── README.md                 # System Documentation
+└── README.md                 # System Overview & Documentation
 ```
 
+### 📚 ดัชนีเอกสารทางเทคนิค (Documentation Index)
+* 📑 [inspection_rules_summary.md](file:///home/nxp1/Desktop/PUNPUNJA/PROJECT/UIIU/docs/inspection_rules_summary.md) - สรุปเกณฑ์การตรวจสอบเงื่อนไข Pass/Fail/Filter ของภาพ
+* 📑 [FRONTEND_IMX8_DEV_GUIDE.md](file:///home/nxp1/Desktop/PUNPUNJA/PROJECT/UIIU/docs/FRONTEND_IMX8_DEV_GUIDE.md) - คู่มือการพัฒนาเชื่อมต่อ Frontend HMI กับ Edge API
+* 📑 [INFERENCER_CONFIG_ANALYSIS.md](file:///home/nxp1/Desktop/PUNPUNJA/PROJECT/UIIU/docs/INFERENCER_CONFIG_ANALYSIS.md) - การแมปปิ้งพารามิเตอร์ Recipe และการตั้งค่าเครื่องจักร
+* 📑 [FUTURE_TRAINING_AND_VALIDATION_PLAN.md](file:///home/nxp1/Desktop/PUNPUNJA/PROJECT/UIIU/docs/FUTURE_TRAINING_AND_VALIDATION_PLAN.md) - แผนการเทรนและวัดความแม่นยำโมเดลในอนาคต
+* 📑 [MODEL_VALIDATION_LAB_PLAN.md](file:///home/nxp1/Desktop/PUNPUNJA/PROJECT/UIIU/docs/MODEL_VALIDATION_LAB_PLAN.md) - แผนการทดสอบในห้องปฏิบัติการ Model Validation
 
 ---
 
