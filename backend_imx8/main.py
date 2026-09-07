@@ -68,7 +68,6 @@ IMAGE_DIR = _resolve_sim_path(PATHS_CFG.get("image_dir", "simulation/drive_N/WP2
 PROCESS_DIR = PATHS_CFG.get("process_dir", "/tmp/imx8_process")
 OUTPUT_DIR = _resolve_sim_path(PATHS_CFG.get("output_dir", "simulation/drive_M/WP288/PMI/OUTPUT"))
 JUDGEMENT_DIR = _resolve_sim_path(PATHS_CFG.get("judge_dir", "simulation/drive_N/WP288/PMI/JUDGE"))
-VISUALS_DIR = _resolve_sim_path("simulation/output/inspection_visuals")
 MODELS_DIR = _resolve_sim_path("models")
 
 # ==============================================================================
@@ -423,28 +422,44 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-from fastapi.staticfiles import StaticFiles
-os.makedirs(VISUALS_DIR, exist_ok=True)
-app.mount("/visuals", StaticFiles(directory=VISUALS_DIR), name="visuals")
-
 # ==============================================================================
-# Benchmark-Only Auto-Prune Policy
+# Benchmark-Only Visuals Serving & Auto-Prune Policy
 # (Production inspection images, Drive M lots, and quality records are NEVER deleted)
 # ==============================================================================
+@app.get("/visuals/{filename}")
+async def get_benchmark_visual_image(filename: str):
+    """
+    Serves benchmark inspection visuals directly from benchmark_uploads/{session_id}/visuals/.
+    """
+    base_dir = os.path.join(_THIS_DIR, "simulation", "benchmark_uploads")
+    if os.path.exists(base_dir):
+        for sess in os.listdir(base_dir):
+            sess_path = os.path.join(base_dir, sess)
+            if os.path.isdir(sess_path):
+                fpath = os.path.join(sess_path, "visuals", filename)
+                if os.path.exists(fpath):
+                    return FileResponse(fpath)
+                fpath2 = os.path.join(sess_path, filename)
+                if os.path.exists(fpath2):
+                    return FileResponse(fpath2)
+    raise HTTPException(status_code=404, detail="Benchmark visual image not found")
+
 def prune_benchmark_visuals(max_files: int = 200):
     """
-    Prevents benchmark evaluation images (ann_bm_*, raw_bm_*, inspect_bm_*)
-    from accumulating in VISUALS_DIR.
-    Production inspection records and live images are strictly preserved and never touched.
+    Cleans up temporary visuals within benchmark_uploads sessions if files exceed limit.
+    Production inspection records and live images in Drive M/N are strictly preserved.
     """
     try:
-        if not os.path.exists(VISUALS_DIR):
+        base_dir = os.path.join(_THIS_DIR, "simulation", "benchmark_uploads")
+        if not os.path.exists(base_dir):
             return
-        bm_files = [
-            os.path.join(VISUALS_DIR, f)
-            for f in os.listdir(VISUALS_DIR)
-            if ("_bm_" in f.lower() or f.lower().startswith("bm_")) and f.lower().endswith((".bmp", ".jpg", ".png", ".jpeg"))
-        ]
+        bm_files = []
+        for sess in os.listdir(base_dir):
+            v_dir = os.path.join(base_dir, sess, "visuals")
+            if os.path.isdir(v_dir):
+                for f in os.listdir(v_dir):
+                    if f.lower().endswith((".bmp", ".jpg", ".png", ".jpeg")):
+                        bm_files.append(os.path.join(v_dir, f))
         if len(bm_files) > max_files:
             bm_files.sort(key=os.path.getmtime)
             for fpath in bm_files[:len(bm_files) - max_files]:
@@ -1064,7 +1079,7 @@ def process_new_file(filepath, filename):
                         
                         unet_model = app.state.pytorch_unet
                         device = app.state.pytorch_device
-                        output_dir = VISUALS_DIR
+                        output_dir = OUTPUT_DIR
                         os.makedirs(output_dir, exist_ok=True)
                         
                         unet_start = time.time()
@@ -1143,8 +1158,8 @@ def process_new_file(filepath, filename):
         try:
             report = run_inspection(
                 generic_results,
-                output_csv_path=_resolve_sim_path("simulation/output/inspection_report.csv"),
-                output_viz_dir=output_lot_dir or VISUALS_DIR,
+                output_csv_path=os.path.join(output_lot_dir, f"{lot_no_str}_inspection_report.csv") if output_lot_dir else os.path.join(OUTPUT_DIR, "inspection_report.csv"),
+                output_viz_dir=output_lot_dir or OUTPUT_DIR,
                 config_path=config_path
             )
             rule_time = round((time.time() - rule_start) * 1000, 2)
@@ -1162,8 +1177,8 @@ def process_new_file(filepath, filename):
                     cat_reason = "-"
                 
                 # Save directly into Drive M
-                raw_target_dir = proc_lot_dir or VISUALS_DIR
-                ann_target_dir = output_lot_dir or VISUALS_DIR
+                raw_target_dir = proc_lot_dir or OUTPUT_DIR
+                ann_target_dir = output_lot_dir or OUTPUT_DIR
                 raw_out_path = os.path.join(raw_target_dir, filename)
                 ann_out_path = os.path.join(ann_target_dir, filename)
                 
@@ -1625,7 +1640,7 @@ def process_benchmark_image(task: dict):
                 
                 unet_model = app.state.pytorch_unet
                 device = app.state.pytorch_device
-                output_dir = VISUALS_DIR
+                output_dir = os.path.join(_THIS_DIR, "simulation", "benchmark_uploads", session_id, "visuals")
                 os.makedirs(output_dir, exist_ok=True)
                 
                 unet_start = time.time()
@@ -1643,6 +1658,9 @@ def process_benchmark_image(task: dict):
             inf_time = 15.0
 
     # 2. Rule Evaluation
+    sess_visuals_dir = os.path.join(_THIS_DIR, "simulation", "benchmark_uploads", session_id, "visuals")
+    os.makedirs(sess_visuals_dir, exist_ok=True)
+
     t_rule_start = time.time()
     decision = "PASS"
     cat_reason = "-"
@@ -1653,9 +1671,9 @@ def process_benchmark_image(task: dict):
     raw_fname = f"raw_bm_{session_id}_{filename}"
     ann_fname = f"ann_bm_{session_id}_{filename}"
     inspect_fname = f"inspect_bm_{session_id}_{filename}"
-    raw_out_path = os.path.join(VISUALS_DIR, raw_fname)
-    ann_out_path = os.path.join(VISUALS_DIR, ann_fname)
-    inspect_out_path = os.path.join(VISUALS_DIR, inspect_fname)
+    raw_out_path = os.path.join(sess_visuals_dir, raw_fname)
+    ann_out_path = os.path.join(sess_visuals_dir, ann_fname)
+    inspect_out_path = os.path.join(sess_visuals_dir, inspect_fname)
 
     if has_actual_rules:
         generic_results = [{
@@ -1675,8 +1693,8 @@ def process_benchmark_image(task: dict):
         try:
             report = run_inspection(
                 generic_results,
-                output_csv_path=_resolve_sim_path("simulation/output/benchmark_inspection_report.csv"),
-                output_viz_dir=VISUALS_DIR,
+                output_csv_path=os.path.join(sess_visuals_dir, "benchmark_inspection_report.csv"),
+                output_viz_dir=sess_visuals_dir,
                 config_path=custom_cfg
             )
             rule_time = round((time.time() - t_rule_start) * 1000, 2)
@@ -1693,7 +1711,7 @@ def process_benchmark_image(task: dict):
                 except (ValueError, TypeError):
                     calc_max_ratio_pct = 0.0
 
-                viz_path = rep.get("viz_path") or os.path.join(VISUALS_DIR, f"inspect_{filename}")
+                viz_path = rep.get("viz_path") or os.path.join(sess_visuals_dir, f"inspect_{filename}")
                 if os.path.exists(viz_path):
                     canvas_img = cv2.imread(viz_path)
                     if canvas_img is not None:
