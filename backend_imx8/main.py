@@ -919,14 +919,14 @@ CORE_DIR = os.path.join(_THIS_DIR, "core")
 sys.path.append(CORE_DIR)
 has_actual_rules = False
 try:
-    from src.yolo_seg.inspection import run_inspection, load_inspection_config
+    from src.rules.inspection import run_inspection, load_inspection_config
     import numpy as np
     has_actual_rules = True
     print(f"[BOOT] ✅ inspection rules loaded from {CORE_DIR}")
 except Exception as _imp_err:
     print(f"[BOOT] ❌ inspection import FAILED: {_imp_err}")
     print(f"[BOOT]    sys.path includes: {CORE_DIR}")
-    print(f"[BOOT]    exists? {os.path.exists(os.path.join(CORE_DIR, 'src', 'yolo_seg', 'inspection.py'))}")
+    print(f"[BOOT]    exists? {os.path.exists(os.path.join(CORE_DIR, 'src', 'rules', 'inspection.py'))}")
 
 def process_new_file(filepath, filename):
     global latest_inspection, inspection_count, active_alarms, has_actual_rules, tflite_runner, tflite_model_path

@@ -1,7 +1,7 @@
 # Inspection Rule Engine — รายละเอียดเงื่อนไขทั้งหมด
 
 > Config file: [`inspection_rules.yaml`](file:///home/nxp1/Desktop/PUNPUNJA/PROJECT/UIIU/backend_imx8/core/configs/inspection_rules.yaml)
-> Rule engine: [`inspection.py`](file:///home/nxp1/Desktop/PUNPUNJA/PROJECT/UIIU/backend_imx8/core/src/yolo_seg/inspection.py)
+> Rule engine: [`inspection.py`](file:///home/nxp1/Desktop/PUNPUNJA/PROJECT/UIIU/backend_imx8/core/src/rules/inspection.py)
 
 ---
 
