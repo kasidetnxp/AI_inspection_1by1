@@ -427,6 +427,79 @@ from fastapi.staticfiles import StaticFiles
 os.makedirs(VISUALS_DIR, exist_ok=True)
 app.mount("/visuals", StaticFiles(directory=VISUALS_DIR), name="visuals")
 
+# ==============================================================================
+# Simulation Cache & Auto-Prune Policy
+# ==============================================================================
+def prune_inspection_visuals(max_files: int = 500):
+    """
+    Prevents simulation/output/inspection_visuals from growing unboundedly.
+    Retains only the latest max_files images based on file modification time.
+    """
+    try:
+        if not os.path.exists(VISUALS_DIR):
+            return
+        files = [
+            os.path.join(VISUALS_DIR, f)
+            for f in os.listdir(VISUALS_DIR)
+            if f.lower().endswith((".bmp", ".jpg", ".png", ".jpeg"))
+        ]
+        if len(files) > max_files:
+            files.sort(key=os.path.getmtime)
+            for fpath in files[:len(files) - max_files]:
+                try: os.remove(fpath)
+                except Exception: pass
+    except Exception as e:
+        print(f"[AUTO-PRUNE] Warning pruning inspection_visuals: {e}")
+
+def prune_benchmark_uploads(max_sessions: int = 3):
+    """
+    Prevents simulation/benchmark_uploads from accumulating dozens of datasets.
+    Retains only the latest max_sessions folders.
+    """
+    try:
+        base_dir = os.path.join(_THIS_DIR, "simulation", "benchmark_uploads")
+        if not os.path.exists(base_dir):
+            return
+        sessions = [
+            os.path.join(base_dir, d)
+            for d in os.listdir(base_dir)
+            if os.path.isdir(os.path.join(base_dir, d)) and d.startswith("BM-")
+        ]
+        if len(sessions) > max_sessions:
+            sessions.sort(key=os.path.getmtime)
+            for s_dir in sessions[:len(sessions) - max_sessions]:
+                try: shutil.rmtree(s_dir)
+                except Exception: pass
+    except Exception as e:
+        print(f"[AUTO-PRUNE] Warning pruning benchmark_uploads: {e}")
+
+def prune_simulation_drive_m(max_lots: int = 3):
+    """
+    Prevents simulation/drive_M mock outputs from growing indefinitely.
+    """
+    try:
+        for sub in ["OUTPUT", "PROCESSED"]:
+            p = os.path.join(_THIS_DIR, "simulation", "drive_M", "WP288", "PMI", sub)
+            if os.path.exists(p):
+                lots = [
+                    os.path.join(p, d)
+                    for d in os.listdir(p)
+                    if os.path.isdir(os.path.join(p, d))
+                ]
+                if len(lots) > max_lots:
+                    lots.sort(key=os.path.getmtime)
+                    for l_dir in lots[:len(lots) - max_lots]:
+                        try: shutil.rmtree(l_dir)
+                        except Exception: pass
+    except Exception as e:
+        print(f"[AUTO-PRUNE] Warning pruning drive_M: {e}")
+
+def prune_all_simulation_caches():
+    prune_inspection_visuals(max_files=500)
+    prune_benchmark_uploads(max_sessions=3)
+    prune_simulation_drive_m(max_lots=3)
+
+
 # Active WebSocket Clients
 class ConnectionManager:
     def __init__(self):
@@ -535,6 +608,7 @@ def init_database():
 
     inspection_count = get_initial_inspection_count()
     print(f"📊 [DB INIT] Inspection Counter initialized to: {inspection_count}")
+    prune_all_simulation_caches()
 
 
 def get_initial_inspection_count() -> int:
@@ -1246,6 +1320,9 @@ def process_new_file(filepath, filename):
             "event": "NEW_INSPECTION",
             "data": record
         })), main_loop)
+
+    if inspection_count % 25 == 0:
+        prune_inspection_visuals(max_files=500)
 
 
 # ==============================================================================
@@ -2141,6 +2218,7 @@ async def clear_history():
         conn.close()
     except Exception as e:
         print("[DB] Failed to clear history from PostgreSQL:", e)
+    prune_all_simulation_caches()
     return {"status": "cleared"}
 
 @app.post("/api/simulate-end")
@@ -2857,6 +2935,7 @@ async def upload_benchmark_images(
     global priority_dispatcher_state, P1_QUEUE
     
     session_id = f"BM-{time.strftime('%Y%m%d-%H%M%S')}"
+    prune_benchmark_uploads(max_sessions=3)
     upload_dir = os.path.join(_THIS_DIR, "simulation", "benchmark_uploads", session_id)
     os.makedirs(upload_dir, exist_ok=True)
     
