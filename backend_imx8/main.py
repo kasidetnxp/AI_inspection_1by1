@@ -167,6 +167,8 @@ DEFAULT_MACHINE_SETTING = {
 
 def load_initial_product_setting():
     for candidate in [
+        os.path.join(_THIS_DIR, "configs", "recipes", "Product_Settine.txt"),
+        os.path.join(_THIS_DIR, "configs", "recipes", "Product_Setting.txt"),
         os.path.join(PROJECT_ROOT, "Product_Settine.txt"),
         os.path.join(_THIS_DIR, "active_product_setting.json"),
         os.path.join(PROJECT_ROOT, "Product_Setting.txt"),
@@ -183,6 +185,7 @@ def load_initial_product_setting():
 
 def load_initial_machine_setting():
     for candidate in [
+        os.path.join(_THIS_DIR, "configs", "machines", "Machine_Setting.txt"),
         os.path.join(PROJECT_ROOT, "Machine_Setting.txt"),
         os.path.join(_THIS_DIR, "active_machine_setting.json"),
     ]:
