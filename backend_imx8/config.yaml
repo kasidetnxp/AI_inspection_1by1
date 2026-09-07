@@ -1,11 +1,11 @@
 # Edge AI Semiconductor Wafer Defect Inspection System - i.MX8 Configuration
 
-# Folder Paths for Machine Shared Interfacing
+# Folder Paths for Machine Shared Interfacing (Mapped to N: and M: Factory Drives)
 paths:
-  image_dir: "simulation/image"       # Raw image shared folder from Machine (Prober)
-  process_dir: "simulation/process"   # Temporary buffer folder during AI inference
-  output_dir: "simulation/output"     # Output folder for annotated/comparison visual images
-  judge_dir: "simulation/judgement"   # Judgement folder for machine (.txt result files)
+  image_dir: "simulation/drive_N/WP288/PMI/IMAGE"     # Camera input from Prober (N:)
+  judge_dir: "simulation/drive_N/WP288/PMI/JUDGE"     # Single txt Judgement to Prober (N:)
+  output_dir: "simulation/drive_M/WP288/PMI/OUTPUT"   # Annotated defect images archive (M:)
+  process_dir: "/tmp/imx8_process"                    # Fast RAM-disk temporary processing buffer
 
 # AI Model Inference Settings
 ai:

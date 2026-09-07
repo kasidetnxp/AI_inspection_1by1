@@ -63,11 +63,11 @@ POSTGRES_CONFIG = {
     "database": "postgres"
 }
 
-# Directory Paths for Machine Interfacing Pipeline
-IMAGE_DIR = _resolve_sim_path(PATHS_CFG.get("image_dir", "simulation/image"))
-PROCESS_DIR = _resolve_sim_path(PATHS_CFG.get("process_dir", "simulation/process"))
-OUTPUT_DIR = _resolve_sim_path(PATHS_CFG.get("output_dir", "simulation/output"))
-JUDGEMENT_DIR = _resolve_sim_path(PATHS_CFG.get("judge_dir", "simulation/judgement"))
+# Directory Paths for Machine Interfacing Pipeline (Mapped to Factory Drives N: & M:)
+IMAGE_DIR = _resolve_sim_path(PATHS_CFG.get("image_dir", "simulation/drive_N/WP288/PMI/IMAGE"))
+PROCESS_DIR = PATHS_CFG.get("process_dir", "/tmp/imx8_process")
+OUTPUT_DIR = _resolve_sim_path(PATHS_CFG.get("output_dir", "simulation/drive_M/WP288/PMI/OUTPUT"))
+JUDGEMENT_DIR = _resolve_sim_path(PATHS_CFG.get("judge_dir", "simulation/drive_N/WP288/PMI/JUDGE"))
 VISUALS_DIR = _resolve_sim_path("simulation/output/inspection_visuals")
 MODELS_DIR = _resolve_sim_path("models")
 
@@ -428,28 +428,30 @@ os.makedirs(VISUALS_DIR, exist_ok=True)
 app.mount("/visuals", StaticFiles(directory=VISUALS_DIR), name="visuals")
 
 # ==============================================================================
-# Simulation Cache & Auto-Prune Policy
+# Benchmark-Only Auto-Prune Policy
+# (Production inspection images, Drive M lots, and quality records are NEVER deleted)
 # ==============================================================================
-def prune_inspection_visuals(max_files: int = 500):
+def prune_benchmark_visuals(max_files: int = 200):
     """
-    Prevents simulation/output/inspection_visuals from growing unboundedly.
-    Retains only the latest max_files images based on file modification time.
+    Prevents benchmark evaluation images (ann_bm_*, raw_bm_*, inspect_bm_*)
+    from accumulating in VISUALS_DIR.
+    Production inspection records and live images are strictly preserved and never touched.
     """
     try:
         if not os.path.exists(VISUALS_DIR):
             return
-        files = [
+        bm_files = [
             os.path.join(VISUALS_DIR, f)
             for f in os.listdir(VISUALS_DIR)
-            if f.lower().endswith((".bmp", ".jpg", ".png", ".jpeg"))
+            if ("_bm_" in f.lower() or f.lower().startswith("bm_")) and f.lower().endswith((".bmp", ".jpg", ".png", ".jpeg"))
         ]
-        if len(files) > max_files:
-            files.sort(key=os.path.getmtime)
-            for fpath in files[:len(files) - max_files]:
+        if len(bm_files) > max_files:
+            bm_files.sort(key=os.path.getmtime)
+            for fpath in bm_files[:len(bm_files) - max_files]:
                 try: os.remove(fpath)
                 except Exception: pass
     except Exception as e:
-        print(f"[AUTO-PRUNE] Warning pruning inspection_visuals: {e}")
+        print(f"[AUTO-PRUNE] Warning pruning benchmark visuals: {e}")
 
 def prune_benchmark_uploads(max_sessions: int = 3):
     """
@@ -473,31 +475,9 @@ def prune_benchmark_uploads(max_sessions: int = 3):
     except Exception as e:
         print(f"[AUTO-PRUNE] Warning pruning benchmark_uploads: {e}")
 
-def prune_simulation_drive_m(max_lots: int = 3):
-    """
-    Prevents simulation/drive_M mock outputs from growing indefinitely.
-    """
-    try:
-        for sub in ["OUTPUT", "PROCESSED"]:
-            p = os.path.join(_THIS_DIR, "simulation", "drive_M", "WP288", "PMI", sub)
-            if os.path.exists(p):
-                lots = [
-                    os.path.join(p, d)
-                    for d in os.listdir(p)
-                    if os.path.isdir(os.path.join(p, d))
-                ]
-                if len(lots) > max_lots:
-                    lots.sort(key=os.path.getmtime)
-                    for l_dir in lots[:len(lots) - max_lots]:
-                        try: shutil.rmtree(l_dir)
-                        except Exception: pass
-    except Exception as e:
-        print(f"[AUTO-PRUNE] Warning pruning drive_M: {e}")
-
-def prune_all_simulation_caches():
-    prune_inspection_visuals(max_files=500)
+def prune_all_benchmark_caches():
+    prune_benchmark_visuals(max_files=200)
     prune_benchmark_uploads(max_sessions=3)
-    prune_simulation_drive_m(max_lots=3)
 
 
 # Active WebSocket Clients
@@ -608,7 +588,7 @@ def init_database():
 
     inspection_count = get_initial_inspection_count()
     print(f"📊 [DB INIT] Inspection Counter initialized to: {inspection_count}")
-    prune_all_simulation_caches()
+    prune_all_benchmark_caches()
 
 
 def get_initial_inspection_count() -> int:
@@ -1320,9 +1300,6 @@ def process_new_file(filepath, filename):
             "event": "NEW_INSPECTION",
             "data": record
         })), main_loop)
-
-    if inspection_count % 25 == 0:
-        prune_inspection_visuals(max_files=500)
 
 
 # ==============================================================================
@@ -2218,7 +2195,7 @@ async def clear_history():
         conn.close()
     except Exception as e:
         print("[DB] Failed to clear history from PostgreSQL:", e)
-    prune_all_simulation_caches()
+    prune_all_benchmark_caches()
     return {"status": "cleared"}
 
 @app.post("/api/simulate-end")
