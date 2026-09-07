@@ -44,6 +44,7 @@ def load_sys_config():
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.abspath(os.path.join(_THIS_DIR, ".."))
+CORE_DIR = os.path.join(_THIS_DIR, "core")
 
 def _resolve_sim_path(p_str):
     if os.path.isabs(p_str):
@@ -71,7 +72,7 @@ VISUALS_DIR = _resolve_sim_path("simulation/output/inspection_visuals")
 MODELS_DIR = _resolve_sim_path("models")
 
 # ==============================================================================
-# Product & Machine Configuration State (Direct integration with Product_Settine.txt & Machine_Setting.txt)
+# Product & Machine Configuration State (Direct integration with Product_Setting.txt & Machine_Setting.txt)
 # ==============================================================================
 def resolve_windows_drive_path(raw_path: str, sim_root: str = None) -> str:
     """
@@ -167,11 +168,11 @@ DEFAULT_MACHINE_SETTING = {
 
 def load_initial_product_setting():
     for candidate in [
-        os.path.join(_THIS_DIR, "configs", "recipes", "Product_Settine.txt"),
         os.path.join(_THIS_DIR, "configs", "recipes", "Product_Setting.txt"),
-        os.path.join(PROJECT_ROOT, "Product_Settine.txt"),
-        os.path.join(_THIS_DIR, "active_product_setting.json"),
+        os.path.join(_THIS_DIR, "configs", "recipes", "Product_Settine.txt"),
         os.path.join(PROJECT_ROOT, "Product_Setting.txt"),
+        os.path.join(_THIS_DIR, "active_product_setting.json"),
+        os.path.join(PROJECT_ROOT, "Product_Settine.txt"),
     ]:
         if os.path.exists(candidate):
             try:
@@ -293,7 +294,7 @@ os.makedirs(MACHINES_DIR, exist_ok=True)
 
 def load_config_registry():
     default_reg = {
-        "active_recipe": "Product_Settine.txt",
+        "active_recipe": "Product_Setting.txt",
         "active_machine_config": "Machine_Setting.txt",
         "bindings": {}
     }
@@ -845,17 +846,18 @@ def generate_machine_judgement_file(batch_decision: str, mask8_str: str, prober_
 # ==========================================
 # ponytail: __file__-relative so CWD doesn't matter
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
-sys.path.append(os.path.join(_THIS_DIR, "iMX8_AI_Inspection-master"))
+CORE_DIR = os.path.join(_THIS_DIR, "core")
+sys.path.append(CORE_DIR)
 has_actual_rules = False
 try:
     from src.yolo_seg.inspection import run_inspection, load_inspection_config
     import numpy as np
     has_actual_rules = True
-    print(f"[BOOT] ✅ inspection rules loaded from {os.path.join(_THIS_DIR, 'iMX8_AI_Inspection-master')}")
+    print(f"[BOOT] ✅ inspection rules loaded from {CORE_DIR}")
 except Exception as _imp_err:
     print(f"[BOOT] ❌ inspection import FAILED: {_imp_err}")
-    print(f"[BOOT]    sys.path includes: {os.path.join(_THIS_DIR, 'iMX8_AI_Inspection-master')}")
-    print(f"[BOOT]    exists? {os.path.exists(os.path.join(_THIS_DIR, 'iMX8_AI_Inspection-master', 'src', 'yolo_seg', 'inspection.py'))}")
+    print(f"[BOOT]    sys.path includes: {CORE_DIR}")
+    print(f"[BOOT]    exists? {os.path.exists(os.path.join(CORE_DIR, 'src', 'yolo_seg', 'inspection.py'))}")
 
 def process_new_file(filepath, filename):
     global latest_inspection, inspection_count, active_alarms, has_actual_rules, tflite_runner, tflite_model_path
@@ -917,7 +919,7 @@ def process_new_file(filepath, filename):
 
         if not model_path:
             candidate_files = []
-            for p_dir in [".", os.path.join(_THIS_DIR, "iMX8_AI_Inspection-master", "models"), "models"]:
+            for p_dir in [".", os.path.join(CORE_DIR, "models"), "models"]:
                 if os.path.exists(p_dir):
                     for root, _, files in os.walk(p_dir):
                         for f in files:
@@ -978,7 +980,7 @@ def process_new_file(filepath, filename):
                             pass
                     
                     if is_unet:
-                        imx8_src_root = os.path.join(_THIS_DIR, "iMX8_AI_Inspection-master")
+                        imx8_src_root = CORE_DIR
                         if imx8_src_root not in sys.path:
                             sys.path.insert(0, imx8_src_root)
                         import src.utils.config
@@ -1082,7 +1084,7 @@ def process_new_file(filepath, filename):
             "grains": grain_polys
         }]
 
-        config_path = os.path.join(_THIS_DIR, "iMX8_AI_Inspection-master", "configs", "inspection_rules.yaml")
+        config_path = os.path.join(CORE_DIR, "configs", "inspection_rules.yaml")
         rule_start = time.time()
         try:
             report = run_inspection(
@@ -1480,7 +1482,7 @@ def process_benchmark_image(task: dict):
                 break
                 
         if not model_path:
-            for p_dir in [".", os.path.join(_THIS_DIR, "iMX8_AI_Inspection-master", "models"), "models", _THIS_DIR, PROJECT_ROOT]:
+            for p_dir in [".", os.path.join(CORE_DIR, "models"), "models", _THIS_DIR, PROJECT_ROOT]:
                 if os.path.exists(p_dir):
                     for root, _, files in os.walk(p_dir):
                         for f in files:
@@ -1539,7 +1541,7 @@ def process_benchmark_image(task: dict):
         elif model_path and model_path.lower().endswith((".pt", ".pth")):
             try:
                 import torch
-                imx8_src_root = os.path.join(_THIS_DIR, "iMX8_AI_Inspection-master")
+                imx8_src_root = CORE_DIR
                 if imx8_src_root not in sys.path:
                     sys.path.insert(0, imx8_src_root)
                 import src.utils.config
@@ -1962,7 +1964,7 @@ async def startup_event():
     _model = PATHS_CFG.get("model_path") or SYS_CONFIG.get("ai", {}).get("model_path")
     if not _model or not os.path.exists(_model):
         candidate_files = []
-        for p_dir in [".", os.path.join(_THIS_DIR, "iMX8_AI_Inspection-master", "models"), "models"]:
+        for p_dir in [".", os.path.join(CORE_DIR, "models"), "models"]:
             if os.path.exists(p_dir):
                 for root, _, files in os.walk(p_dir):
                     for f in files:
@@ -2188,7 +2190,7 @@ async def trigger_end_signal():
     }
 
 # ==============================================================================
-# Configuration Management Endpoints (Product_Settine & Machine_Setting)
+# Configuration Management Endpoints (Product_Setting & Machine_Setting)
 # ==============================================================================
 @app.get("/api/config/active")
 async def get_active_config():
@@ -2223,7 +2225,7 @@ async def get_active_config():
 @app.get("/api/configs")
 async def get_all_configs():
     reg = load_config_registry()
-    active_rec = reg.get("active_recipe", "Product_Settine.txt")
+    active_rec = reg.get("active_recipe", "Product_Setting.txt")
     active_mach = reg.get("active_machine_config", "Machine_Setting.txt")
     bindings = reg.get("bindings", {})
 
@@ -2463,7 +2465,7 @@ async def get_models():
     search_dirs = [
         MODELS_DIR,
         _THIS_DIR,
-        os.path.join(_THIS_DIR, "iMX8_AI_Inspection-master", "models"),
+        os.path.join(CORE_DIR, "models"),
         PROJECT_ROOT
     ]
     
@@ -2559,7 +2561,7 @@ async def activate_model(payload: dict):
     search_dirs = [
         MODELS_DIR,
         _THIS_DIR,
-        os.path.join(_THIS_DIR, "iMX8_AI_Inspection-master", "models"),
+        os.path.join(CORE_DIR, "models"),
         PROJECT_ROOT
     ]
     for s_dir in search_dirs:

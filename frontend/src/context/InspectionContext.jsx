@@ -398,7 +398,7 @@ export function InspectionProvider({ children }) {
     }
   }, [benchmarkSplitModalItem?.id, benchmarkSplitModalItem?.notes]);
 
-  // Configuration Management State (Product_Settine & Machine_Setting)
+  // Configuration Management State (Product_Setting & Machine_Setting)
   const [activeConfig, setActiveConfig] = useState({
     product: {},
     machine: {},

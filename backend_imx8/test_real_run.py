@@ -4,17 +4,17 @@ Mirrors exactly what main.py does (minus FastAPI wrapper).
 """
 import os, sys, cv2, numpy as np
 
-ROOT = "/home/nxp1/Desktop/PUNPUNJA/PROJECT/testbackendimx8na"
-sys.path.insert(0, ROOT)
-sys.path.insert(0, os.path.join(ROOT, "backend_imx8", "iMX8_AI_Inspection-master"))
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(ROOT, "backend_imx8"))
+sys.path.insert(0, os.path.join(ROOT, "backend_imx8", "core"))
 
 from run_unet_tflite_folder import ModelRunner, preprocess_image, postprocess_unet
 from src.yolo_seg.inspection import run_inspection
 
-MODEL   = os.path.join(ROOT, "unet.tflite")
+MODEL   = os.path.join(ROOT, "backend_imx8", "models", "unet.tflite")
 IMG_DIR = os.path.join(ROOT, "Inspection")
 OUT_DIR = os.path.join(ROOT, "test_output", "real_run")
-CONFIG  = os.path.join(ROOT, "backend_imx8", "iMX8_AI_Inspection-master", "configs", "inspection_rules.yaml")
+CONFIG  = os.path.join(ROOT, "backend_imx8", "core", "configs", "inspection_rules.yaml")
 
 os.makedirs(OUT_DIR, exist_ok=True)
 

@@ -309,7 +309,7 @@ export default function SettingsPage() {
                     <div style={{ flex: 1 }}>
                       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px" }}>
                         <h4 style={{ margin: 0, fontSize: "15px", fontWeight: "700" }}>Product Recipe Configuration</h4>
-                        <span className="font-mono" style={{ fontSize: "12px", background: "rgba(255,255,255,0.06)", padding: "2px 8px", borderRadius: "4px", color: "var(--text-muted)" }}>Product_Settine.txt</span>
+                        <span className="font-mono" style={{ fontSize: "12px", background: "rgba(255,255,255,0.06)", padding: "2px 8px", borderRadius: "4px", color: "var(--text-muted)" }}>Product_Setting.txt</span>
                       </div>
                       <p style={{ margin: "6px 0 0 0", fontSize: "13px", color: "var(--text-muted)", lineHeight: "1.45" }}>
                         Specifies wafer defect rules, probe mark tolerance, pad coordinates, and AI model inference scripts.
@@ -350,7 +350,7 @@ export default function SettingsPage() {
                         <polyline points="17 8 12 3 7 8"></polyline>
                         <line x1="12" y1="3" x2="12" y2="15"></line>
                       </svg>
-                      <span>{isUploadingProduct ? "Uploading Recipe..." : "Select & Upload Product_Settine.txt"}</span>
+                      <span>{isUploadingProduct ? "Uploading Recipe..." : "Select & Upload Product_Setting.txt"}</span>
                     </button>
                   </div>
                 </div>
@@ -426,7 +426,7 @@ export default function SettingsPage() {
                   </div>
                   <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
                     <span className="badge-result pass font-mono" style={{ fontSize: "11px", padding: "4px 10px" }}>
-                      Active Recipe: {configLibrary.active_recipe || "Product_Settine.txt"}
+                      Active Recipe: {configLibrary.active_recipe || "Product_Setting.txt"}
                     </span>
                     <span className="badge-result info font-mono" style={{ fontSize: "11px", padding: "4px 10px" }}>
                       Active Machine: {configLibrary.active_machine || "Machine_Setting.txt"}

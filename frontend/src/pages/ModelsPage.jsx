@@ -817,7 +817,7 @@ export default function ModelsPage() {
                           </thead>
                           <tbody id="models-table-body">
                             {modelsList.map((model, idx) => {
-                              const boundRecipe = configLibrary?.bindings?.[model.name]?.recipe || "Product_Settine.txt";
+                              const boundRecipe = configLibrary?.bindings?.[model.name]?.recipe || "Product_Setting.txt";
 
                               return (
                                 <tr key={idx} className={model.active ? "row-active-model" : ""}>
@@ -841,7 +841,7 @@ export default function ModelsPage() {
                                         </option>
                                       ))}
                                       {(!configLibrary?.recipes || configLibrary.recipes.length === 0) && (
-                                        <option value="Product_Settine.txt">Product_Settine.txt</option>
+                                        <option value="Product_Setting.txt">Product_Setting.txt</option>
                                       )}
                                     </select>
                                   </td>

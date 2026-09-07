@@ -3,7 +3,7 @@
   "active_machine_config": "Machine_Setting.txt",
   "bindings": {
     "unet.tflite": {
-      "recipe": "Product_Settine.txt",
+      "recipe": "Product_Setting.txt",
       "machine_config": "Machine_Setting.txt"
     },
     "unet_pytorch_new.tflite": {
