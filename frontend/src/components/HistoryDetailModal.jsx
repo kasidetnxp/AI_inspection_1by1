@@ -98,7 +98,7 @@ export default function HistoryDetailModal() {
   useEffect(() => {
     setHistoryModalZoom(1);
     setHistoryModalPan({ x: 0, y: 0 });
-  }, [selectedModalItem?.id]);
+  }, [selectedModalItem?.imageUrl, selectedModalItem?.id]);
 
   if (!selectedModalItem) return null;
 
@@ -185,9 +185,9 @@ export default function HistoryDetailModal() {
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                     <div className="toggle-group" style={{ display: "flex", gap: "2px" }}>
                       <button
-                        className={`modal-view-btn ${modalViewMode === "comparison" ? "active" : ""}`}
+                        className={`modal-view-btn ${(modalViewMode === "comparison" || modalViewMode === "split") ? "active" : ""}`}
                         style={{ padding: "5px 12px", fontSize: "12px" }}
-                        onClick={() => setModalViewMode("comparison")}
+                        onClick={() => setModalViewMode("split")}
                       >
                         Split Compare
                       </button>
@@ -299,19 +299,47 @@ export default function HistoryDetailModal() {
                       </>
                     )}
 
-                    {selectedModalItem.comparisonImageUrl || selectedModalItem.imageUrl ? (
+                    {selectedModalItem.comparisonImageUrl || selectedModalItem.imageUrl || selectedModalItem.annotatedImageUrl || selectedModalItem.rawImageUrl ? (
                       <img
                         className="zoomable-target"
                         draggable={false}
                         onDragStart={(e) => e.preventDefault()}
-                        key={selectedModalItem.id + "_" + (selectedModalItem.imageUrl || "") + "_" + modalViewMode}
-                        src={resolveImageUrl(
-                          modalViewMode === "raw"
-                            ? selectedModalItem.rawImageUrl || selectedModalItem.imageUrl
-                            : modalViewMode === "annotated"
-                              ? selectedModalItem.annotatedImageUrl || selectedModalItem.imageUrl
-                              : selectedModalItem.comparisonImageUrl || selectedModalItem.imageUrl
-                        )}
+                        key={`${selectedModalItem.id}_${selectedModalItem.imageUrl || ""}_${selectedModalItem.xyCoord || ""}_${modalViewMode}`}
+                        src={(() => {
+                          const baseAnn = selectedModalItem.annotatedImageUrl || selectedModalItem.imageUrl || "";
+                          const baseRaw = selectedModalItem.rawImageUrl || "";
+                          const baseComp = selectedModalItem.comparisonImageUrl || "";
+
+                          if (modalViewMode === "raw") {
+                            if (baseRaw && !baseRaw.includes("/annotated/")) {
+                              return resolveImageUrl(baseRaw);
+                            }
+                            return resolveImageUrl(baseAnn.replace("/api/images/annotated/", "/api/images/raw/").replace(/\/inspect_/, "/"));
+                          }
+
+                          if (modalViewMode === "comparison" || modalViewMode === "split") {
+                            if (baseComp && baseComp.includes("inspect_")) {
+                              return resolveImageUrl(baseComp);
+                            }
+                            return resolveImageUrl(
+                              baseAnn.replace(/\/([^/?#]+)(\?.*)?$/, (match, fname, q) => {
+                                const cleanFname = fname.startsWith("inspect_") ? fname : `inspect_${fname}`;
+                                return `/${cleanFname}${q || ""}`;
+                              })
+                            );
+                          }
+
+                          // Default: annotated mode
+                          if (baseAnn && !baseAnn.includes("inspect_")) {
+                            return resolveImageUrl(baseAnn);
+                          }
+                          return resolveImageUrl(baseAnn.replace(/\/inspect_/, "/"));
+                        })()}
+                        onError={(e) => {
+                          if ((modalViewMode === "comparison" || modalViewMode === "split") && (selectedModalItem.annotatedImageUrl || selectedModalItem.imageUrl)) {
+                            e.target.src = resolveImageUrl(selectedModalItem.annotatedImageUrl || selectedModalItem.imageUrl);
+                          }
+                        }}
                         alt={selectedModalItem.id}
                         style={{
                           width: "100%",

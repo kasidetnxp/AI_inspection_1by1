@@ -1,5 +1,6 @@
-import React, { useEffect } from "react";
+import React, { useEffect, useState } from "react";
 import { useInspection } from "../context/InspectionContext";
+import AuditLogModal from "../components/AuditLogModal";
 
 export default function SettingsPage() {
   const {
@@ -52,6 +53,9 @@ export default function SettingsPage() {
     updateEdgeIp
   } = useInspection();
 
+  const [isAuditModalOpen, setIsAuditModalOpen] = useState(false);
+  const [deletingConfigKey, setDeletingConfigKey] = useState(null);
+
   useEffect(() => {
     fetchActiveConfig();
     fetchConfigLibrary();
@@ -85,9 +89,34 @@ export default function SettingsPage() {
           boxSizing: "border-box"
         }}
       >
+        {/* TOP BAR: HEADER & AUDIT LOG ACCESS */}
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "12px", paddingBottom: "4px" }}>
+          <div>
+            <h2 style={{ margin: 0, fontSize: "18px", fontWeight: "700", color: "var(--text-main)", letterSpacing: "0.5px" }}>SYSTEM CONFIGURATION</h2>
+            <div style={{ fontSize: "12px", color: "var(--text-muted)", marginTop: "2px" }}>
+              Connectivity, thresholds, and recipe parameters
+            </div>
+          </div>
+          <button
+            onClick={() => setIsAuditModalOpen(true)}
+            className="btn-secondary"
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "6px",
+              padding: "8px 16px",
+              fontSize: "12px",
+              fontWeight: "600",
+              borderRadius: "6px",
+              cursor: "pointer"
+            }}
+          >
+            AUDIT LOG
+          </button>
+        </div>
             
-            {/* TOP ROW: 2 BALANCED CARDS */}
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(460px, 1fr))", gap: "24px" }}>
+        {/* TOP ROW: 2 BALANCED CARDS */}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(460px, 1fr))", gap: "24px" }}>
               
               {/* CARD 1: EDGE NODE & SYSTEM CONNECTIVITY */}
               <div className="hmi-card" style={{ padding: "24px", display: "flex", flexDirection: "column", justifyContent: "space-between", gap: "20px" }}>
@@ -187,6 +216,39 @@ export default function SettingsPage() {
                   <div style={{ background: "rgba(255,255,255,0.02)", padding: "14px 16px", borderRadius: "8px", border: "1px solid var(--border-color)" }}>
                     <div style={{ color: "var(--text-muted)", fontSize: "12px", fontWeight: "700", letterSpacing: "0.5px" }}>API ENDPOINT</div>
                     <div className="font-mono" style={{ color: "var(--color-info)", fontWeight: "600", fontSize: "15px", marginTop: "4px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{apiBase}</div>
+                  </div>
+                </div>
+
+                <div style={{ background: "rgba(255,255,255,0.02)", padding: "14px 16px", borderRadius: "8px", border: "1px solid var(--border-color)", marginTop: "10px", display: "flex", flexDirection: "column", gap: "8px" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <span style={{ color: "var(--text-muted)", fontSize: "12px", fontWeight: "700", letterSpacing: "0.5px" }}>FACTORY MOUNTED DRIVES (N: / M:)</span>
+                    <span
+                      style={{
+                        fontSize: "11px",
+                        fontWeight: "700",
+                        padding: "2px 8px",
+                        borderRadius: "12px",
+                        background: activeConfig?.computed?.isHardwareMounted ? "rgba(16, 185, 129, 0.15)" : "rgba(245, 158, 11, 0.15)",
+                        color: activeConfig?.computed?.isHardwareMounted ? "#10b981" : "var(--color-warn)",
+                        border: `1px solid ${activeConfig?.computed?.isHardwareMounted ? "rgba(16, 185, 129, 0.4)" : "rgba(245, 158, 11, 0.4)"}`
+                      }}
+                    >
+                      {activeConfig?.computed?.isHardwareMounted ? "HARDWARE MOUNT DETECTED" : "SIMULATION FALLBACK"}
+                    </span>
+                  </div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: "4px", fontSize: "11.5px" }}>
+                    <div style={{ display: "flex", gap: "8px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      <span style={{ color: "var(--text-muted)", minWidth: "90px" }}>Source (N:):</span>
+                      <span className="font-mono" style={{ color: "var(--text-main)", overflow: "hidden", textOverflow: "ellipsis" }} title={activeConfig?.computed?.simulatedSourceFolder || "-"}>
+                        {activeConfig?.computed?.simulatedSourceFolder || "-"}
+                      </span>
+                    </div>
+                    <div style={{ display: "flex", gap: "8px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      <span style={{ color: "var(--text-muted)", minWidth: "90px" }}>Judge (N:):</span>
+                      <span className="font-mono" style={{ color: "var(--text-main)", overflow: "hidden", textOverflow: "ellipsis" }} title={activeConfig?.computed?.simulatedJudgeFolder || "-"}>
+                        {activeConfig?.computed?.simulatedJudgeFolder || "-"}
+                      </span>
+                    </div>
                   </div>
                 </div>
 
@@ -513,14 +575,38 @@ export default function SettingsPage() {
                                   </button>
                                 )}
                                 {!rec.active && (
-                                  <button
-                                    className="action-btn-sm delete-red"
-                                    style={{ fontSize: "11px", padding: "4px 8px" }}
-                                    onClick={() => handleDeleteConfigFile("product", rec.name)}
-                                    title={`Delete ${rec.name}`}
-                                  >
-                                    DELETE
-                                  </button>
+                                  deletingConfigKey === `product-${rec.name}` ? (
+                                    <div style={{ display: "flex", gap: "4px" }}>
+                                      <button
+                                        className="action-btn-sm delete-red"
+                                        style={{ fontSize: "11px", padding: "4px 8px", background: "#dc2626", color: "#fff", fontWeight: "700" }}
+                                        onClick={async () => {
+                                          await handleDeleteConfigFile("product", rec.name, true);
+                                          setDeletingConfigKey(null);
+                                        }}
+                                        title="Confirm delete recipe"
+                                      >
+                                        CONFIRM
+                                      </button>
+                                      <button
+                                        className="action-btn-sm"
+                                        style={{ fontSize: "11px", padding: "4px 8px" }}
+                                        onClick={() => setDeletingConfigKey(null)}
+                                        title="Cancel"
+                                      >
+                                        ✕
+                                      </button>
+                                    </div>
+                                  ) : (
+                                    <button
+                                      className="action-btn-sm delete-red"
+                                      style={{ fontSize: "11px", padding: "4px 8px" }}
+                                      onClick={() => setDeletingConfigKey(`product-${rec.name}`)}
+                                      title={`Delete ${rec.name}`}
+                                    >
+                                      DELETE
+                                    </button>
+                                  )
                                 )}
                               </div>
                             </td>
@@ -562,14 +648,38 @@ export default function SettingsPage() {
                                 </button>
                               )}
                               {!mach.active && (
-                                <button
-                                  className="action-btn-sm delete-red"
-                                  style={{ fontSize: "11px", padding: "4px 8px" }}
-                                  onClick={() => handleDeleteConfigFile("machine", mach.name)}
-                                  title={`Delete ${mach.name}`}
-                                >
-                                  DELETE
-                                </button>
+                                deletingConfigKey === `machine-${mach.name}` ? (
+                                  <div style={{ display: "flex", gap: "4px" }}>
+                                    <button
+                                      className="action-btn-sm delete-red"
+                                      style={{ fontSize: "11px", padding: "4px 8px", background: "#dc2626", color: "#fff", fontWeight: "700" }}
+                                      onClick={async () => {
+                                        await handleDeleteConfigFile("machine", mach.name, true);
+                                        setDeletingConfigKey(null);
+                                      }}
+                                      title="Confirm delete machine setting"
+                                    >
+                                      CONFIRM
+                                    </button>
+                                    <button
+                                      className="action-btn-sm"
+                                      style={{ fontSize: "11px", padding: "4px 8px" }}
+                                      onClick={() => setDeletingConfigKey(null)}
+                                      title="Cancel"
+                                    >
+                                      ✕
+                                    </button>
+                                  </div>
+                                ) : (
+                                  <button
+                                    className="action-btn-sm delete-red"
+                                    style={{ fontSize: "11px", padding: "4px 8px" }}
+                                    onClick={() => setDeletingConfigKey(`machine-${mach.name}`)}
+                                    title={`Delete ${mach.name}`}
+                                  >
+                                    DELETE
+                                  </button>
+                                )
                               )}
                             </div>
                           </td>
@@ -591,6 +701,8 @@ export default function SettingsPage() {
 
             </div>
 
+            {/* SYSTEM AUDIT LOG MODAL */}
+            <AuditLogModal isOpen={isAuditModalOpen} onClose={() => setIsAuditModalOpen(false)} />
           </div>
         </div>
   );

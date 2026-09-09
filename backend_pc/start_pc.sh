@@ -11,5 +11,8 @@ if [ ! -d "node_modules" ]; then
 fi
 
 export EDGE_IP="${EDGE_IP:-10.42.0.95}"
-nohup npx ts-node src/main.ts < /dev/null > "$PROJECT_DIR/backend_pc.log" 2>&1 &
+if [ ! -f "dist/main.js" ]; then
+    npm run build
+fi
+nohup node dist/main.js < /dev/null > "$PROJECT_DIR/backend_pc.log" 2>&1 &
 echo "✅ NestJS PC Central Backend running on http://localhost:3000"

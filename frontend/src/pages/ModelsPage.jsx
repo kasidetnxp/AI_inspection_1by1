@@ -1,6 +1,7 @@
-import React, { useEffect } from "react";
+import React, { useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useInspection } from "../context/InspectionContext";
+import ModelTrainingSubTab from "../components/ModelTrainingSubTab";
 
 export default function ModelsPage() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -68,8 +69,10 @@ export default function ModelsPage() {
     totalBenchmarkPages
   } = useInspection();
 
+  const [deletingModelName, setDeletingModelName] = useState(null);
+
   useEffect(() => {
-    if (tabParam && ["hub", "registry", "validation"].includes(tabParam)) {
+    if (tabParam && ["hub", "registry", "validation", "training"].includes(tabParam)) {
       setBenchmarkActiveSubTab(tabParam);
     }
   }, [tabParam, setBenchmarkActiveSubTab]);
@@ -114,6 +117,13 @@ export default function ModelsPage() {
                         <h2 className="simple-hub-card-title">TEST</h2>
                       </div>
                     </div>
+
+                    {/* CARD 3: TRAIN */}
+                    <div className="hmi-card models-hub-card simple-hub-card" onClick={() => switchSubTab("training")}>
+                      <div className="simple-hub-card-content">
+                        <h2 className="simple-hub-card-title">TRAIN</h2>
+                      </div>
+                    </div>
                   </div>
                 </div>
               )}
@@ -133,7 +143,7 @@ export default function ModelsPage() {
                       </svg>
                     </button>
                     <span className="subnav-current-title">
-                      {benchmarkActiveSubTab === "registry" ? "UPLOAD" : "TEST"}
+                      {benchmarkActiveSubTab === "registry" ? "UPLOAD" : benchmarkActiveSubTab === "training" ? "TRAIN" : "TEST"}
                     </span>
                   </div>
                   <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
@@ -321,13 +331,13 @@ export default function ModelsPage() {
                           </div>
 
                           {/* Action Buttons */}
-                          <div style={{ display: "flex", gap: "10px", marginTop: "8px" }}>
+                          <div style={{ display: "flex", gap: "8px", marginTop: "8px", width: "100%", boxSizing: "border-box" }}>
                             {benchmarkProgress.status === "PAUSED" ? (
                               <>
                                 <button
                                   type="button"
                                   className="btn-resume-benchmark"
-                                  style={{ flex: 1, padding: "12px 16px", fontSize: "15px" }}
+                                  style={{ flex: 1, padding: "12px 16px", fontSize: "14px", whiteSpace: "nowrap" }}
                                   onClick={handleResumeBenchmark}
                                 >
                                   ▶ RESUME BENCHMARK
@@ -335,7 +345,7 @@ export default function ModelsPage() {
                                 <button
                                   type="button"
                                   className="btn-stop-benchmark"
-                                  style={{ padding: "12px 16px", fontSize: "15px" }}
+                                  style={{ padding: "12px 16px", fontSize: "14px", flexShrink: 0, whiteSpace: "nowrap" }}
                                   onClick={handleStopBenchmark}
                                   title="Stop and clear remaining images"
                                 >
@@ -347,7 +357,7 @@ export default function ModelsPage() {
                                 <button
                                   type="button"
                                   className="btn-start-benchmark"
-                                  style={{ flex: 1, padding: "12px 16px", fontSize: "15px" }}
+                                  style={{ flex: 1, padding: "12px 14px", fontSize: "14px", whiteSpace: "nowrap", minWidth: 0 }}
                                   disabled={isBenchmarkStarting || benchmarkProgress.status === "RUNNING"}
                                   onClick={handleStartBenchmark}
                                 >
@@ -361,7 +371,7 @@ export default function ModelsPage() {
                                   <button
                                     type="button"
                                     className="btn-pause-benchmark"
-                                    style={{ padding: "12px 16px", fontSize: "15px" }}
+                                    style={{ padding: "12px 14px", fontSize: "14px", flexShrink: 0, whiteSpace: "nowrap" }}
                                     onClick={handlePauseBenchmark}
                                     title="Pause execution temporarily"
                                   >
@@ -372,7 +382,7 @@ export default function ModelsPage() {
                                   <button
                                     type="button"
                                     className="btn-stop-benchmark"
-                                    style={{ padding: "12px 16px", fontSize: "15px" }}
+                                    style={{ padding: "12px 14px", fontSize: "14px", flexShrink: 0, whiteSpace: "nowrap" }}
                                     onClick={handleStopBenchmark}
                                     title="Stop and cancel benchmark"
                                   >
@@ -864,7 +874,36 @@ export default function ModelsPage() {
                                         >
                                           ACTIVATE
                                         </button>
-                                        <button className="action-btn-sm delete-red" onClick={() => handleDeleteModel(model)}>DELETE</button>
+                                        {deletingModelName === model.name ? (
+                                          <div style={{ display: "flex", gap: "4px" }}>
+                                            <button
+                                              className="action-btn-sm delete-red"
+                                              style={{ background: "#dc2626", color: "#fff", fontWeight: "700" }}
+                                              onClick={async () => {
+                                                await handleDeleteModel(model, true);
+                                                setDeletingModelName(null);
+                                              }}
+                                              title="Confirm permanent deletion"
+                                            >
+                                              CONFIRM
+                                            </button>
+                                            <button
+                                              className="action-btn-sm"
+                                              onClick={() => setDeletingModelName(null)}
+                                              title="Cancel deletion"
+                                            >
+                                              ✕
+                                            </button>
+                                          </div>
+                                        ) : (
+                                          <button
+                                            className="action-btn-sm delete-red"
+                                            onClick={() => setDeletingModelName(model.name)}
+                                            title="Delete model"
+                                          >
+                                            DELETE
+                                          </button>
+                                        )}
                                       </div>
                                     )}
                                   </td>
@@ -878,6 +917,13 @@ export default function ModelsPage() {
                   </div>
 
                 </div>
+              )}
+
+              {/* -------------------------------------------------------------
+                  VIEW C: MODEL TRAINING STUDIO
+                  ------------------------------------------------------------- */}
+              {benchmarkActiveSubTab === "training" && (
+                <ModelTrainingSubTab />
               )}
 
             </main>

@@ -8,7 +8,10 @@ import shutil
 import asyncio
 import queue
 import numpy as np
-import psycopg2
+try:
+    import psycopg2
+except ImportError:
+    psycopg2 = None
 import matplotlib
 matplotlib.use('Agg')
 from typing import List, Optional
@@ -47,6 +50,8 @@ PROJECT_ROOT = os.path.abspath(os.path.join(_THIS_DIR, ".."))
 CORE_DIR = os.path.join(_THIS_DIR, "core")
 
 def _resolve_sim_path(p_str):
+    if not p_str:
+        return ""
     if os.path.isabs(p_str):
         return p_str
     return os.path.abspath(os.path.join(_THIS_DIR, p_str))
@@ -64,10 +69,10 @@ POSTGRES_CONFIG = {
 }
 
 # Directory Paths for Machine Interfacing Pipeline (Mapped to Factory Drives N: & M:)
-IMAGE_DIR = _resolve_sim_path(PATHS_CFG.get("image_dir", "simulation/drive_N/WP288/PMI/IMAGE"))
+IMAGE_DIR = ""
 PROCESS_DIR = PATHS_CFG.get("process_dir", "/tmp/imx8_process")
-OUTPUT_DIR = _resolve_sim_path(PATHS_CFG.get("output_dir", "simulation/drive_M/WP288/PMI/OUTPUT"))
-JUDGEMENT_DIR = _resolve_sim_path(PATHS_CFG.get("judge_dir", "simulation/drive_N/WP288/PMI/JUDGE"))
+OUTPUT_DIR = ""
+JUDGEMENT_DIR = ""
 MODELS_DIR = _resolve_sim_path("models")
 
 # ==============================================================================
@@ -77,8 +82,11 @@ def resolve_windows_drive_path(raw_path: str, sim_root: str = None) -> str:
     """
     Translates Windows network drive paths (N:, M:, T:) to Linux mount points (/mnt/N, /mnt/M, /mnt/T)
     or local simulation directories.
-    e.g. 'N:\\WP288\\PMI\\IMAGE' -> '/mnt/N/WP288/PMI/IMAGE' (if /mnt/N exists on i.MX8 Linux)
-         or './simulation/drive_N/WP288/PMI/IMAGE' (in simulation mode).
+    Supports:
+      1. Direct Linux absolute paths (e.g. '/mnt/N/WP288/PMI/IMAGE')
+      2. Windows drive paths with case-insensitive mounts (/mnt/N, /mnt/n, /media/N, /media/n, /mnt/drive_n, etc.)
+      3. Subpath fallback (e.g. if CIFS was mounted directly to //prober/WP288, /mnt/N/PMI/IMAGE is auto-detected)
+      4. Fallback to local simulation workspace if hardware mount is not present.
     """
     if not raw_path:
         return ""
@@ -86,28 +94,55 @@ def resolve_windows_drive_path(raw_path: str, sim_root: str = None) -> str:
         sim_root = os.path.join(_THIS_DIR, "simulation")
     clean = raw_path.replace("\\", "/")
     
-    # Check for Windows Drive format (e.g. N:/..., M:/..., T:/...)
+    # 1. Direct Linux absolute path (e.g. /mnt/N/..., /media/...)
+    if os.path.isabs(clean):
+        return clean
+
+    # 2. Windows Drive format (e.g. N:/..., M:/..., T:/...)
     match = re.match(r"^([A-Za-z]):/(.*)$", clean)
     if match:
         drive_upper = match.group(1).upper()
         drive_lower = match.group(1).lower()
-        rest = match.group(2)
+        rest = match.group(2).strip("/")
         
-        linux_mount_upper = f"/mnt/{drive_upper}/{rest}"
-        linux_mount_lower = f"/mnt/{drive_lower}/{rest}"
-        
-        # Primary check: Uppercase mount path on i.MX8 (e.g. /mnt/N, /mnt/M, /mnt/T)
-        if os.path.exists(f"/mnt/{drive_upper}"):
-            return linux_mount_upper
-        # Secondary check: Lowercase mount path
-        elif os.path.exists(f"/mnt/{drive_lower}"):
-            return linux_mount_lower
+        # Check potential Linux mount points on actual i.MX8
+        custom_root = os.environ.get("IMX8_FACTORY_MOUNT_ROOT")
+        candidate_mounts = []
+        if custom_root and os.path.exists(custom_root):
+            candidate_mounts.extend([
+                os.path.join(custom_root, drive_upper),
+                os.path.join(custom_root, drive_lower)
+            ])
             
+        candidate_mounts.extend([
+            f"/mnt/{drive_upper}",
+            f"/mnt/{drive_lower}",
+            f"/media/{drive_upper}",
+            f"/media/{drive_lower}",
+            f"/mnt/drive_{drive_lower}",
+            f"/mnt/drive_{drive_upper}",
+        ])
+        
+        for m_base in candidate_mounts:
+            if os.path.exists(m_base):
+                # Check exact path under mount point
+                exact_path = os.path.join(m_base, rest)
+                if os.path.exists(exact_path):
+                    return exact_path
+                    
+                # Check if share root was mounted directly to subfolder (e.g. /mnt/N is already WP288)
+                parts = rest.split("/")
+                for idx in range(1, len(parts)):
+                    sub_candidate = os.path.join(m_base, *parts[idx:])
+                    if os.path.exists(sub_candidate):
+                        return sub_candidate
+                        
+                # If neither subpath exists yet (e.g. creating new output folder), default to exact
+                return exact_path
+                
         # Fallback to local simulation workspace
         return os.path.abspath(os.path.join(sim_root, f"drive_{drive_upper}", rest))
         
-    if os.path.isabs(clean):
-        return clean
     return os.path.abspath(os.path.join(sim_root, clean.lstrip("/")))
 
 DEFAULT_PRODUCT_SETTING = {
@@ -201,6 +236,16 @@ def load_initial_machine_setting():
 
 ACTIVE_PRODUCT_SETTING = load_initial_product_setting()
 ACTIVE_MACHINE_SETTING = load_initial_machine_setting()
+
+# Dynamically resolve machine interface directories from config.yaml or Machine_Setting.txt
+_cfg_img = PATHS_CFG.get("image_dir")
+IMAGE_DIR = _resolve_sim_path(_cfg_img) if _cfg_img else resolve_windows_drive_path(ACTIVE_MACHINE_SETTING.get("lot.source.folder", "N:\\WP288\\PMI\\IMAGE"))
+
+_cfg_out = PATHS_CFG.get("output_dir")
+OUTPUT_DIR = _resolve_sim_path(_cfg_out) if _cfg_out else resolve_windows_drive_path(ACTIVE_MACHINE_SETTING.get("lot.output.folder", "M:\\WP288\\PMI\\OUTPUT"))
+
+_cfg_judge = PATHS_CFG.get("judge_dir")
+JUDGEMENT_DIR = _resolve_sim_path(_cfg_judge) if _cfg_judge else resolve_windows_drive_path(ACTIVE_MACHINE_SETTING.get("machine.result.folder", "N:\\WP288\\PMI\\JUDGE"))
 
 def extract_machine_from_path(folder_path: str) -> str:
     """
@@ -405,11 +450,16 @@ latest_batch_summary = {
 }
 
 # Initialize Machine Shared & Internal Folders
-os.makedirs(IMAGE_DIR, exist_ok=True)
-os.makedirs(PROCESS_DIR, exist_ok=True)
-os.makedirs(OUTPUT_DIR, exist_ok=True)
-os.makedirs(JUDGEMENT_DIR, exist_ok=True)
-os.makedirs(MODELS_DIR, exist_ok=True)
+if IMAGE_DIR:
+    os.makedirs(IMAGE_DIR, exist_ok=True)
+if PROCESS_DIR:
+    os.makedirs(PROCESS_DIR, exist_ok=True)
+if OUTPUT_DIR:
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+if JUDGEMENT_DIR:
+    os.makedirs(JUDGEMENT_DIR, exist_ok=True)
+if MODELS_DIR:
+    os.makedirs(MODELS_DIR, exist_ok=True)
 
 app = FastAPI(title="Edge AI Wafer Inspection System - i.MX8 Node")
 
@@ -522,20 +572,37 @@ manager = ConnectionManager()
 # DATABASE CONNECTOR (PostgreSQL Exclusively)
 # ==========================================
 def get_pg_connection():
-    return psycopg2.connect(
-        host=POSTGRES_CONFIG["host"],
-        port=POSTGRES_CONFIG["port"],
-        user=POSTGRES_CONFIG["user"],
-        password=POSTGRES_CONFIG["password"],
-        database=POSTGRES_CONFIG["database"],
-        connect_timeout=3
-    )
+    if psycopg2 is None:
+        return None
+    try:
+        return psycopg2.connect(
+            host=POSTGRES_CONFIG["host"],
+            port=POSTGRES_CONFIG["port"],
+            user=POSTGRES_CONFIG["user"],
+            password=POSTGRES_CONFIG["password"],
+            database=POSTGRES_CONFIG["database"],
+            connect_timeout=1
+        )
+    except Exception:
+        return None
 
 def init_database():
     global db_type, inspection_count
-    db_type = "PostgreSQL"
+    db_type = "Disabled/External"
+    if psycopg2 is None:
+        print("ℹ️ [DB] psycopg2 not present. Inspection persistence is handled via NestJS Central PC Server.")
+        inspection_count = 0
+        prune_all_benchmark_caches()
+        return
+
     try:
         conn = get_pg_connection()
+        if conn is None:
+            print("ℹ️ [DB] PostgreSQL not reachable on localhost. Persistence handled via Central PC Server.")
+            inspection_count = 0
+            prune_all_benchmark_caches()
+            return
+
         cursor = conn.cursor()
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS inspections (
@@ -594,21 +661,56 @@ def init_database():
                 notes TEXT
             );
         """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS audit_logs (
+                id SERIAL PRIMARY KEY,
+                timestamp VARCHAR(50),
+                category VARCHAR(50),
+                action VARCHAR(100),
+                details TEXT,
+                author VARCHAR(50) DEFAULT 'Operator'
+            );
+        """)
         conn.commit()
         cursor.close()
         conn.close()
-        print("✅ i.MX8 Node connected to PostgreSQL Database exclusively!")
+        db_type = "PostgreSQL"
+        print("✅ i.MX8 Node connected to PostgreSQL Database!")
     except Exception as e:
-        print("❌ PostgreSQL initialization error:", e)
+        print("ℹ️ PostgreSQL local initialization skipped:", e)
 
     inspection_count = get_initial_inspection_count()
     print(f"📊 [DB INIT] Inspection Counter initialized to: {inspection_count}")
     prune_all_benchmark_caches()
 
 
-def get_initial_inspection_count() -> int:
+def log_audit(category: str, action: str, details: str, author: str = "Operator"):
+    """Appends an immutable audit log record to PostgreSQL database if available."""
+    conn = get_pg_connection()
+    if conn is None:
+        print(f"[AUDIT] [{category}] {action}: {details}")
+        return
     try:
-        conn = get_pg_connection()
+        cursor = conn.cursor()
+        now_str = time.strftime("%Y-%m-%d %H:%M:%S")
+        cursor.execute("""
+            INSERT INTO audit_logs (timestamp, category, action, details, author)
+            VALUES (%s, %s, %s, %s, %s);
+        """, (now_str, category, action, details, author))
+        conn.commit()
+        cursor.close()
+        conn.close()
+        print(f"[AUDIT] [{category}] {action}: {details}")
+    except Exception as e:
+        print(f"[AUDIT] Error writing audit log: {e}")
+
+
+
+def get_initial_inspection_count() -> int:
+    conn = get_pg_connection()
+    if conn is None:
+        return 0
+    try:
         cursor = conn.cursor()
         cursor.execute("SELECT MAX(id) FROM inspections;")
         res = cursor.fetchone()
@@ -622,8 +724,10 @@ def get_initial_inspection_count() -> int:
 
 
 def save_inspection_to_db(record):
+    conn = get_pg_connection()
+    if conn is None:
+        return
     try:
-        conn = get_pg_connection()
         cursor = conn.cursor()
         cursor.execute("""
             INSERT INTO inspections (
@@ -653,7 +757,7 @@ def sync_to_pc_server(record):
     central_cfg = SYS_CONFIG.get("central_server", {})
     if not central_cfg.get("enabled", True):
         return
-    pc_url = central_cfg.get("url", "http://localhost:3000/api/v1/inspections")
+    pc_url = os.getenv("CENTRAL_SERVER_URL") or central_cfg.get("url", "http://localhost:3000/api/v1/inspections")
     
     def _do_post():
         try:
@@ -1261,6 +1365,11 @@ def process_new_file(filepath, filename):
             "batch": parsed_meta.get("batch", "-"),
             "waferNo": parsed_meta.get("waferNo", "-")
         }
+        if main_loop:
+            asyncio.run_coroutine_threadsafe(manager.broadcast(json.dumps({
+                "event": "BATCH_START",
+                "data": latest_batch_summary
+            })), main_loop)
 
     # Append the current record immediately into the batch so current inspection is counted
     current_batch_records.append(record)
@@ -1872,11 +1981,13 @@ def process_benchmark_image(task: dict):
 def folder_watcher_thread():
     """
     Monitors machine input folders (Drive N: IMAGE and local simulation/image).
+    Supports recursive subfolder discovery (e.g. N:/.../IMAGE/<batch_folder>/<image.bmp>).
     When an image arrives:
-      1. Parses filename to extract lot/batch number ({output.lotNo}).
+      1. Parses filename & subfolder to extract lot/batch number ({output.lotNo}).
       2. Creates target Drive M: PROCESSED/{output.lotNo} folder if it doesn't exist.
       3. Moves the raw image to Drive M: PROCESSED/{output.lotNo}/ (raw file remains preserved).
-      4. Dispatches the image into High-Priority P0 Queue for AI inference.
+      4. Cleans up empty batch subfolders in Drive N once emptied.
+      5. Dispatches the image into High-Priority P0 Queue for AI inference.
     """
     print("i.MX8 Machine Folder Watcher initialized.")
     print(f"  👉 Machine Input  : {IMAGE_DIR}")
@@ -1896,15 +2007,21 @@ def folder_watcher_thread():
                 source_dirs.add(sim_src)
 
             for s_dir in source_dirs:
+                # Discover files recursively (both flat s_dir and subdirectories created by Prober)
+                found_entries = []
                 try:
-                    image_files = [f for f in os.listdir(s_dir) if f.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp'))]
+                    for root, dirs, files in os.walk(s_dir):
+                        for f in files:
+                            if f.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp')):
+                                rel = os.path.relpath(root, s_dir)
+                                sub_batch = os.path.basename(root) if rel != "." else None
+                                found_entries.append((os.path.join(root, f), f, sub_batch, root))
                     # Ensure _END files are processed strictly at the end of the batch
-                    image_files.sort(key=lambda f: (1 if is_end_filename(f) else 0, f))
+                    found_entries.sort(key=lambda item: (1 if is_end_filename(item[1]) else 0, item[1]))
                 except Exception:
-                    image_files = []
+                    found_entries = []
 
-                for file in image_files:
-                    src_path = os.path.join(s_dir, file)
+                for src_path, file, sub_batch, parent_dir in found_entries:
                     try:
                         # Ensure camera/network has finished writing the file
                         if not os.path.exists(src_path):
@@ -1912,12 +2029,15 @@ def folder_watcher_thread():
                         size1 = os.path.getsize(src_path)
                         if size1 == 0:
                             continue
-                        time.sleep(0.02)
+                        # Safe Network SMB write-delay check (100ms)
+                        time.sleep(0.1)
                         if not os.path.exists(src_path) or os.path.getsize(src_path) != size1:
                             continue  # Still being written by camera, process next loop
 
                         meta = parse_wafer_filename(file, get_current_prober_name())
-                        raw_lot = meta.get("batch") or meta.get("waferNo") or "UNKNOWN_LOT"
+                        raw_lot = meta.get("batch") or meta.get("waferNo") or sub_batch or "UNKNOWN_LOT"
+                        if raw_lot in ("-", "", "UNKNOWN_LOT") and sub_batch:
+                            raw_lot = sub_batch
                         lot_no_str = raw_lot.split("-")[0].strip() if raw_lot and raw_lot != "-" else "UNKNOWN_LOT"
                         
                         inp_tmpl = ACTIVE_MACHINE_SETTING.get("lot.input.folder", "M:\\WP288\\PMI\\PROCESSED\\{output.lotNo}")
@@ -1932,6 +2052,14 @@ def folder_watcher_thread():
                         # Copy a working copy to PROCESS_DIR buffer for AI
                         shutil.copy2(raw_preserved_path, proc_work_path)
                         
+                        # Clean up empty subfolder if Prober placed images inside a batch subfolder
+                        if parent_dir != s_dir:
+                            try:
+                                if os.path.exists(parent_dir) and not os.listdir(parent_dir):
+                                    os.rmdir(parent_dir)
+                            except Exception:
+                                pass
+
                         P0_QUEUE.put({
                             "filepath": proc_work_path,
                             "filename": file,
@@ -2098,8 +2226,19 @@ def load_history_from_db():
             t_short = r[1].split(" ")[1] if len(r[1].split(" ")) > 1 else r[1]
             stored_url = r[12] if len(r) > 12 and r[12] else None
             ann_url = stored_url if stored_url else None
-            raw_url = stored_url.replace("annotated_", "raw_") if stored_url else None
-            comp_url = stored_url.replace("annotated_", "inspect_") if stored_url else None
+            if stored_url:
+                raw_url = stored_url.replace("/api/images/annotated/", "/api/images/raw/").replace("/inspect_", "/")
+                parts = stored_url.split("?")
+                base_path = parts[0]
+                q_str = f"?{parts[1]}" if len(parts) > 1 else ""
+                dir_part, file_part = os.path.split(base_path)
+                if not file_part.startswith("inspect_"):
+                    comp_url = f"{dir_part}/inspect_{file_part}{q_str}"
+                else:
+                    comp_url = stored_url
+            else:
+                raw_url = None
+                comp_url = None
             meta = parse_wafer_filename(stored_url or r[0], prober_name)
             records.append({
                 "id": r[0], "timestamp": r[1], "timeShort": t_short, "decision": r[2],
@@ -2190,6 +2329,11 @@ async def reset_batch_state():
         "batch": "-",
         "waferNo": "-"
     }
+    if main_loop:
+        asyncio.run_coroutine_threadsafe(manager.broadcast(json.dumps({
+            "event": "BATCH_START",
+            "data": latest_batch_summary
+        })), main_loop)
     return {"status": "success", "message": "Batch state reset successfully"}
 
 @app.get("/api/history")
@@ -2276,6 +2420,9 @@ async def get_active_config():
     
     sim_source = resolve_windows_drive_path(ACTIVE_MACHINE_SETTING.get("lot.source.folder", ""))
     sim_judge = resolve_windows_drive_path(ACTIVE_MACHINE_SETTING.get("machine.result.folder", ""))
+    sim_processed = resolve_windows_drive_path(ACTIVE_MACHINE_SETTING.get("lot.input.folder", ""))
+    sim_output = resolve_windows_drive_path(ACTIVE_MACHINE_SETTING.get("lot.output.folder", ""))
+    is_hardware_mounted = any(os.path.exists(p) for p in ["/mnt/N", "/mnt/n", "/mnt/M", "/mnt/m", "/media/N", "/media/n"])
     
     return {
         "status": "success",
@@ -2292,6 +2439,9 @@ async def get_active_config():
             "vRoi": ACTIVE_PRODUCT_SETTING.get("verticalRoi", 0.7),
             "simulatedSourceFolder": sim_source,
             "simulatedJudgeFolder": sim_judge,
+            "processedFolder": sim_processed,
+            "outputFolder": sim_output,
+            "isHardwareMounted": is_hardware_mounted,
         }
     }
 
@@ -2370,6 +2520,7 @@ async def upload_product_config(file: UploadFile = File(...)):
             json.dump(ACTIVE_PRODUCT_SETTING, f, indent=2)
             
         print(f"[CONFIG] Stored and activated Product Recipe from '{file.filename}'")
+        log_audit("RECIPE", "UPLOAD_RECIPE", f"Uploaded and activated recipe '{file.filename}'")
         return {
             "status": "success",
             "message": f"Successfully stored and activated Product Recipe '{file.filename}'",
@@ -2410,6 +2561,7 @@ async def upload_machine_config(file: UploadFile = File(...)):
                 os.makedirs(sim_path, exist_ok=True)
                 
         print(f"[CONFIG] Stored and activated Machine Setting from '{file.filename}'")
+        log_audit("MACHINE", "UPLOAD_MACHINE_CONFIG", f"Uploaded and activated machine setting '{file.filename}'")
         return {
             "status": "success",
             "message": f"Successfully stored and activated Machine Setting '{file.filename}'",
@@ -2428,6 +2580,7 @@ async def activate_recipe_endpoint(payload: dict = Body(...)):
     success = apply_recipe_by_filename(name)
     if not success:
         raise HTTPException(status_code=404, detail=f"Recipe file '{name}' not found")
+    log_audit("RECIPE", "ACTIVATE_RECIPE", f"Activated recipe '{name}'")
     return {"status": "success", "message": f"Activated Recipe '{name}'", "product": ACTIVE_PRODUCT_SETTING}
 
 @app.post("/api/config/activate-machine")
@@ -2438,6 +2591,7 @@ async def activate_machine_endpoint(payload: dict = Body(...)):
     success = apply_machine_by_filename(name)
     if not success:
         raise HTTPException(status_code=404, detail=f"Machine config '{name}' not found")
+    log_audit("MACHINE", "ACTIVATE_MACHINE_CONFIG", f"Activated machine setting '{name}'")
     return {"status": "success", "message": f"Activated Machine Setting '{name}'", "machine": ACTIVE_MACHINE_SETTING}
 
 @app.post("/api/config/bind")
@@ -2461,9 +2615,10 @@ async def bind_model_config(payload: dict = Body(...)):
         if machine_config: apply_machine_by_filename(machine_config)
         
     print(f"[CONFIG] Bound model '{model_name}' to recipe '{recipe}'")
+    log_audit("MODEL", "BIND_MODEL_CONFIG", f"Bound model '{model_name}' to recipe '{recipe or ''}'")
     return {"status": "success", "message": f"Bound model '{model_name}' to recipe '{recipe}'", "bindings": reg["bindings"]}
 
-@app.delete("/api/config/{config_type}/{filename}")
+@app.delete("/api/config/{config_type}/{filename:path}")
 async def delete_config_file(config_type: str, filename: str):
     base_dir = RECIPES_DIR if config_type == "product" else MACHINES_DIR
     target = os.path.join(base_dir, filename)
@@ -2476,6 +2631,16 @@ async def delete_config_file(config_type: str, filename: str):
     if os.path.exists(target):
         try:
             os.remove(target)
+            # If a deleted recipe was bound to any model, clean it up
+            if config_type == "product" and "bindings" in reg:
+                changed = False
+                for m_name, b_info in list(reg["bindings"].items()):
+                    if b_info.get("recipe") == filename:
+                        b_info["recipe"] = "Product_Setting.txt"
+                        changed = True
+                if changed:
+                    save_model_recipe_bindings(reg)
+            log_audit(config_type.upper(), f"DELETE_{config_type.upper()}_CONFIG", f"Deleted {config_type} config file '{filename}'")
             return {"status": "success", "message": f"Deleted {config_type} config '{filename}'"}
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
@@ -2502,6 +2667,7 @@ async def apply_config_preset(preset_name: str = Body(..., embed=True)):
                 "verticalRoi": 0.6,
                 "horizontalRoi": 0.6
             })
+        log_audit("SETTINGS", "APPLY_PRESET", f"Applied preset configuration '{preset_name}'")
         return {
             "status": "success",
             "message": f"Applied preset '{preset_name}'",
@@ -2515,12 +2681,15 @@ async def apply_config_preset(preset_name: str = Body(..., embed=True)):
 async def update_thresholds(payload: dict = Body(...)):
     global ACTIVE_PRODUCT_SETTING
     try:
+        old_dist = float(ACTIVE_PRODUCT_SETTING.get("edgeThreshold", 8.0))
+        old_area = float(ACTIVE_PRODUCT_SETTING.get("areaRatioThreshold", 25.0))
         fail_dist = float(payload.get("fail_distance_um", 8.0))
         max_area = float(payload.get("max_area_ratio_pct", 25.0))
         ACTIVE_PRODUCT_SETTING["edgeThreshold"] = fail_dist
         ACTIVE_PRODUCT_SETTING["areaRatioThreshold"] = max_area
         with open(os.path.join(_THIS_DIR, "active_product_setting.json"), "w", encoding="utf-8") as f:
             json.dump(ACTIVE_PRODUCT_SETTING, f, indent=2)
+        log_audit("SETTINGS", "UPDATE_THRESHOLDS", f"Fail Distance: {old_dist:.1f}µm ➔ {fail_dist:.1f}µm, Max Area: {old_area:.0f}% ➔ {max_area:.0f}%")
         return {
             "status": "success",
             "message": f"Updated thresholds: Fail Dist={fail_dist}µm, Max Area={max_area}%",
@@ -2528,6 +2697,92 @@ async def update_thresholds(payload: dict = Body(...)):
         }
     except Exception as e:
         return JSONResponse(status_code=400, content={"status": "error", "message": str(e)})
+
+# ==============================================================================
+# AUDIT LOG ENDPOINTS
+# ==============================================================================
+@app.get("/api/audit-logs")
+async def get_audit_logs(limit: int = 100, category: str = None, search: str = None):
+    """Fetches system audit trail with filtering and search."""
+    try:
+        conn = get_pg_connection()
+        cursor = conn.cursor()
+        query = "SELECT id, timestamp, category, action, details, author FROM audit_logs"
+        params = []
+        conditions = []
+        if category and category.upper() != "ALL":
+            conditions.append("category = %s")
+            params.append(category.upper())
+        if search and search.strip():
+            conditions.append("(action ILIKE %s OR details ILIKE %s OR author ILIKE %s)")
+            q = f"%{search.strip()}%"
+            params.extend([q, q, q])
+        if conditions:
+            query += " WHERE " + " AND ".join(conditions)
+        query += " ORDER BY id DESC LIMIT %s"
+        params.append(limit)
+        cursor.execute(query, tuple(params))
+        rows = cursor.fetchall()
+        cursor.close()
+        conn.close()
+        logs = [{
+            "id": r[0],
+            "timestamp": r[1],
+            "category": r[2],
+            "action": r[3],
+            "details": r[4],
+            "author": r[5]
+        } for r in rows]
+        return {"status": "success", "total": len(logs), "logs": logs}
+    except Exception as e:
+        print("[AUDIT LOG] Error fetching audit logs:", e)
+        return JSONResponse(status_code=500, content={"status": "error", "message": str(e), "logs": []})
+
+@app.get("/api/audit-logs/export-csv")
+async def export_audit_logs_csv(category: str = None):
+    """Exports audit logs as a downloadable CSV spreadsheet."""
+    import io
+    import csv
+    from fastapi.responses import Response
+    try:
+        conn = get_pg_connection()
+        cursor = conn.cursor()
+        query = "SELECT timestamp, category, action, details, author FROM audit_logs"
+        params = []
+        if category and category.upper() != "ALL":
+            query += " WHERE category = %s"
+            params.append(category.upper())
+        query += " ORDER BY id DESC"
+        cursor.execute(query, tuple(params))
+        rows = cursor.fetchall()
+        cursor.close()
+        conn.close()
+
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow(["Timestamp", "Category", "Action", "Details", "Author"])
+        for r in rows:
+            writer.writerow([r[0], r[1], r[2], r[3], r[4]])
+
+        csv_content = output.getvalue()
+        filename = f"audit_logs_{time.strftime('%Y%m%d_%H%M%S')}.csv"
+        return Response(
+            content=csv_content,
+            media_type="text/csv",
+            headers={"Content-Disposition": f"attachment; filename={filename}"}
+        )
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"status": "error", "message": str(e)})
+
+@app.post("/api/audit-logs/log")
+async def post_audit_log(payload: dict = Body(...)):
+    """Receives an audit log event directly from frontend."""
+    category = payload.get("category", "SETTINGS")
+    action = payload.get("action", "ACTION")
+    details = payload.get("details", "")
+    author = payload.get("author", "Operator")
+    log_audit(category, action, details, author)
+    return {"status": "success"}
 
 @app.get("/api/models")
 async def get_models():
@@ -2609,6 +2864,7 @@ async def upload_model(file: UploadFile = File(...)):
             
         size_mb = round(os.path.getsize(target_path) / (1024 * 1024), 1)
         print(f"📥 [MODEL UPLOAD] Ready TFLite model '{final_filename}' ({size_mb} MB) in {MODELS_DIR}")
+        log_audit("MODEL", "UPLOAD_MODEL", f"Uploaded and deployed model '{final_filename}' ({size_mb} MB)")
         return {
             "status": "success",
             "name": final_filename,
@@ -2694,6 +2950,7 @@ async def activate_model(payload: dict):
                     "data": { "name": model_name, "classes": 3, "recipe": bound_rec }
                 })), main_loop)
             
+            log_audit("MODEL", "ACTIVATE_MODEL", f"Activated model '{model_name}' on NPU/Edge")
             return {
                 "status": "success",
                 "active_model": model_name,
@@ -2705,22 +2962,52 @@ async def activate_model(payload: dict):
             raise HTTPException(status_code=500, detail=f"Failed to activate model: {err}")
 
 
-@app.delete("/api/models/{filename}")
+@app.delete("/api/models/{filename:path}")
 async def delete_model(filename: str):
     global tflite_model_path
-    if tflite_model_path and os.path.basename(tflite_model_path) == filename:
-        raise HTTPException(status_code=400, detail="Cannot delete currently active model on NPU.")
+    cur_active = os.path.basename(tflite_model_path) if tflite_model_path else "unet.tflite"
+    if cur_active == filename:
+        raise HTTPException(status_code=400, detail=f"Cannot delete currently active model '{filename}' on NPU. Please activate another model first.")
         
-    target_path = os.path.join(MODELS_DIR, filename)
-    if os.path.exists(target_path):
+    search_dirs = [
+        MODELS_DIR,
+        _THIS_DIR,
+        os.path.join(CORE_DIR, "models"),
+        PROJECT_ROOT
+    ]
+    deleted = False
+    for s_dir in search_dirs:
+        target_path = os.path.join(s_dir, filename)
+        if os.path.exists(target_path) and os.path.isfile(target_path):
+            try:
+                os.remove(target_path)
+                deleted = True
+                print(f"🗑️ [MODEL DELETE] Deleted model '{filename}' from {s_dir}")
+                # Clean up companion files if any
+                stem, _ = os.path.splitext(filename)
+                for comp_ext in [".pth", ".pt", ".quant.tflite"]:
+                    comp_file = os.path.join(s_dir, f"{stem}{comp_ext}")
+                    if os.path.exists(comp_file) and os.path.isfile(comp_file):
+                        try: os.remove(comp_file)
+                        except Exception: pass
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=f"Failed removing file: {e}")
+
+    reg = load_config_registry()
+    had_binding = filename in reg.get("bindings", {})
+    if deleted or had_binding:
+        # Clean up model_recipe_bindings.json
         try:
-            os.remove(target_path)
-            print(f"🗑️ [MODEL DELETE] Deleted model '{filename}' from {MODELS_DIR}")
-            return {"status": "success", "message": f"Deleted model '{filename}'"}
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=str(e))
+            if had_binding:
+                reg["bindings"].pop(filename, None)
+                save_model_recipe_bindings(reg)
+        except Exception as b_err:
+            print(f"[CONFIG] Warning cleaning binding for deleted model: {b_err}")
+
+        log_audit("MODEL", "DELETE_MODEL", f"Deleted model file '{filename}'")
+        return {"status": "success", "message": f"Deleted model '{filename}'"}
     else:
-        raise HTTPException(status_code=404, detail="File not found")
+        raise HTTPException(status_code=404, detail=f"Model file '{filename}' not found in model directories.")
 
 # ==============================================================================
 # MODEL VALIDATION LAB & HUMAN REVIEW BENCHMARK API ENDPOINTS

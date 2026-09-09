@@ -268,8 +268,8 @@ export function InspectionProvider({ children }) {
     setSelectedModalItem(item);
     const currentList = getActiveModalList();
     let trueIdx = (idx !== undefined && idx !== null) ? idx : -1;
-    if (trueIdx < 0 || trueIdx >= currentList.length || (currentList[trueIdx] && currentList[trueIdx].id !== item.id)) {
-      const foundIdx = currentList.findIndex(x => (x.id && x.id === item.id) || x === item);
+    if (trueIdx < 0 || trueIdx >= currentList.length || (currentList[trueIdx] && currentList[trueIdx] !== item && currentList[trueIdx]?.imageUrl !== item.imageUrl)) {
+      const foundIdx = currentList.findIndex(x => x === item || (x.imageUrl && x.imageUrl === item.imageUrl));
       trueIdx = foundIdx >= 0 ? foundIdx : 0;
     }
     setSelectedModalIndex(trueIdx);
@@ -286,8 +286,8 @@ export function InspectionProvider({ children }) {
     const currentList = getActiveModalList();
     if (currentList.length === 0) return;
     let curIdx = selectedModalIndex !== null && selectedModalIndex >= 0 ? selectedModalIndex : 0;
-    if (selectedModalItem && currentList[curIdx]?.id !== selectedModalItem?.id) {
-      const foundIdx = currentList.findIndex(item => (item.id && item.id === selectedModalItem.id) || item === selectedModalItem);
+    if (selectedModalItem && currentList[curIdx] !== selectedModalItem && currentList[curIdx]?.imageUrl !== selectedModalItem?.imageUrl) {
+      const foundIdx = currentList.findIndex(item => item === selectedModalItem || (item.imageUrl && item.imageUrl === selectedModalItem.imageUrl));
       if (foundIdx !== -1) curIdx = foundIdx;
     }
     const prevIdx = (curIdx - 1 + currentList.length) % currentList.length;
@@ -304,8 +304,8 @@ export function InspectionProvider({ children }) {
     const currentList = getActiveModalList();
     if (currentList.length === 0) return;
     let curIdx = selectedModalIndex !== null && selectedModalIndex >= 0 ? selectedModalIndex : 0;
-    if (selectedModalItem && currentList[curIdx]?.id !== selectedModalItem?.id) {
-      const foundIdx = currentList.findIndex(item => (item.id && item.id === selectedModalItem.id) || item === selectedModalItem);
+    if (selectedModalItem && currentList[curIdx] !== selectedModalItem && currentList[curIdx]?.imageUrl !== selectedModalItem?.imageUrl) {
+      const foundIdx = currentList.findIndex(item => item === selectedModalItem || (item.imageUrl && item.imageUrl === selectedModalItem.imageUrl));
       if (foundIdx !== -1) curIdx = foundIdx;
     }
     const nextIdx = (curIdx + 1) % currentList.length;
@@ -664,10 +664,12 @@ export function InspectionProvider({ children }) {
     }
   };
 
-  const handleDeleteConfigFile = async (configType, filename) => {
-    if (!window.confirm(`Delete ${configType} config '${filename}'?`)) return;
+  const handleDeleteConfigFile = async (configType, filename, skipConfirm = false) => {
+    if (!skipConfirm && typeof window !== "undefined" && window.confirm) {
+      if (!window.confirm(`Delete ${configType} config '${filename}'?`)) return;
+    }
     try {
-      const res = await fetch(`${apiBase}/api/config/${configType}/${filename}`, {
+      const res = await fetch(`${apiBase}/api/config/${configType}/${encodeURIComponent(filename)}`, {
         method: "DELETE"
       });
       const data = await res.json();
@@ -679,6 +681,171 @@ export function InspectionProvider({ children }) {
       }
     } catch (err) {
       alert(`Error: ${err.message}`);
+    }
+  };
+
+  // ==========================================
+  // SYSTEM AUDIT LOGS (backend_imx8 / PostgreSQL)
+  // ==========================================
+  const [auditLogs, setAuditLogs] = useState([]);
+  const [auditLoading, setAuditLoading] = useState(false);
+  const [auditError, setAuditError] = useState(null);
+
+  const fetchAuditLogs = useCallback(async (category = "", search = "", limit = 200) => {
+    setAuditLoading(true);
+    setAuditError(null);
+    try {
+      const params = new URLSearchParams();
+      if (category && category !== "ALL") params.append("category", category);
+      if (search && search.trim() !== "") params.append("search", search.trim());
+      if (limit) params.append("limit", limit);
+
+      const res = await fetch(`${apiBase}/api/audit-logs?${params.toString()}`);
+      if (res.ok) {
+        const data = await res.json();
+        setAuditLogs(data.logs || []);
+        return data.logs || [];
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        setAuditError(errData.detail || "Failed to fetch audit logs");
+      }
+    } catch (err) {
+      setAuditError(err.message);
+    } finally {
+      setAuditLoading(false);
+    }
+    return [];
+  }, [apiBase]);
+
+  const exportAuditCSV = (category = "", search = "") => {
+    const params = new URLSearchParams();
+    if (category && category !== "ALL") params.append("category", category);
+    if (search && search.trim() !== "") params.append("search", search.trim());
+    window.open(`${apiBase}/api/audit-logs/export-csv?${params.toString()}`, "_blank");
+  };
+
+  const logAuditEvent = async (category, action, details, author = "Operator") => {
+    try {
+      await fetch(`${apiBase}/api/audit-logs/log`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ category, action, details, author })
+      });
+      fetchAuditLogs();
+    } catch (err) {
+      console.warn("Failed to record audit event:", err);
+    }
+  };
+
+  // ==========================================
+  // PC MODEL TRAINING MODULE (backend_pc)
+  // ==========================================
+  const pcHost = typeof window !== "undefined" ? (window.location.hostname || "localhost") : "localhost";
+  const pcApiBase = `http://${pcHost === "0.0.0.0" || pcHost === "::" ? "localhost" : pcHost}:3000`;
+
+  const [trainingStatus, setTrainingStatus] = useState({
+    state: "idle",
+    model_name: "",
+    base_model: null,
+    current_epoch: 0,
+    total_epochs: 0,
+    train_loss: 0,
+    val_loss: 0,
+    progress_pct: 0,
+    eta_seconds: 0,
+    logs: [],
+    saved_pth: "",
+    saved_tflite: "",
+    message: ""
+  });
+  const [trainingModels, setTrainingModels] = useState([]);
+  const [isUploadingDataset, setIsUploadingDataset] = useState(false);
+  const [datasetUploadResult, setDatasetUploadResult] = useState(null);
+
+  const fetchTrainingModels = useCallback(async () => {
+    try {
+      const res = await fetch(`${pcApiBase}/api/v1/training/models`);
+      if (res.ok) {
+        const data = await res.json();
+        setTrainingModels(data.models || []);
+        return data.models || [];
+      }
+    } catch (err) {
+      console.warn("Failed to fetch training models:", err);
+    }
+    return [];
+  }, [pcApiBase]);
+
+  const fetchTrainingStatus = useCallback(async () => {
+    try {
+      const res = await fetch(`${pcApiBase}/api/v1/training/status`);
+      if (res.ok) {
+        const data = await res.json();
+        setTrainingStatus(data);
+        return data;
+      }
+    } catch (err) {
+      // quiet poll
+    }
+    return null;
+  }, [pcApiBase]);
+
+  const uploadTrainingDataset = async (file, modelName, baseModelId = null) => {
+    setIsUploadingDataset(true);
+    setDatasetUploadResult(null);
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("model_name", modelName);
+      if (baseModelId) formData.append("base_model_id", baseModelId);
+
+      const res = await fetch(`${pcApiBase}/api/v1/training/upload-dataset`, {
+        method: "POST",
+        body: formData
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setDatasetUploadResult(data);
+        return { success: true, data };
+      } else {
+        return { success: false, message: data.message || "Failed to upload dataset" };
+      }
+    } catch (err) {
+      return { success: false, message: err.message };
+    } finally {
+      setIsUploadingDataset(false);
+    }
+  };
+
+  const startTrainingJob = async (trainingParams) => {
+    try {
+      const res = await fetch(`${pcApiBase}/api/v1/training/start`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(trainingParams)
+      });
+      const data = await res.json();
+      if (res.ok) {
+        fetchTrainingStatus();
+        return { success: true, data };
+      } else {
+        return { success: false, message: data.message || "Failed to start training" };
+      }
+    } catch (err) {
+      return { success: false, message: err.message };
+    }
+  };
+
+  const stopTrainingJob = async () => {
+    try {
+      const res = await fetch(`${pcApiBase}/api/v1/training/stop`, {
+        method: "POST"
+      });
+      const data = await res.json();
+      fetchTrainingStatus();
+      return { success: res.ok, data };
+    } catch (err) {
+      return { success: false, message: err.message };
     }
   };
 
@@ -1032,47 +1199,58 @@ export function InspectionProvider({ children }) {
       });
   };
 
-  const handleActivateModel = (model) => {
-    fetch(`${apiBase}/api/models/activate`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: model.name })
-    })
-      .then(res => {
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return res.json();
-      })
-      .then(data => {
-        setModelsList(prev => prev.map(m => ({ ...m, active: m.name === model.name })));
-        setBenchmarkModel(model.name);
-        alert(`[NPU HOT-SWAP SUCCESS]\nModel '${model.name}' activated on i.MX8 NPU Delegate!`);
-        fetchModels();
-        fetchConfigLibrary();
-        fetchActiveConfig();
-      })
-      .catch(err => {
-        console.error("Activation error:", err);
-        setModelsList(prev => prev.map(m => ({ ...m, active: m.name === model.name })));
+  const handleActivateModel = async (model) => {
+    const modelName = typeof model === "string" ? model : (model?.name || "");
+    if (!modelName) {
+      alert("Error: Model name is missing.");
+      return;
+    }
+    try {
+      const res = await fetch(`${apiBase}/api/models/activate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: modelName })
       });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        setModelsList(prev => prev.map(m => ({ ...m, active: m.name === modelName })));
+        setBenchmarkModel(modelName);
+        alert(`[NPU HOT-SWAP SUCCESS]\nModel '${modelName}' activated on i.MX8 NPU Delegate!`);
+        await fetchModels();
+        await fetchConfigLibrary();
+        await fetchActiveConfig();
+      } else {
+        alert(`[ACTIVATION FAILED]\n${data.detail || data.message || `HTTP ${res.status}`}`);
+      }
+    } catch (err) {
+      console.error("Activation error:", err);
+      alert(`Network error activating model: ${err.message}`);
+    }
   };
 
-  const handleDeleteModel = (model) => {
-    if (!window.confirm(`Are you sure you want to delete model '${model.name}'?`)) return;
-    fetch(`${apiBase}/api/models/${encodeURIComponent(model.name)}`, {
-      method: "DELETE"
-    })
-      .then(res => {
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return res.json();
-      })
-      .then(data => {
-        alert(`Deleted model '${model.name}' successfully!`);
-        fetchModels();
-        fetchConfigLibrary();
-      })
-      .catch(err => {
-        setModelsList(prev => prev.filter(m => m.name !== model.name));
+  const handleDeleteModel = async (model, skipConfirm = false) => {
+    const modelName = typeof model === "string" ? model : (model?.name || "");
+    if (!modelName) return;
+    if (!skipConfirm && typeof window !== "undefined" && window.confirm) {
+      if (!window.confirm(`Are you sure you want to delete model '${modelName}'?`)) return;
+    }
+    try {
+      const res = await fetch(`${apiBase}/api/models/${encodeURIComponent(modelName)}`, {
+        method: "DELETE"
       });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        alert(`Deleted model '${modelName}' successfully!`);
+        await fetchModels();
+        await fetchConfigLibrary();
+      } else {
+        alert(`[DELETE ERROR]\n${data.detail || data.message || `Failed to delete model (HTTP ${res.status})`}`);
+        await fetchModels();
+      }
+    } catch (err) {
+      console.error("Delete model error:", err);
+      alert(`Network error deleting model: ${err.message}`);
+    }
   };
 
 
@@ -1108,15 +1286,20 @@ export function InspectionProvider({ children }) {
     return () => clearInterval(interval);
   }, []);
 
-  const fetchModels = () => {
-    fetch(`${apiBase}/api/models`)
-      .then(res => res.json())
-      .then(data => {
-        if (data && data.length > 0) {
+  const fetchModels = async () => {
+    try {
+      const res = await fetch(`${apiBase}/api/models`);
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data)) {
           setModelsList(data);
+          return data;
         }
-      })
-      .catch(err => console.error("Error fetching models:", err));
+      }
+    } catch (err) {
+      console.error("Error fetching models:", err);
+    }
+    return [];
   };
 
   useEffect(() => {
@@ -2151,7 +2334,25 @@ export function InspectionProvider({ children }) {
     uniqueDates,
     uniqueMachines,
     updateEdgeIp,
-    yieldRate
+    yieldRate,
+    // Audit Log Exports
+    auditLogs,
+    auditLoading,
+    auditError,
+    fetchAuditLogs,
+    exportAuditCSV,
+    logAuditEvent,
+    // PC Training Module Exports
+    pcApiBase,
+    trainingStatus,
+    trainingModels,
+    isUploadingDataset,
+    datasetUploadResult,
+    fetchTrainingModels,
+    fetchTrainingStatus,
+    uploadTrainingDataset,
+    startTrainingJob,
+    stopTrainingJob
   };
 
   return (

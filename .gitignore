@@ -60,3 +60,4 @@ image*.png
 # Local backups
 frontend copy/
 
+datasets/
