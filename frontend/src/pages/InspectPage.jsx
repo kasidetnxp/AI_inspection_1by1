@@ -10,6 +10,7 @@ export default function InspectPage() {
     currentInspection,
     failCount,
     formatBatchWafer,
+    splitBatchAndWafer,
     history,
     isBackendConnected,
     modelsList,
@@ -134,11 +135,34 @@ export default function InspectPage() {
               <div className="metric-list">
                 <div className="metric-row">
                   <span className="met-label">Machine No.</span>
-                  <span className="met-value font-mono highlight-blue" id="val-machine">{currentInspection.machine || "PROBER01"}</span>
+                  <span className="met-value font-mono highlight-blue" id="val-machine">
+                    {currentInspection.decision === "-" || currentInspection.machineAction === "WAITING"
+                      ? "-"
+                      : (currentInspection.machine && currentInspection.machine !== "-"
+                          ? currentInspection.machine
+                          : (currentInspection.machineNo && currentInspection.machineNo !== "-"
+                              ? currentInspection.machineNo
+                              : "-"))}
+                  </span>
                 </div>
+                {(() => {
+                  const bw = splitBatchAndWafer ? splitBatchAndWafer(currentInspection) : { batch: currentInspection?.batch || "-", waferNo: currentInspection?.waferNo || "-" };
+                  return (
+                    <>
+                      <div className="metric-row">
+                        <span className="met-label">Batch</span>
+                        <span className="met-value font-mono" id="val-batch">{bw.batch}</span>
+                      </div>
+                      <div className="metric-row">
+                        <span className="met-label">Wafer No.</span>
+                        <span className="met-value font-mono" id="val-wafer-no">{bw.waferNo}</span>
+                      </div>
+                    </>
+                  );
+                })()}
                 <div className="metric-row">
-                  <span className="met-label">Batch / Wafer</span>
-                  <span className="met-value font-mono" id="val-batch">{currentInspection.batch && currentInspection.batch !== "-" ? currentInspection.batch : "-"}</span>
+                  <span className="met-label">Product Setup</span>
+                  <span className="met-value font-mono" id="val-product">{currentInspection.productSetup && currentInspection.productSetup !== "-" ? currentInspection.productSetup : "-"}</span>
                 </div>
                 <div className="metric-row">
                   <span className="met-label">Pad / Site</span>
@@ -153,6 +177,10 @@ export default function InspectPage() {
                 <div className="metric-row">
                   <span className="met-label">Temp</span>
                   <span className="met-value font-mono highlight-orange" id="val-temp">{currentInspection.temp ? (currentInspection.temp.includes("°C") ? currentInspection.temp : `${currentInspection.temp}°C`) : "-"}</span>
+                </div>
+                <div className="metric-row">
+                  <span className="met-label">Date & Time</span>
+                  <span className="met-value font-mono" id="val-datetime" style={{ fontSize: "11px" }}>{currentInspection.dateTime || currentInspection.timestamp || "-"}</span>
                 </div>
               </div>
             </div>
@@ -326,7 +354,7 @@ export default function InspectPage() {
               <button className="clear-history-btn" id="btn-clear-history" onClick={() => {
                 setHistory([]);
                 setCurrentInspection({
-                  id: "-", batch: "-", waferNo: "-", xyCoord: "-", site: "-", pad: "-", temp: "-",
+                  id: "-", machine: "-", machineNo: "-", batch: "-", waferNo: "-", xyCoord: "-", site: "-", pad: "-", temp: "-",
                   padsTotal: 0, padsDetected: 0, probeMarks: 0, grains: 0,
                   confidence: 0, inferenceTime: 0, ruleTime: 0, decision: "-", machineAction: "WAITING"
                 });
@@ -342,7 +370,8 @@ export default function InspectPage() {
                   <tr>
                     <th>Timestamp</th>
                     <th>Machine no</th>
-                    <th>Batch/Wafer no</th>
+                    <th>Batch</th>
+                    <th>Wafer No</th>
                     <th>Pad</th>
                     <th>Site</th>
                     <th>XY Coordinate</th>
@@ -353,27 +382,37 @@ export default function InspectPage() {
                   </tr>
                 </thead>
                 <tbody id="history-table-body">
-                  {history.slice(0, 15).map((item, index) => {
-                    const itemDecision = String(item.decision || "-");
-                    return (
-                      <tr key={item.id ? `${item.id}-${index}` : index} onClick={() => openModalWithItem(item, index)} title="Click to view inspection image">
-                        <td>{getRecordDisplayDateTime(item)}</td>
-                        <td className="font-mono">{item.machineNo || "PROBER01"}</td>
-                        <td className="font-mono">{formatBatchWafer(item)}</td>
-                        <td className="font-mono">{item.pad || "-"}</td>
-                        <td className="font-mono">{item.site || "-"}</td>
-                        <td className="font-mono">{item.xyCoord || "-"}</td>
-                        <td className="font-mono">{item.temp || "-"}</td>
-                        <td>
-                          <span className={`badge-result ${itemDecision.toLowerCase()}`}>{itemDecision}</span>
-                        </td>
-                        <td className="font-mono" style={{ fontSize: "13px", color: item.reason && item.reason !== "-" ? "var(--color-fail)" : "inherit" }}>
-                          {item.reason || "-"}
-                        </td>
-                        <td className="font-mono">{item.inferenceTime ?? 0} ms</td>
-                      </tr>
-                    );
-                  })}
+                  {history.length === 0 ? (
+                    <tr>
+                      <td colSpan={11} style={{ textAlign: "center", padding: "20px", color: "var(--text-muted)" }}>
+                        No recent history records
+                      </td>
+                    </tr>
+                  ) : (
+                    history.slice(0, 15).map((item, index) => {
+                      const itemDecision = String(item.decision || "-");
+                      const bw = splitBatchAndWafer ? splitBatchAndWafer(item) : { batch: item.batch || "-", waferNo: item.waferNo || "-" };
+                      return (
+                        <tr key={item.id ? `${item.id}-${index}` : index} onClick={() => openModalWithItem(item, index)} title="Click to view inspection image">
+                          <td>{getRecordDisplayDateTime(item)}</td>
+                          <td className="font-mono">{item.machineNo || "PROBER01"}</td>
+                          <td className="font-mono" style={{ fontWeight: "600" }}>{bw.batch}</td>
+                          <td className="font-mono" style={{ fontWeight: "600" }}>{bw.waferNo}</td>
+                          <td className="font-mono">{item.pad || "-"}</td>
+                          <td className="font-mono">{item.site || "-"}</td>
+                          <td className="font-mono">{item.xyCoord || "-"}</td>
+                          <td className="font-mono">{item.temp || "-"}</td>
+                          <td>
+                            <span className={`badge-result ${itemDecision.toLowerCase()}`}>{itemDecision}</span>
+                          </td>
+                          <td className="font-mono" style={{ fontSize: "13px", color: item.reason && item.reason !== "-" ? "var(--color-fail)" : "inherit" }}>
+                            {item.reason || "-"}
+                          </td>
+                          <td className="font-mono">{item.inferenceTime ?? 0} ms</td>
+                        </tr>
+                      );
+                    })
+                  )}
                 </tbody>
               </table>
             </div>

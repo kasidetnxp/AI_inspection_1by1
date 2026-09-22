@@ -21,7 +21,8 @@ import {
   sortRecords,
   getRecordDisplayDateTime,
   generateExportFilename,
-  isDateRangeInvalid
+  isDateRangeInvalid,
+  splitBatchAndWafer
 } from "../utils/historyHelpers";
 
 ChartJS.register(
@@ -93,12 +94,16 @@ export function InspectionProvider({ children }) {
 
   const [currentInspection, setCurrentInspection] = useState({
     id: "-",
+    machine: "-",
+    machineNo: "-",
     batch: "-",
     waferNo: "-",
     xyCoord: "-",
     site: "-",
     pad: "-",
     temp: "-",
+    productSetup: "-",
+    dateTime: "-",
     padsTotal: 0,
     padsDetected: 0,
     probeMarks: 0,
@@ -107,7 +112,8 @@ export function InspectionProvider({ children }) {
     inferenceTime: 0,
     ruleTime: 0,
     decision: "-",
-    machineAction: "WAITING"
+    machineAction: "WAITING",
+    comparisonImageUrl: null
   });
 
   const [currentDieImage, setCurrentDieImage] = useState({
@@ -377,6 +383,101 @@ export function InspectionProvider({ children }) {
     confusion_matrix: { tp: 0, fp: 0, tn: 0, fn: 0 }
   });
 
+  // Reactive auto-recalculation whenever benchmarkResults updates (grades changed, batch reviewed, or streamed)
+  useEffect(() => {
+    if (Array.isArray(benchmarkResults) && benchmarkResults.length > 0) {
+      setBenchmarkKpis(prev => {
+        let total_reviewed = 0;
+        let human_pass = 0;
+        let human_fail = 0;
+        let ai_pass = 0;
+        let ai_fail = 0;
+        let overkill_fp = 0;
+        let underkill_fn = 0;
+        let agree_tp = 0;
+        let agree_tn = 0;
+
+        const inf_times = [];
+        const rule_times = [];
+
+        for (const item of benchmarkResults) {
+          if (item.inference_time_ms != null && !isNaN(item.inference_time_ms)) {
+            inf_times.push(Number(item.inference_time_ms));
+          }
+          if (item.rule_time_ms != null && !isNaN(item.rule_time_ms)) {
+            rule_times.push(Number(item.rule_time_ms));
+          }
+
+          const ai_is_pass = String(item.ai_decision || "").trim().toUpperCase() === "PASS";
+          if (ai_is_pass) ai_pass++;
+          else ai_fail++;
+
+          const hDec = String(item.human_decision || "").trim().toUpperCase();
+          if (hDec === "PASS" || hDec === "FAIL") {
+            total_reviewed++;
+            const human_is_pass = hDec === "PASS";
+            if (human_is_pass) human_pass++;
+            else human_fail++;
+
+            if (!human_is_pass && !ai_is_pass) {
+              agree_tp++;
+            } else if (human_is_pass && ai_is_pass) {
+              agree_tn++;
+            } else if (human_is_pass && !ai_is_pass) {
+              overkill_fp++;
+            } else if (!human_is_pass && ai_is_pass) {
+              underkill_fn++;
+            }
+          }
+        }
+
+        const total_tested = benchmarkResults.length;
+        const unreviewed = total_tested - total_reviewed;
+        const agreement_count = agree_tp + agree_tn;
+
+        const overkill_rate = total_reviewed > 0 ? Number(((overkill_fp / total_reviewed) * 100).toFixed(2)) : 0.0;
+        const underkill_rate = total_reviewed > 0 ? Number(((underkill_fn / total_reviewed) * 100).toFixed(2)) : 0.0;
+        const agreement_rate = total_reviewed > 0 ? Number(((agreement_count / total_reviewed) * 100).toFixed(2)) : 0.0;
+        const true_yield = total_reviewed > 0 ? Number(((human_pass / total_reviewed) * 100).toFixed(2)) : 0.0;
+        const ai_yield = total_tested > 0 ? Number(((ai_pass / total_tested) * 100).toFixed(2)) : 0.0;
+
+        const avg_inf = inf_times.length > 0 ? Number((inf_times.reduce((a, b) => a + b, 0) / inf_times.length).toFixed(1)) : (prev.avg_inference_time_ms || 0.0);
+        const min_inf = inf_times.length > 0 ? Math.min(...inf_times) : (prev.min_inference_time_ms || 0.0);
+        const max_inf = inf_times.length > 0 ? Math.max(...inf_times) : (prev.max_inference_time_ms || 0.0);
+        const avg_rule = rule_times.length > 0 ? Number((rule_times.reduce((a, b) => a + b, 0) / rule_times.length).toFixed(2)) : (prev.avg_rule_time_ms || 0.0);
+
+        return {
+          ...prev,
+          total_tested,
+          total_reviewed,
+          unreviewed_count: unreviewed,
+          human_pass_count: human_pass,
+          human_fail_count: human_fail,
+          ai_pass_count: ai_pass,
+          ai_fail_count: ai_fail,
+          overkill_count: overkill_fp,
+          underkill_count: underkill_fn,
+          agreement_count: agreement_count,
+          overkill_rate,
+          underkill_rate,
+          agreement_rate,
+          true_yield,
+          ai_yield,
+          avg_inference_time_ms: avg_inf,
+          min_inference_time_ms: min_inf,
+          max_inference_time_ms: max_inf,
+          avg_rule_time_ms: avg_rule,
+          confusion_matrix: {
+            tp: agree_tp,
+            fp: overkill_fp,
+            tn: agree_tn,
+            fn: underkill_fn
+          }
+        };
+      });
+    }
+  }, [benchmarkResults]);
+
   const priority_dispatcher_status_color = (status) => {
     if (status === "P0_PRODUCTION") return "#ef4444";
     if (status === "P1_BENCHMARK") return "#0ea5e9";
@@ -470,6 +571,18 @@ export function InspectionProvider({ children }) {
       if (res.ok) {
         const data = await res.json();
         setActiveConfig(data);
+        if (data && data.prober_name) {
+          setCurrentInspection(prev => {
+            if (prev.decision === "-" || prev.machineAction === "WAITING") {
+              return prev;
+            }
+            return {
+              ...prev,
+              machine: prev.machine === "-" || prev.machine === "PROBER01" ? data.prober_name : prev.machine,
+              machineNo: prev.machineNo === "-" || prev.machineNo === "PROBER01" ? data.prober_name : prev.machineNo
+            };
+          });
+        }
         return data;
       }
     } catch (err) {
@@ -953,7 +1066,9 @@ export function InspectionProvider({ children }) {
   };
 
   const fetchBenchmarkProgress = () => {
-    fetch(`${apiBase}/api/model/benchmark/progress`)
+    const sessId = benchmarkProgress.active_session_id || (benchmarkResults[0] && benchmarkResults[0].session_id);
+    const query = sessId ? `?session_id=${encodeURIComponent(sessId)}` : "";
+    fetch(`${apiBase}/api/model/benchmark/progress${query}`)
       .then(res => res.ok ? res.json() : null)
       .then(data => {
         if (data) {
@@ -970,7 +1085,7 @@ export function InspectionProvider({ children }) {
           if (data.kpis && data.kpis.total_tested > 0) {
             setBenchmarkKpis(prev => {
               const next = JSON.stringify(data.kpis);
-              return JSON.stringify(prev) === next ? prev : data.kpis;
+              return JSON.stringify(prev) === next ? prev : { ...prev, ...data.kpis };
             });
           }
         }
@@ -979,14 +1094,17 @@ export function InspectionProvider({ children }) {
   };
 
   const fetchBenchmarkResults = (sessionId) => {
+    const targetSession = sessionId || benchmarkProgress.active_session_id || (benchmarkResults[0] && benchmarkResults[0].session_id);
     const query = new URLSearchParams();
-    if (sessionId) query.append("session_id", sessionId);
+    if (targetSession) query.append("session_id", targetSession);
 
     fetch(`${apiBase}/api/model/benchmark/results?${query.toString()}`)
       .then(res => res.ok ? res.json() : { results: [], kpis: null })
       .then(data => {
         if (data.results) setBenchmarkResults(data.results);
-        if (data.kpis) setBenchmarkKpis(data.kpis);
+        if (data.kpis && data.kpis.total_tested > 0) {
+          setBenchmarkKpis(prev => ({ ...prev, ...data.kpis }));
+        }
       })
       .catch(err => console.error("Error fetching benchmark results:", err));
   };
@@ -1029,11 +1147,20 @@ export function InspectionProvider({ children }) {
 
   const handleSaveHumanReview = (item, decision, notes = "") => {
     if (!item) return;
+    const sessId = item.session_id || benchmarkProgress.active_session_id || (benchmarkResults[0] && benchmarkResults[0].session_id);
+
+    // 1. Optimistically update local results immediately (triggers reactive recalculation of Overkill & Underkill)
+    setBenchmarkResults(prev => prev.map(r => r.id === item.id ? { ...r, human_decision: decision, notes: notes, session_id: sessId } : r));
+    if (benchmarkSplitModalItem && benchmarkSplitModalItem.id === item.id) {
+      setBenchmarkSplitModalItem(prev => ({ ...prev, human_decision: decision, notes: notes }));
+    }
+
+    // 2. Persist to backend database
     fetch(`${apiBase}/api/model/benchmark/save-review`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        session_id: item.session_id,
+        session_id: sessId,
         result_id: item.id,
         human_decision: decision,
         reviewer: "QA Engineer",
@@ -1042,10 +1169,8 @@ export function InspectionProvider({ children }) {
     })
       .then(res => res.json())
       .then(data => {
-        if (data.kpis) setBenchmarkKpis(data.kpis);
-        setBenchmarkResults(prev => prev.map(r => r.id === item.id ? { ...r, human_decision: decision, notes: notes } : r));
-        if (benchmarkSplitModalItem && benchmarkSplitModalItem.id === item.id) {
-          setBenchmarkSplitModalItem(prev => ({ ...prev, human_decision: decision, notes: notes }));
+        if (data.kpis && data.kpis.total_tested > 0) {
+          setBenchmarkKpis(prev => ({ ...prev, ...data.kpis }));
         }
       })
       .catch(err => console.error("Error saving review:", err));
@@ -1057,6 +1182,17 @@ export function InspectionProvider({ children }) {
       alert("No active benchmark session found.");
       return;
     }
+
+    // 1. Optimistically update local results immediately
+    setBenchmarkResults(prev => prev.map(r => {
+      let dec = r.human_decision;
+      if (action === "CONFIRM_ALL_AI") dec = r.ai_decision;
+      else if (action === "RESET_ALL") dec = "UNREVIEWED";
+      else if (action === "MARK_UNREVIEWED_PASS") dec = (r.human_decision === "UNREVIEWED" ? "PASS" : r.human_decision);
+      else if (action === "MARK_UNREVIEWED_FAIL") dec = (r.human_decision === "UNREVIEWED" ? "FAIL" : r.human_decision);
+      return { ...r, human_decision: dec };
+    }));
+
     fetch(`${apiBase}/api/model/benchmark/batch-review`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1068,8 +1204,10 @@ export function InspectionProvider({ children }) {
     })
       .then(res => res.json())
       .then(data => {
-        if (data.kpis) setBenchmarkKpis(data.kpis);
-        fetchBenchmarkResults(sessId, benchmarkFilter);
+        if (data.kpis && data.kpis.total_tested > 0) {
+          setBenchmarkKpis(prev => ({ ...prev, ...data.kpis }));
+        }
+        fetchBenchmarkResults(sessId);
       })
       .catch(err => console.error("Batch review error:", err));
   };
@@ -1160,7 +1298,7 @@ export function InspectionProvider({ children }) {
     document.body.removeChild(link);
   };
 
-  const handleUploadFile = (file) => {
+  const handleUploadFile = async (file) => {
     if (!file) return;
     const isPth = file.name.toLowerCase().endsWith(".pth") || file.name.toLowerCase().endsWith(".pt");
     const isTflite = file.name.toLowerCase().endsWith(".tflite");
@@ -1176,35 +1314,80 @@ export function InspectionProvider({ children }) {
     setIsModelConverting(true);
     setConvertingModelName(file.name);
 
-    fetch(`${apiBase}/api/models/upload`, {
-      method: "POST",
-      body: formData
-    })
-      .then(res => {
-        if (!res.ok) {
-          return res.json().then(d => { throw new Error(d.detail || `HTTP ${res.status}`); });
-        }
-        return res.json();
-      })
-      .then(data => {
+    // 1. Primary: Upload to Central PC (handles conversion on PC)
+    try {
+      const res = await fetch(`${pcApiBase}/api/v1/models/upload`, {
+        method: "POST",
+        body: formData
+      });
+      if (res.ok) {
+        const data = await res.json();
         setIsModelConverting(false);
         const finalName = data.name || file.name;
-        alert(`[UPLOAD SUCCESS] อัปโหลดโมเดล '${finalName}' สำเร็จ!\n\n${isPth ? "ระบบได้แปลงไฟล์เป็น TFLite (INT8) สำหรับรันบน NPU เรียบร้อยแล้ว" : ""}`);
-        fetchModels();
-      })
-      .catch(err => {
+        alert(`[UPLOAD SUCCESS] อัปโหลดโมเดล '${finalName}' เข้าสู่ Central PC Master Store สำเร็จ!\n\n${isPth ? "PC ได้แปลงไฟล์เป็น TFLite (INT8) เรียบร้อยแล้ว พร้อมสั่ง Deploy ไปยัง i.MX8 NPU" : "พร้อมสั่ง Deploy ไปยัง i.MX8 NPU"}`);
+        await fetchModels();
+        return;
+      } else {
+        const d = await res.json().catch(() => ({}));
+        throw new Error(d.message || d.detail || `HTTP ${res.status}`);
+      }
+    } catch (err) {
+      // 2. Fallback to Edge direct upload if PC is offline
+      console.warn("PC upload failed or offline, trying direct edge fallback:", err);
+      try {
+        const edgeRes = await fetch(`${apiBase}/api/models/upload`, {
+          method: "POST",
+          body: formData
+        });
+        if (!edgeRes.ok) {
+          const d = await edgeRes.json().catch(() => ({}));
+          throw new Error(d.detail || `HTTP ${edgeRes.status}`);
+        }
+        const data = await edgeRes.json();
         setIsModelConverting(false);
-        console.error("Upload error:", err);
-        alert(`เกิดข้อผิดพลาดในการอัปโหลด/แปลงโมเดล: ${err.message || err}`);
-      });
+        alert(`[EDGE UPLOAD SUCCESS] อัปโหลดโมเดล '${data.name || file.name}' สำเร็จตรงบน i.MX8 Node`);
+        await fetchModels();
+      } catch (fallbackErr) {
+        setIsModelConverting(false);
+        console.error("Upload error:", fallbackErr);
+        alert(`เกิดข้อผิดพลาดในการอัปโหลด/แปลงโมเดล: ${err.message || fallbackErr.message}`);
+      }
+    }
   };
 
-  const handleActivateModel = async (model) => {
-    const modelName = typeof model === "string" ? model : (model?.name || "");
+  const handleActivateModel = async (model, { silent = false } = {}) => {
+    const modelName = typeof model === "string" ? model : (model?.name || model?.model_name || "");
     if (!modelName) {
-      alert("Error: Model name is missing.");
-      return;
+      if (!silent) alert("Error: Model name is missing.");
+      return { success: false, error: "Model name is missing." };
     }
+
+    // 1. Primary: Deploy & Activate via Central PC Server
+    try {
+      const pcRes = await fetch(`${pcApiBase}/api/v1/models/activate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: modelName,
+          edge_ip: edgeIp
+        })
+      });
+      if (pcRes.ok) {
+        const data = await pcRes.json();
+        setModelsList(prev => prev.map(m => ({ ...m, active: (m.name === modelName || m.model_name === modelName) })));
+        setBenchmarkModel(modelName);
+        const successMsg = `Model '${modelName}' deployed & activated on i.MX8 NPU! (Lean Edge Cache updated)`;
+        if (!silent) alert(`[NPU HOT-SWAP SUCCESS]\n${successMsg}`);
+        await fetchModels();
+        await fetchConfigLibrary();
+        await fetchActiveConfig();
+        return { success: true, message: successMsg };
+      }
+    } catch (pcErr) {
+      console.warn("Central PC deploy failed or offline, attempting direct edge activate:", pcErr);
+    }
+
+    // 2. Fallback: Direct Edge Activate (when PC is offline)
     try {
       const res = await fetch(`${apiBase}/api/models/activate`, {
         method: "POST",
@@ -1215,41 +1398,74 @@ export function InspectionProvider({ children }) {
       if (res.ok) {
         setModelsList(prev => prev.map(m => ({ ...m, active: m.name === modelName })));
         setBenchmarkModel(modelName);
-        alert(`[NPU HOT-SWAP SUCCESS]\nModel '${modelName}' activated on i.MX8 NPU Delegate!`);
+        const successMsg = `Model '${modelName}' activated directly on i.MX8!`;
+        if (!silent) alert(`[OFFLINE HOT-SWAP SUCCESS]\n${successMsg}`);
         await fetchModels();
         await fetchConfigLibrary();
         await fetchActiveConfig();
+        return { success: true, message: successMsg };
       } else {
-        alert(`[ACTIVATION FAILED]\n${data.detail || data.message || `HTTP ${res.status}`}`);
+        const errorMsg = data.detail || data.message || `HTTP ${res.status}`;
+        if (!silent) alert(`[ACTIVATION FAILED]\n${errorMsg}`);
+        return { success: false, error: errorMsg };
       }
     } catch (err) {
       console.error("Activation error:", err);
-      alert(`Network error activating model: ${err.message}`);
+      if (!silent) alert(`Network error activating model: ${err.message}`);
+      return { success: false, error: err.message };
     }
   };
 
-  const handleDeleteModel = async (model, skipConfirm = false) => {
-    const modelName = typeof model === "string" ? model : (model?.name || "");
-    if (!modelName) return;
-    if (!skipConfirm && typeof window !== "undefined" && window.confirm) {
-      if (!window.confirm(`Are you sure you want to delete model '${modelName}'?`)) return;
+  const handleDeleteModel = async (model, skipConfirm = false, { silent = false } = {}) => {
+    const modelName = typeof model === "string" ? model : (model?.name || model?.model_name || "");
+    if (!modelName) return { success: false, error: "Model name is missing." };
+    if (!skipConfirm && !silent && typeof window !== "undefined" && window.confirm) {
+      if (!window.confirm(`Are you sure you want to delete model '${modelName}' from Central Store?`)) return { success: false, cancelled: true };
     }
+
+    // 1. Try PC Central Delete
+    try {
+      const pcRes = await fetch(`${pcApiBase}/api/v1/models/${encodeURIComponent(modelName)}`, {
+        method: "DELETE"
+      });
+      if (pcRes.ok) {
+        const successMsg = `Deleted model '${modelName}' from Central PC Store!`;
+        if (!silent) alert(successMsg);
+        await fetchModels();
+        return { success: true, message: successMsg };
+      } else {
+        const d = await pcRes.json().catch(() => ({}));
+        if (d.message) {
+          if (!silent) alert(`[DELETE ERROR]\n${d.message}`);
+          return { success: false, error: d.message };
+        }
+      }
+    } catch (pcErr) {
+      console.warn("PC delete failed or offline, trying edge:", pcErr);
+    }
+
+    // 2. Direct Edge Delete fallback
     try {
       const res = await fetch(`${apiBase}/api/models/${encodeURIComponent(modelName)}`, {
         method: "DELETE"
       });
       const data = await res.json().catch(() => ({}));
       if (res.ok) {
-        alert(`Deleted model '${modelName}' successfully!`);
+        const successMsg = `Deleted model '${modelName}' successfully!`;
+        if (!silent) alert(successMsg);
         await fetchModels();
         await fetchConfigLibrary();
+        return { success: true, message: successMsg };
       } else {
-        alert(`[DELETE ERROR]\n${data.detail || data.message || `Failed to delete model (HTTP ${res.status})`}`);
+        const errorMsg = data.detail || data.message || `Failed to delete model (HTTP ${res.status})`;
+        if (!silent) alert(`[DELETE ERROR]\n${errorMsg}`);
         await fetchModels();
+        return { success: false, error: errorMsg };
       }
     } catch (err) {
       console.error("Delete model error:", err);
-      alert(`Network error deleting model: ${err.message}`);
+      if (!silent) alert(`Network error deleting model: ${err.message}`);
+      return { success: false, error: err.message };
     }
   };
 
@@ -1287,6 +1503,21 @@ export function InspectionProvider({ children }) {
   }, []);
 
   const fetchModels = async () => {
+    // 1. Try Central PC Server first
+    try {
+      const pcRes = await fetch(`${pcApiBase}/api/v1/models`);
+      if (pcRes.ok) {
+        const pcData = await pcRes.json();
+        if (pcData && Array.isArray(pcData.models) && pcData.models.length > 0) {
+          setModelsList(pcData.models);
+          return pcData.models;
+        }
+      }
+    } catch (pcErr) {
+      // PC offline or unreachable - fallback to edge
+    }
+
+    // 2. Fallback to Edge Node (i.MX8 Local Cache)
     try {
       const res = await fetch(`${apiBase}/api/models`);
       if (res.ok) {
@@ -1297,7 +1528,7 @@ export function InspectionProvider({ children }) {
         }
       }
     } catch (err) {
-      console.error("Error fetching models:", err);
+      console.error("Error fetching models from edge:", err);
     }
     return [];
   };
@@ -1305,7 +1536,8 @@ export function InspectionProvider({ children }) {
   useEffect(() => {
     fetchModels();
     fetchConfigLibrary();
-  }, [edgeIp, fetchConfigLibrary]);
+    fetchActiveConfig();
+  }, [edgeIp, fetchConfigLibrary, fetchActiveConfig]);
 
   // ==========================================
   // CONNECTED MODE: WEBSOCKETS & API CLIENT
@@ -1584,15 +1816,21 @@ export function InspectionProvider({ children }) {
         // 2. Trigger scanner beam animation
         animateScannerLine();
 
+        const parsedBW = splitBatchAndWafer(data);
+
         // 3. Atomically update decision banner, full-screen theme and result text at the exact same frame!
         setCurrentInspection({
           id: data.id,
-          batch: data.batch,
-          waferNo: data.waferNo,
+          machine: data.machineNo || data.machine || activeConfig.prober_name || "WP288",
+          machineNo: data.machineNo || data.machine || activeConfig.prober_name || "WP288",
+          batch: parsedBW.batch,
+          waferNo: parsedBW.waferNo,
           xyCoord: data.xyCoord,
           site: data.site,
           pad: data.pad,
           temp: data.temp || "-",
+          productSetup: data.productSetup || "-",
+          dateTime: data.dateTime || data.timestamp || "-",
           padsTotal: data.padsTotal,
           padsDetected: data.padsDetected,
           probeMarks: data.probeMarks,
@@ -1603,6 +1841,8 @@ export function InspectionProvider({ children }) {
           decision: data.decision,
           machineAction: data.machineAction,
           imageUrl: data.imageUrl || null,
+          annotatedImageUrl: data.annotatedImageUrl || data.imageUrl || null,
+          comparisonImageUrl: data.comparisonImageUrl || null,
           rawImageUrl: data.rawImageUrl || null
         });
 
@@ -1619,17 +1859,22 @@ export function InspectionProvider({ children }) {
         setActiveAlarms(data.alarms || []);
       });
     } else {
+      const parsedBW = splitBatchAndWafer(data);
       animateScannerLine();
       setLoadedImage(null);
       setLoadedRawImage(null);
       setCurrentInspection({
         id: data.id,
-        batch: data.batch,
-        waferNo: data.waferNo,
+        machine: data.machineNo || data.machine || activeConfig.prober_name || "WP288",
+        machineNo: data.machineNo || data.machine || activeConfig.prober_name || "WP288",
+        batch: parsedBW.batch,
+        waferNo: parsedBW.waferNo,
         xyCoord: data.xyCoord,
         site: data.site,
         pad: data.pad,
         temp: data.temp || "-",
+        productSetup: data.productSetup || "-",
+        dateTime: data.dateTime || data.timestamp || "-",
         padsTotal: data.padsTotal,
         padsDetected: data.padsDetected,
         probeMarks: data.probeMarks,
@@ -1640,6 +1885,8 @@ export function InspectionProvider({ children }) {
         decision: data.decision,
         machineAction: data.machineAction,
         imageUrl: null,
+        annotatedImageUrl: null,
+        comparisonImageUrl: null,
         rawImageUrl: null
       });
 
@@ -2058,14 +2305,15 @@ export function InspectionProvider({ children }) {
       return;
     }
     const csvRows = [
-      ["Timestamp", "Machine no", "Batch/Wafer no", "Pad", "Site", "XY Coordinate", "Temp", "Result", "Failure Reason", "Latency (ms)"]
+      ["Timestamp", "Machine no", "Batch", "Wafer no", "Pad", "Site", "XY Coordinate", "Temp", "Result", "Failure Reason", "Latency (ms)"]
     ];
     exportList.forEach(rec => {
-      const bw = formatBatchWafer(rec);
+      const bw = splitBatchAndWafer ? splitBatchAndWafer(rec) : { batch: rec.batch || "-", waferNo: rec.waferNo || "-" };
       csvRows.push([
         `"${getRecordDisplayDateTime(rec)}"`,
         `"${rec.machineNo || "WP288"}"`,
-        `"${bw}"`,
+        `"${bw.batch}"`,
+        `"${bw.waferNo}"`,
         `"${rec.pad || "-"}"`,
         `"${rec.site || "-"}"`,
         `"${rec.xyCoord || "-"}"`,
@@ -2169,6 +2417,7 @@ export function InspectionProvider({ children }) {
     filteredHistory,
     filters,
     formatBatchWafer,
+    splitBatchAndWafer,
     getActiveModalList,
     getDefaultEdgeIp,
     getRecordDate,

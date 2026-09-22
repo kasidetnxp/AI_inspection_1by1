@@ -24,18 +24,4 @@ export class InspectionsController {
   getStats() {
     return this.inspectionsService.getStats();
   }
-
-  @Get('models')
-  getModels() {
-    return [
-      {
-        name: 'unet_int8.tflite',
-        version: 'v1.0.0',
-        engine: 'TFLite / NPU (NXP i.MX8)',
-        size: '3.5 MB',
-        accuracy: '97.2%',
-        active: true,
-      },
-    ];
-  }
 }

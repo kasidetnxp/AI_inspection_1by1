@@ -14,14 +14,20 @@ export default function HistoryDetailModal() {
     selectedModalIndex,
     selectedModalItem,
     setModalViewMode,
-    getRecordDisplayDateTime
+    getRecordDisplayDateTime,
+    splitBatchAndWafer
   } = useInspection();
 
   const [historyModalZoom, setHistoryModalZoom] = useState(1);
   const [historyModalPan, setHistoryModalPan] = useState({ x: 0, y: 0 });
   const [isPanningHistory, setIsPanningHistory] = useState(false);
+  const [imageLoadError, setImageLoadError] = useState(false);
   const historyContainerRef = useRef(null);
   const historyDragRef = useRef({ x: 0, y: 0, panX: 0, panY: 0 });
+
+  useEffect(() => {
+    setImageLoadError(false);
+  }, [selectedModalItem, modalViewMode]);
 
   const clampHistoryPan = (x, y, zoom) => {
     if (zoom <= 1.0) return { x: 0, y: 0 };
@@ -299,7 +305,31 @@ export default function HistoryDetailModal() {
                       </>
                     )}
 
-                    {selectedModalItem.comparisonImageUrl || selectedModalItem.imageUrl || selectedModalItem.annotatedImageUrl || selectedModalItem.rawImageUrl ? (
+                    {imageLoadError ? (
+                      <div
+                        style={{
+                          width: "100%",
+                          height: "100%",
+                          display: "flex",
+                          flexDirection: "column",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          background: "rgba(0, 0, 0, 0.4)",
+                          borderRadius: "8px",
+                          border: "1px dashed var(--border-color)",
+                          padding: "30px",
+                          textAlign: "center"
+                        }}
+                      >
+                        <span style={{ fontSize: "36px", marginBottom: "12px" }}>🖼️</span>
+                        <div className="font-mono" style={{ fontSize: "14px", fontWeight: "bold", color: "var(--text-main)", marginBottom: "6px" }}>
+                          ไม่มีภาพ / NO IMAGE AVAILABLE
+                        </div>
+                        <div style={{ fontSize: "12px", color: "var(--text-muted)" }}>
+                          {modalViewMode === "raw" ? "ไม่พบไฟล์ภาพ Raw ใน Drive M PROCESSED" : "ไม่พบไฟล์ภาพ Output ใน Drive M (ไฟล์อาจถูกลบหรือยังไม่มีผลการตรวจ)"}
+                        </div>
+                      </div>
+                    ) : (selectedModalItem.comparisonImageUrl || selectedModalItem.imageUrl || selectedModalItem.annotatedImageUrl || selectedModalItem.rawImageUrl ? (
                       <img
                         className="zoomable-target"
                         draggable={false}
@@ -314,32 +344,34 @@ export default function HistoryDetailModal() {
                             if (baseRaw && !baseRaw.includes("/annotated/")) {
                               return resolveImageUrl(baseRaw);
                             }
-                            return resolveImageUrl(baseAnn.replace("/api/images/annotated/", "/api/images/raw/").replace(/\/inspect_/, "/"));
-                          }
-
-                          if (modalViewMode === "comparison" || modalViewMode === "split") {
-                            if (baseComp && baseComp.includes("inspect_")) {
-                              return resolveImageUrl(baseComp);
-                            }
                             return resolveImageUrl(
-                              baseAnn.replace(/\/([^/?#]+)(\?.*)?$/, (match, fname, q) => {
-                                const cleanFname = fname.startsWith("inspect_") ? fname : `inspect_${fname}`;
-                                return `/${cleanFname}${q || ""}`;
-                              })
+                              baseAnn
+                                .replace("/api/images/annotated/", "/api/images/raw/")
+                                .replace("/api/images/comparison/", "/api/images/raw/")
+                                .replace(/\/inspect_/, "/")
                             );
                           }
 
-                          // Default: annotated mode
-                          if (baseAnn && !baseAnn.includes("inspect_")) {
-                            return resolveImageUrl(baseAnn);
+                          if (modalViewMode === "comparison" || modalViewMode === "split") {
+                            if (baseComp) {
+                              return resolveImageUrl(baseComp);
+                            }
+                            return resolveImageUrl(
+                              baseAnn.replace("/api/images/annotated/", "/api/images/comparison/")
+                            );
                           }
-                          return resolveImageUrl(baseAnn.replace(/\/inspect_/, "/"));
+
+                          // Default: annotated mode (pure detection)
+                          if (baseAnn) {
+                            return resolveImageUrl(
+                              baseAnn
+                                .replace("/api/images/comparison/", "/api/images/annotated/")
+                                .replace(/\/inspect_/, "/")
+                            );
+                          }
+                          return resolveImageUrl(baseAnn);
                         })()}
-                        onError={(e) => {
-                          if ((modalViewMode === "comparison" || modalViewMode === "split") && (selectedModalItem.annotatedImageUrl || selectedModalItem.imageUrl)) {
-                            e.target.src = resolveImageUrl(selectedModalItem.annotatedImageUrl || selectedModalItem.imageUrl);
-                          }
-                        }}
+                        onError={() => setImageLoadError(true)}
                         alt={selectedModalItem.id}
                         style={{
                           width: "100%",
@@ -360,7 +392,7 @@ export default function HistoryDetailModal() {
                           AI Mask Overlay & Inspection Visual Stored in Edge NPU Memory
                         </div>
                       </div>
-                    )}
+                    ))}
                   </div>
                 </div>
 
@@ -396,10 +428,21 @@ export default function HistoryDetailModal() {
                         {selectedModalItem.reason || "-"}
                       </span>
                     </div>
-                    <div className="meta-row" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                      <span className="meta-lbl" style={{ flexShrink: 0 }}>Batch:</span>
-                      <span className="meta-val font-mono" style={{ textAlign: "right" }}>{selectedModalItem.batch || "-"}</span>
-                    </div>
+                    {(() => {
+                      const bw = splitBatchAndWafer ? splitBatchAndWafer(selectedModalItem) : { batch: selectedModalItem?.batch || "-", waferNo: selectedModalItem?.waferNo || "-" };
+                      return (
+                        <>
+                          <div className="meta-row" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                            <span className="meta-lbl" style={{ flexShrink: 0 }}>Batch:</span>
+                            <span className="meta-val font-mono" style={{ textAlign: "right" }}>{bw.batch}</span>
+                          </div>
+                          <div className="meta-row" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                            <span className="meta-lbl" style={{ flexShrink: 0 }}>Wafer No.:</span>
+                            <span className="meta-val font-mono" style={{ textAlign: "right" }}>{bw.waferNo}</span>
+                          </div>
+                        </>
+                      );
+                    })()}
                     <div className="meta-row" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                       <span className="meta-lbl" style={{ flexShrink: 0 }}>Datetime:</span>
                       <span className="meta-val font-mono" style={{ textAlign: "right" }}>{getRecordDisplayDateTime(selectedModalItem)}</span>

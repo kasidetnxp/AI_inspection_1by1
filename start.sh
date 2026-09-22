@@ -56,7 +56,11 @@ if lsof -iTCP:3000 -sTCP:LISTEN > /dev/null 2>&1 || nc -z 127.0.0.1 3000 > /dev/
 else
     echo "🪺 Launching PC Central Backend Server (NestJS)..."
     cd "$PROJECT_DIR/backend_pc" || exit 1
-    nohup npx ts-node src/main.ts < /dev/null > "$PROJECT_DIR/backend_pc.log" 2>&1 &
+    if [ -f "dist/main.js" ]; then
+        nohup setsid node dist/main.js < /dev/null > "$PROJECT_DIR/backend_pc.log" 2>&1 &
+    else
+        nohup setsid npx ts-node src/main.ts < /dev/null > "$PROJECT_DIR/backend_pc.log" 2>&1 &
+    fi
     cd "$PROJECT_DIR" || exit 1
     sleep 2
 fi
@@ -67,7 +71,7 @@ if lsof -iTCP:5173 -sTCP:LISTEN > /dev/null 2>&1 || nc -z 127.0.0.1 5173 > /dev/
 else
     echo "💻 Launching React 19 HMI Frontend Server..."
     cd "$PROJECT_DIR/frontend" || exit 1
-    nohup npm run dev < /dev/null > "$PROJECT_DIR/frontend.log" 2>&1 &
+    nohup setsid npm run dev < /dev/null > "$PROJECT_DIR/frontend.log" 2>&1 &
     cd "$PROJECT_DIR" || exit 1
     sleep 2
 fi

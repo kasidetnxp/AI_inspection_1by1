@@ -117,8 +117,18 @@ let TrainingService = TrainingService_1 = class TrainingService {
         }
     }
     async startTraining(params) {
-        if (this.activeProcess && this.activeProcess.exitCode === null && !this.activeProcess.killed) {
-            throw new common_1.BadRequestException('A training job is already active. Please wait or stop the current job.');
+        const currentStatus = this.getStatus();
+        if (currentStatus?.state === 'running') {
+            if (this.activeProcess && this.activeProcess.pid) {
+                try {
+                    process.kill(this.activeProcess.pid, 0);
+                    throw new common_1.BadRequestException('A training job is already active. Please wait or stop the current job.');
+                }
+                catch (e) {
+                    if (e instanceof common_1.BadRequestException)
+                        throw e;
+                }
+            }
         }
         const cleanModelName = params.model_name.trim().replace(/[^a-zA-Z0-9_-]/g, '_');
         const datasetDir = params.dataset_dir || path.join(this.datasetsRoot, cleanModelName);
@@ -173,7 +183,7 @@ let TrainingService = TrainingService_1 = class TrainingService {
             eta_seconds: 0,
             saved_pth: outputPth,
             saved_tflite: outputTflite,
-            logs: [`🚀 Initialized training job for ${cleanModelName}`],
+            logs: [`[INIT] Initialized training job for ${cleanModelName}`],
         };
         fs.writeFileSync(this.statusFilePath, JSON.stringify(initialStatus, null, 2));
         this.activeJobParams = { cleanModelName, datasetDir, outputPth, outputTflite, baseModel: params.base_model };
@@ -254,7 +264,7 @@ let TrainingService = TrainingService_1 = class TrainingService {
             if (fs.existsSync(this.statusFilePath)) {
                 const current = JSON.parse(fs.readFileSync(this.statusFilePath, 'utf-8'));
                 current.state = 'stopped';
-                current.logs.push('⏹️ Training job stopped by user operator');
+                current.logs.push('[STOP] Training stopped by user operator');
                 fs.writeFileSync(this.statusFilePath, JSON.stringify(current, null, 2));
             }
         }

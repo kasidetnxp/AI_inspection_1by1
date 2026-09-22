@@ -8,7 +8,8 @@ import {
   sortRecords,
   getRecordDisplayDateTime,
   generateExportFilename,
-  isDateRangeInvalid
+  isDateRangeInvalid,
+  splitBatchAndWafer
 } from "./historyHelpers.js";
 
 test("generateExportFilename generates [YYYYMMDD_HHMMSS]_[Machine]_[Batch].csv format", () => {
@@ -81,6 +82,33 @@ test("formatBatchWafer safely handles numeric IDs, nulls, and edge cases", () =>
   assert.equal(formatBatchWafer({ id: 12345 }), "12345"); // numeric ID should not throw .startsWith error
   assert.equal(formatBatchWafer({ id: "#WF-100", batch: "B2940", waferNo: "W01" }), "B2940W01");
   assert.equal(formatBatchWafer({ id: 99, batch: "B1", waferNo: 5 }), "B15");
+});
+
+test("splitBatchAndWafer correctly separates batch and wafer for combined tokens like C7K488W19E6", () => {
+  // String token
+  assert.deepEqual(splitBatchAndWafer("C7K488W19E6"), { batch: "C7K488", waferNo: "W19E6" });
+  assert.deepEqual(splitBatchAndWafer("C7K488-W19E6"), { batch: "C7K488", waferNo: "W19E6" });
+  assert.deepEqual(splitBatchAndWafer("LOT-123-ABC-W01"), { batch: "LOT-123-ABC", waferNo: "W01" });
+  
+  // Object with combined in waferNo or batch
+  assert.deepEqual(
+    splitBatchAndWafer({ batch: "C7K488W19E6", waferNo: "C7K488W19E6" }),
+    { batch: "C7K488", waferNo: "W19E6" }
+  );
+  assert.deepEqual(
+    splitBatchAndWafer({ batch: "C7K488", waferNo: "C7K488W19E6" }),
+    { batch: "C7K488", waferNo: "W19E6" }
+  );
+  // Object already separated
+  assert.deepEqual(
+    splitBatchAndWafer({ batch: "C7K488", waferNo: "W19E6" }),
+    { batch: "C7K488", waferNo: "W19E6" }
+  );
+  // Simulation record
+  assert.deepEqual(
+    splitBatchAndWafer({ batch: "B2940", waferNo: "#WF-2941" }),
+    { batch: "B2940", waferNo: "#WF-2941" }
+  );
 });
 
 test("getNumericValue extracts numbers from temperature and strings without returning NaN", () => {

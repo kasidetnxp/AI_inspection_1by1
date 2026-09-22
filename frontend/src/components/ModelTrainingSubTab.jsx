@@ -713,7 +713,7 @@ export default function ModelTrainingSubTab() {
                       className="btn-primary"
                       style={{ fontSize: "12px", padding: "6px 14px", borderRadius: "6px", cursor: "pointer" }}
                     >
-                      Deploy to Edge
+                      Activate Model
                     </button>
                   )}
                   <button

@@ -1,0 +1,23 @@
+{
+  "active_model": "unet_pytorch_new.tflite",
+  "active_recipe": "Product_Setting_ForTest.txt",
+  "active_machine_config": "Machine_Setting_ForTest.txt",
+  "bindings": {
+    "unet.tflite": {
+      "recipe": "Product_Setting.txt",
+      "machine_config": "Machine_Setting.txt"
+    },
+    "unet_pytorch_new.tflite": {
+      "recipe": "Product_Setting.txt",
+      "machine_config": "Machine_Setting.txt"
+    },
+    "unet_3class_new.tflite": {
+      "recipe": "Recipe_KMI710_Alternative.txt",
+      "machine_config": "Machine_Setting.txt"
+    },
+    "unet_pytorch_3class.tflite": {
+      "recipe": "Product_Setting.txt",
+      "machine_config": "Machine_Setting.txt"
+    }
+  }
+}

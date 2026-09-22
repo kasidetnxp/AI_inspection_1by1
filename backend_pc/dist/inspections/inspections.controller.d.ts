@@ -39,12 +39,4 @@ export declare class InspectionsController {
         db: string;
         edgeIp: string;
     };
-    getModels(): {
-        name: string;
-        version: string;
-        engine: string;
-        size: string;
-        accuracy: string;
-        active: boolean;
-    }[];
 }

@@ -61,3 +61,4 @@ image*.png
 frontend copy/
 
 datasets/
+.ingested_files_cache*.json

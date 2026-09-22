@@ -30,6 +30,7 @@ export default function HistoryPage() {
     uniqueBatches,
     openModalWithItem,
     formatBatchWafer,
+    splitBatchAndWafer,
     exportToCSV,
     apiBase,
     setCurrentInspection,
@@ -313,7 +314,7 @@ export default function HistoryPage() {
                     .then(() => {
                       setHistory([]);
                       setCurrentInspection({
-                        id: "-", batch: "-", waferNo: "-", xyCoord: "-", site: "-", pad: "-", temp: "-",
+                        id: "-", machine: "-", machineNo: "-", batch: "-", waferNo: "-", xyCoord: "-", site: "-", pad: "-", temp: "-",
                         padsTotal: 0, padsDetected: 0, probeMarks: 0, grains: 0,
                         confidence: 0, inferenceTime: 0, ruleTime: 0, decision: "-", machineAction: "WAITING"
                       });
@@ -397,8 +398,11 @@ export default function HistoryPage() {
                   <th className={`sortable-th ${sortField === "machineNo" ? "active-sort" : ""}`} onClick={() => handleSort("machineNo")} title="Click to sort by Machine No" style={{ width: "115px", minWidth: "115px" }}>
                     Machine No {renderSortIndicator("machineNo")}
                   </th>
-                  <th className={`sortable-th ${sortField === "batch" ? "active-sort" : ""}`} onClick={() => handleSort("batch")} title="Click to sort by Batch / Wafer ID" style={{ width: "155px", minWidth: "155px" }}>
-                    Batch / Wafer ID {renderSortIndicator("batch")}
+                  <th className={`sortable-th ${sortField === "batch" ? "active-sort" : ""}`} onClick={() => handleSort("batch")} title="Click to sort by Batch" style={{ width: "110px", minWidth: "110px" }}>
+                    Batch {renderSortIndicator("batch")}
+                  </th>
+                  <th className={`sortable-th ${sortField === "waferNo" ? "active-sort" : ""}`} onClick={() => handleSort("waferNo")} title="Click to sort by Wafer No" style={{ width: "110px", minWidth: "110px" }}>
+                    Wafer No {renderSortIndicator("waferNo")}
                   </th>
                   <th className={`sortable-th ${sortField === "pad" ? "active-sort" : ""}`} onClick={() => handleSort("pad")} title="Click to sort by Pad" style={{ width: "65px", minWidth: "65px" }}>
                     Pad {renderSortIndicator("pad")}
@@ -427,7 +431,7 @@ export default function HistoryPage() {
               <tbody>
                 {paginatedData.length === 0 ? (
                   <tr>
-                    <td colSpan={12} style={{ textAlign: "center", padding: "40px", color: "var(--text-muted)" }}>
+                    <td colSpan={13} style={{ textAlign: "center", padding: "40px", color: "var(--text-muted)" }}>
                       No inspection records found matching your filter criteria.
                     </td>
                   </tr>
@@ -435,6 +439,7 @@ export default function HistoryPage() {
                   paginatedData.map((rec, idx) => {
                     const globalIdx = (currentPage - 1) * pageSize + idx;
                     const recDecision = String(rec.decision || "-");
+                    const bw = splitBatchAndWafer ? splitBatchAndWafer(rec) : { batch: rec.batch || "-", waferNo: rec.waferNo || "-" };
                     return (
                       <tr
                         key={rec.id ? `${rec.id}-${globalIdx}` : globalIdx}
@@ -447,7 +452,8 @@ export default function HistoryPage() {
                         </td>
                         <td>{getRecordDisplayDateTime(rec)}</td>
                         <td className="font-mono">{rec.machineNo || "PROBER01"}</td>
-                        <td className="font-mono" style={{ fontWeight: "600" }}>{formatBatchWafer(rec)}</td>
+                        <td className="font-mono" style={{ fontWeight: "600" }}>{bw.batch}</td>
+                        <td className="font-mono" style={{ fontWeight: "600" }}>{bw.waferNo}</td>
                         <td className="font-mono">{rec.pad || "-"}</td>
                         <td className="font-mono">{rec.site || "-"}</td>
                         <td className="font-mono">{rec.xyCoord || "-"}</td>

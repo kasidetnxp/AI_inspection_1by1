@@ -17,15 +17,23 @@ export default function SplitViewModal() {
     modelsList,
     resolveImageUrl,
     setBenchmarkModalComment,
-    setBenchmarkSplitModalItem
+    setBenchmarkSplitModalItem,
+    splitBatchAndWafer
   } = useInspection();
 
   const [commentText, setCommentText] = useState("");
   const [splitZoom, setSplitZoom] = useState(1);
   const [splitPan, setSplitPan] = useState({ x: 0, y: 0 });
   const [isPanningSplit, setIsPanningSplit] = useState(false);
+  const [rawLoadError, setRawLoadError] = useState(false);
+  const [annotatedLoadError, setAnnotatedLoadError] = useState(false);
   const splitContainerRef = useRef(null);
   const splitDragRef = useRef({ x: 0, y: 0, panX: 0, panY: 0 });
+
+  useEffect(() => {
+    setRawLoadError(false);
+    setAnnotatedLoadError(false);
+  }, [benchmarkSplitModalItem]);
 
   const clampSplitPan = (x, y, zoom) => {
     if (zoom <= 1.0) return { x: 0, y: 0 };
@@ -376,28 +384,77 @@ export default function SplitViewModal() {
                       {/* 1. RAW OPTICAL DIE */}
                       <div className="split-image-box" style={{ height: "100%", display: "flex", flexDirection: "column" }}>
                         <span className="split-image-tag">1. RAW OPTICAL DIE</span>
-                        <img
-                          draggable={false}
-                          onDragStart={(e) => e.preventDefault()}
-                          src={resolveImageUrl(benchmarkSplitModalItem.raw_image_url || benchmarkSplitModalItem.image_url)}
-                          alt="Raw Wafer"
-                          style={{ width: "100%", height: "100%", objectFit: "contain", flex: 1, pointerEvents: "none" }}
-                        />
+                        {rawLoadError ? (
+                          <div
+                            style={{
+                              flex: 1,
+                              display: "flex",
+                              flexDirection: "column",
+                              alignItems: "center",
+                              justifyContent: "center",
+                              background: "rgba(0, 0, 0, 0.4)",
+                              borderRadius: "6px",
+                              border: "1px dashed var(--border-color)",
+                              padding: "20px",
+                              textAlign: "center"
+                            }}
+                          >
+                            <span style={{ fontSize: "28px", marginBottom: "8px" }}>📷</span>
+                            <span style={{ fontSize: "13px", fontWeight: "600", color: "var(--text-secondary)" }}>
+                              ไม่มีภาพ Raw / No Raw Image
+                            </span>
+                            <span style={{ fontSize: "11px", color: "var(--text-muted)", marginTop: "4px" }}>
+                              ไม่พบไฟล์ภาพ Raw ใน Drive M PROCESSED
+                            </span>
+                          </div>
+                        ) : (
+                          <img
+                            draggable={false}
+                            onDragStart={(e) => e.preventDefault()}
+                            src={resolveImageUrl(benchmarkSplitModalItem.raw_image_url || benchmarkSplitModalItem.image_url)}
+                            alt="Raw Wafer"
+                            style={{ width: "100%", height: "100%", objectFit: "contain", flex: 1, pointerEvents: "none" }}
+                            onError={() => setRawLoadError(true)}
+                          />
+                        )}
                       </div>
 
                       {/* 2. AI SEGMENTATION & DISTANCE RULE */}
                       <div className="split-image-box" style={{ height: "100%", display: "flex", flexDirection: "column" }}>
                         <span className="split-image-tag">2. AI SEGMENTATION & DISTANCE RULE</span>
-                        <img
-                          draggable={false}
-                          onDragStart={(e) => e.preventDefault()}
-                          src={resolveImageUrl(benchmarkSplitModalItem.annotated_image_url || benchmarkSplitModalItem.image_url)}
-                          alt="AI Annotated"
-                          style={{ width: "100%", height: "100%", objectFit: "contain", flex: 1, pointerEvents: "none" }}
-                          onError={(e) => {
-                            e.target.src = resolveImageUrl(benchmarkSplitModalItem.raw_image_url || benchmarkSplitModalItem.image_url);
-                          }}
-                        />
+                        {annotatedLoadError ? (
+                          <div
+                            style={{
+                              flex: 1,
+                              display: "flex",
+                              flexDirection: "column",
+                              alignItems: "center",
+                              justifyContent: "center",
+                              background: "rgba(0, 0, 0, 0.4)",
+                              borderRadius: "6px",
+                              border: "1px dashed var(--border-color)",
+                              padding: "20px",
+                              textAlign: "center"
+                            }}
+                          >
+                            <span style={{ fontSize: "28px", marginBottom: "8px" }}>🖼️</span>
+                            <span style={{ fontSize: "13px", fontWeight: "600", color: "var(--text-secondary)" }}>
+                              ไม่มีภาพ Output / No Output Image
+                            </span>
+                            <span style={{ fontSize: "11px", color: "var(--text-muted)", marginTop: "4px" }}>
+                              ไฟล์ภาพ Output ใน Drive M ถูกลบหรือยังไม่มีในระบบ
+                            </span>
+                          </div>
+                        ) : (
+                          <img
+                            draggable={false}
+                            onDragStart={(e) => e.preventDefault()}
+                            src={resolveImageUrl(benchmarkSplitModalItem.annotated_image_url || benchmarkSplitModalItem.image_url)}
+                            alt="AI Annotated"
+                            style={{ width: "100%", height: "100%", objectFit: "contain", flex: 1, pointerEvents: "none" }}
+                            onError={() => setAnnotatedLoadError(true)}
+                          />
+                        )}
                       </div>
                     </div>
                   </div>
@@ -434,12 +491,25 @@ export default function SplitViewModal() {
                           {benchmarkSplitModalItem.machineNo || "PROBER01"}
                         </span>
                       </div>
-                      <div className="meta-row" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                        <span className="meta-lbl" style={{ flexShrink: 0 }}>Batch:</span>
-                        <span className="meta-val font-mono" style={{ textAlign: "right" }}>
-                          {splitMeta.batch}
-                        </span>
-                      </div>
+                      {(() => {
+                        const bw = splitBatchAndWafer ? splitBatchAndWafer(splitMeta) : { batch: splitMeta.batch, waferNo: splitMeta.waferNo };
+                        return (
+                          <>
+                            <div className="meta-row" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                              <span className="meta-lbl" style={{ flexShrink: 0 }}>Batch:</span>
+                              <span className="meta-val font-mono" style={{ textAlign: "right" }}>
+                                {bw.batch}
+                              </span>
+                            </div>
+                            <div className="meta-row" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                              <span className="meta-lbl" style={{ flexShrink: 0 }}>Wafer No.:</span>
+                              <span className="meta-val font-mono" style={{ textAlign: "right" }}>
+                                {bw.waferNo}
+                              </span>
+                            </div>
+                          </>
+                        );
+                      })()}
                       <div className="meta-row" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                         <span className="meta-lbl" style={{ flexShrink: 0 }}>Pad / Site:</span>
                         <span className="meta-val font-mono" style={{ textAlign: "right" }}>

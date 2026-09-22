@@ -1,18 +1,4 @@
 {
-  "active_recipe": "Product_Setting.txt",
-  "active_machine_config": "Machine_Setting.txt",
-  "bindings": {
-    "unet.tflite": {
-      "recipe": "Product_Setting.txt",
-      "machine_config": "Machine_Setting.txt"
-    },
-    "unet_pytorch_new.tflite": {
-      "recipe": "Product_Setting.txt",
-      "machine_config": "Machine_Setting.txt"
-    },
-    "unet_3class_new.tflite": {
-      "recipe": "Recipe_KMI710_Alternative.txt",
-      "machine_config": "Machine_Setting.txt"
-    }
-  }
+  "test": 123,
+  "active_recipe": "tmp_test_recipe.json"
 }

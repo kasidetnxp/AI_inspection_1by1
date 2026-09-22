@@ -76,7 +76,8 @@ export default function AuditLogModal({ isOpen, onClose }) {
         style={{
           width: "1000px",
           maxWidth: "96vw",
-          maxHeight: "88vh",
+          height: "680px",
+          maxHeight: "82vh",
           display: "flex",
           flexDirection: "column",
           borderRadius: "8px",
@@ -94,7 +95,8 @@ export default function AuditLogModal({ isOpen, onClose }) {
             display: "flex",
             alignItems: "center",
             justifyContent: "space-between",
-            background: "var(--bg-subtle)"
+            background: "var(--bg-subtle)",
+            flexShrink: 0
           }}
         >
           <div>
@@ -133,7 +135,8 @@ export default function AuditLogModal({ isOpen, onClose }) {
             flexWrap: "wrap",
             gap: "10px",
             alignItems: "center",
-            justifyContent: "space-between"
+            justifyContent: "space-between",
+            flexShrink: 0
           }}
         >
           {/* CATEGORIES */}
@@ -212,10 +215,9 @@ export default function AuditLogModal({ isOpen, onClose }) {
         <div
           style={{
             flex: 1,
+            minHeight: 0,
             overflowY: "auto",
-            padding: "0 20px",
-            minHeight: "320px",
-            maxHeight: "56vh"
+            padding: "0 20px"
           }}
         >
           {auditLoading ? (
@@ -305,7 +307,8 @@ export default function AuditLogModal({ isOpen, onClose }) {
             display: "flex",
             justifyContent: "space-between",
             alignItems: "center",
-            background: "var(--bg-subtle)"
+            background: "var(--bg-subtle)",
+            flexShrink: 0
           }}
         >
           <div style={{ fontSize: "12px", color: "var(--text-muted)" }}>

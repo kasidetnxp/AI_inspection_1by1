@@ -67,6 +67,66 @@ export const formatBatchWafer = (item) => {
 };
 
 /**
+ * Splits combined batch and wafer string (e.g. "C7K488W19E6" -> { batch: "C7K488", waferNo: "W19E6" })
+ */
+export const splitBatchAndWafer = (itemOrString) => {
+  if (!itemOrString) return { batch: "-", waferNo: "-" };
+
+  let rawBatch = "";
+  let rawWafer = "";
+
+  if (typeof itemOrString === "string") {
+    rawBatch = itemOrString.trim();
+  } else if (typeof itemOrString === "object") {
+    rawBatch = itemOrString.batch && itemOrString.batch !== "-" ? String(itemOrString.batch).trim() : "";
+    rawWafer = itemOrString.waferNo && itemOrString.waferNo !== "-" ? String(itemOrString.waferNo).trim() : "";
+    if (!rawWafer && itemOrString.id && !String(itemOrString.id).startsWith("#WF")) {
+      rawWafer = String(itemOrString.id).trim();
+    }
+  }
+
+  // Check if either wafer or batch contains combined token (e.g. C7K488W19E6, C7K488-W19E6, LOT-123-ABC-W01)
+  const candidate = (rawWafer && /[A-Z0-9]+[-_.]?W\d+/i.test(rawWafer))
+    ? rawWafer
+    : (rawBatch && /[A-Z0-9]+[-_.]?W\d+/i.test(rawBatch))
+      ? rawBatch
+      : "";
+
+  if (candidate) {
+    // 1. Delimited: C7K488-W19E6 or LOT-123-ABC-W01
+    const mDelim = candidate.match(/^(.*?)[-#.]((?:W(?:AFER|F)?[-_.]?)?\d{1,2}[A-Za-z0-9]*|#(?:0?[1-9]|[1-4][0-9]|50))$/i);
+    if (mDelim && mDelim[1]) {
+      return {
+        batch: (rawBatch && rawBatch !== candidate) ? rawBatch : mDelim[1].trim(),
+        waferNo: mDelim[2].trim()
+      };
+    }
+
+    // 2. Direct attached: C7K488W19E6 -> C7K488, W19E6
+    const mAttached = candidate.match(/^([A-Za-z0-9_\-]+?)(W(?:AFER|F)?\d{1,2}[A-Za-z0-9]*)$/i);
+    if (mAttached && mAttached[1]) {
+      return {
+        batch: (rawBatch && rawBatch !== candidate) ? rawBatch : mAttached[1].trim(),
+        waferNo: mAttached[2].trim()
+      };
+    }
+  }
+
+  // 3. Standalone W prefix
+  if (rawWafer && /^W(?:AFER|F)?\d{1,2}[A-Za-z0-9]*$/i.test(rawWafer)) {
+    return {
+      batch: rawBatch || "-",
+      waferNo: rawWafer
+    };
+  }
+
+  return {
+    batch: rawBatch || "-",
+    waferNo: rawWafer || (typeof itemOrString === "object" && itemOrString?.id ? String(itemOrString.id) : "-")
+  };
+};
+
+/**
  * Normalizes date to YYYY-MM-DD from record timestamp
  */
 export const normalizeRecordDate = (record) => {
@@ -174,10 +234,14 @@ export const sortRecords = (records, sortField = "timestamp", sortOrder = "desc"
       const numA = getNumericValue(a[sortField]);
       const numB = getNumericValue(b[sortField]);
       cmp = numA - numB;
-    } else if (sortField === "batch" || sortField === "waferNo") {
-      const strA = formatBatchWafer(a);
-      const strB = formatBatchWafer(b);
-      cmp = strA.localeCompare(strB);
+    } else if (sortField === "batch") {
+      const bwA = splitBatchAndWafer(a);
+      const bwB = splitBatchAndWafer(b);
+      cmp = bwA.batch.localeCompare(bwB.batch);
+    } else if (sortField === "waferNo") {
+      const bwA = splitBatchAndWafer(a);
+      const bwB = splitBatchAndWafer(b);
+      cmp = bwA.waferNo.localeCompare(bwB.waferNo);
     } else {
       const strA = String(a[sortField] ?? "");
       const strB = String(b[sortField] ?? "");

@@ -2,10 +2,10 @@
 
 # Folder Paths for Machine Shared Interfacing (Mapped to N: and M: Factory Drives)
 paths:
-  # Set to null to dynamically read from Machine_Setting.txt (e.g. /mnt/N/WP288/PMI/IMAGE)
-  image_dir: null     # Camera input from Prober (N:)
-  judge_dir: null     # Single txt Judgement to Prober (N:)
-  output_dir: null    # Annotated defect images archive (M:)
+  # Set to null to dynamically read from Machine_Setting.txt (e.g. /mnt/M/WP288/PMI/PROCESSED)
+  image_dir: null     # Input from Prober (Drive M: PROCESSED)
+  judge_dir: null     # Single txt Judgement to Prober (Drive N: JUDGE)
+  output_dir: null    # Split comparison defect images archive (Drive M: OUTPUT)
   process_dir: "/tmp/imx8_process"                    # Fast RAM-disk temporary processing buffer
 
 # AI Model Inference Settings

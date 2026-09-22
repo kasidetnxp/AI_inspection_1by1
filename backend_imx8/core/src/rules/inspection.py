@@ -242,7 +242,8 @@ def run_inspection(image_results,
                    warning_distance_um=3.0,
                    warning_occurrence_threshold=1,
                    # Config file path (takes priority over direct params above)
-                   config_path=None):
+                   config_path=None,
+                   viz_prefix=""):
     """
     Evaluates pass/fail inspection rules on model segmentation outputs.
 
@@ -275,10 +276,12 @@ def run_inspection(image_results,
     _pad_width_um  = cfg.get("pad_width_um", cfg.get("pad_width_mm")) if cfg.get("pad_width_um", cfg.get("pad_width_mm")) is not None else pad_width_um
     _default_px_um = cfg.get("default_px_per_um", cfg.get("default_px_per_mm")) if cfg.get("default_px_per_um", cfg.get("default_px_per_mm")) is not None else px_per_um
 
-    os.makedirs(os.path.dirname(output_csv_path), exist_ok=True)
-    os.makedirs(output_viz_dir, exist_ok=True)
+    if output_csv_path:
+        os.makedirs(os.path.dirname(output_csv_path), exist_ok=True)
+    if output_viz_dir:
+        os.makedirs(output_viz_dir, exist_ok=True)
 
-    csv_exists = os.path.exists(output_csv_path)
+    csv_exists = os.path.exists(output_csv_path) if output_csv_path else False
     results_logged = []
     _warning_counter = defaultdict(int)
 
@@ -288,6 +291,14 @@ def run_inspection(image_results,
         img = cv2.imread(image_path)
         if img is None:
             print(f"⚠️ Could not read image for inspection visualization: {image_path}")
+            results_logged.append({
+                "image_name": image_name,
+                "decision":   "FAIL",
+                "min_dist":   "N/A",
+                "ratio":      "N/A",
+                "reason":     "Corrupted or Unreadable Image",
+                "viz_path":   None,
+            })
             continue
 
         h, w = img.shape[:2]
@@ -461,22 +472,11 @@ def run_inspection(image_results,
 
                 matched_defects = matched_pms + matched_grains
                 
-                # Correct pad shape: Logical OR pad mask with matched probe marks AND grains,
-                # followed by Convex Hull to perfectly restore straight boundaries for any convex Pad shapes
-                # (rectangles, hexagons, octagons, etc.) eliminating all indentations/dents.
-                pad_mask = polygon_to_mask(pad, img.shape)
-                if len(matched_defects) > 0:
-                    defect_mask_combined = np.zeros(img.shape[:2], dtype=np.uint8)
-                    for df in matched_defects:
-                        cv2.fillPoly(defect_mask_combined, [df], 255)
-                    merged_mask = cv2.bitwise_or(pad_mask, defect_mask_combined)
-                else:
-                    merged_mask = pad_mask.copy()
-                    
-                contours, _ = cv2.findContours(merged_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
-                if len(contours) > 0:
-                    raw_pad = max(contours, key=cv2.contourArea)
-                    pad = cv2.convexHull(raw_pad)
+                # Apply Convex Hull directly on the pad polygon to restore straight boundaries
+                # for any convex shape (rectangles, octagons, etc.) without bulging outward around
+                # defects that lie on or outside the perimeter.
+                if len(pad) > 0:
+                    pad = cv2.convexHull(pad)
                 
                 # Draw pad outline
                 overlay = img_viz.copy()
@@ -486,19 +486,13 @@ def run_inspection(image_results,
                 
                 if len(matched_pms) == 0:
                     # Missing probe mark on this pad!
-                    if MISSING_MARK_ACTION == "fail" or WARN_DIST_UM <= 0.0:
+                    if MISSING_MARK_ACTION == "ignore":
+                        pass
+                    else:
                         decision = "FAIL"
                         reasons.append("No probemark detected on pad")
                         # Draw pad contour in Red (0, 0, 255) for missing fail
                         cv2.drawContours(img_viz, [pad], -1, (0, 0, 255), 1)
-                    elif MISSING_MARK_ACTION == "ignore":
-                        pass
-                    else:
-                        if decision != "FAIL":
-                            decision = "WARNING"
-                        reasons.append("[WARNING] No probemark detected — please verify")
-                        # Draw pad contour in Yellow (0, 255, 255) for missing warning
-                        cv2.drawContours(img_viz, [pad], -1, (0, 255, 255), 1)
                 else:
                     # Run checks for each probe mark matched to this pad
                     # Create a combined binary mask for all matched probe marks to get the true union area
@@ -577,24 +571,12 @@ def run_inspection(image_results,
                         if dist_um < min_dist_um:
                             min_dist_um = dist_um
                             
-                        # ③ FAIL / WARNING / PASS decision (distance-based)
+                        # ③ FAIL / PASS decision (distance-based)
                         if dist_um < FAIL_DIST_UM:
                             decision = "FAIL"
                             reasons.append(
                                 f"Probemark too close to edge ({dist_um:.2f}um < {FAIL_DIST_UM}um)"
                             )
-                            _warning_counter[image_name] = 0
-                        elif WARN_DIST_UM > 0.0 and dist_um < (FAIL_DIST_UM + WARN_DIST_UM):
-                            _warning_counter[image_name] += 1
-                            if _warning_counter[image_name] >= WARN_THRESHOLD:
-                                if decision != "FAIL":
-                                    decision = "WARNING"
-                                reasons.append(
-                                    f"[WARNING] Probemark near edge ({dist_um:.2f}um) – "
-                                    f"occurred {_warning_counter[image_name]} time(s)"
-                                )
-                        else:
-                            _warning_counter[image_name] = 0
 
                         # ③.2 Greyscale Check (intensity check)
                         GREYSCALE_THRESHOLD = cfg.get("greyscale_threshold", 0.0)
@@ -612,9 +594,8 @@ def run_inspection(image_results,
                         # ④ Visualization
                         is_fail = (dist_um < FAIL_DIST_UM or ratio > MAX_RATIO_PCT or
                                    (MIN_RATIO_PCT > 0.0 and ratio < MIN_RATIO_PCT))
-                        is_warn = any("[WARNING]" in r_txt for r_txt in reasons)
                         
-                        pm_color = (0, 0, 255) if is_fail else (0, 255, 255) if is_warn else (0, 255, 0)
+                        pm_color = (0, 0, 255) if is_fail else (0, 255, 0)
                         overlay = img_viz.copy()
                         cv2.fillPoly(overlay, [pm], pm_color)
                         cv2.addWeighted(overlay, 0.35, img_viz, 0.65, 0, img_viz)
@@ -622,8 +603,7 @@ def run_inspection(image_results,
                         
                         # Distance line color
                         is_dist_fail = (dist_um < FAIL_DIST_UM)
-                        is_dist_warn = (WARN_DIST_UM > 0.0) and (dist_um >= FAIL_DIST_UM) and (dist_um < FAIL_DIST_UM + WARN_DIST_UM)
-                        dist_line_color = (0, 0, 255) if is_dist_fail else (0, 255, 255) if is_dist_warn else (0, 255, 0)
+                        dist_line_color = (0, 0, 255) if is_dist_fail else (0, 255, 0)
                         
                         # Distance helper line drawing
                         if closest_pm_pt is not None and pm_min_dist_px != float('inf') and pm_min_dist_px > 0:
@@ -738,30 +718,32 @@ def run_inspection(image_results,
  
         cv2.line(canvas, (w, banner_h), (w, h + banner_h), (255, 255, 255), 1)
  
-        viz_path = os.path.join(output_viz_dir, f"inspect_{image_name}")
+        viz_filename = f"{viz_prefix}{image_name}" if viz_prefix else image_name
+        viz_path = os.path.join(output_viz_dir, viz_filename)
         cv2.imwrite(viz_path, canvas)
- 
+
         # ------------------------------------------------------------------
         # CSV log
         # ------------------------------------------------------------------
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        try:
-            with open(output_csv_path, 'a', newline='', encoding='utf-8') as f_csv:
-                writer = csv.writer(f_csv)
-                if not csv_exists:
+        if output_csv_path:
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            try:
+                with open(output_csv_path, 'a', newline='', encoding='utf-8') as f_csv:
+                    writer = csv.writer(f_csv)
+                    if not csv_exists:
+                        writer.writerow([
+                            "Timestamp", "Image Name", "Result",
+                            "Min Distance (um)", "Area Ratio (%)", "Fail Reason"
+                        ])
+                        csv_exists = True
                     writer.writerow([
-                        "Timestamp", "Image Name", "Result",
-                        "Min Distance (um)", "Area Ratio (%)", "Fail Reason"
+                        timestamp, image_name, decision,
+                        min_dist_str, f"{max_ratio_pct:.1f}", reason_str
                     ])
-                    csv_exists = True
-                writer.writerow([
-                    timestamp, image_name, decision,
-                    min_dist_str, f"{max_ratio_pct:.1f}", reason_str
-                ])
-        except PermissionError:
-            print(f"⚠️ [WARNING] Permission denied to write to '{output_csv_path}'. "
-                  f"Please make sure the file is not open in Excel or another program.")
- 
+            except PermissionError:
+                print(f"⚠️ [WARNING] Permission denied to write to '{output_csv_path}'. "
+                      f"Please make sure the file is not open in Excel or another program.")
+
         results_logged.append({
             "image_name": image_name,
             "decision":   decision,
@@ -771,6 +753,7 @@ def run_inspection(image_results,
             "viz_path":   viz_path,
         })
 
-    print(f"✅ Inspection complete. Report → {output_csv_path}")
+    if output_csv_path:
+        print(f"✅ Inspection complete. Report → {output_csv_path}")
     print(f"🖼️  Visuals saved → {output_viz_dir}")
     return results_logged

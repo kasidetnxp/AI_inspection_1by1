@@ -40,7 +40,6 @@ export default function ModelsPage() {
     handleStartBenchmark,
     handleStopBenchmark,
     handleUploadFile,
-    handleViewReport,
     history,
     isBenchmarkDragging,
     isBenchmarkStarting,
@@ -58,7 +57,6 @@ export default function ModelsPage() {
     setBenchmarkModel,
     setBenchmarkPage,
     setBenchmarkPageSize,
-    setBenchmarkReportModalOpen,
     setBenchmarkRules,
     setBenchmarkSearch,
     setBenchmarkSplitModalIndex,
@@ -69,7 +67,85 @@ export default function ModelsPage() {
     totalBenchmarkPages
   } = useInspection();
 
-  const [deletingModelName, setDeletingModelName] = useState(null);
+  const [modelActionModal, setModelActionModal] = useState({
+    isOpen: false,
+    type: null, // "ACTIVATE" | "DELETE"
+    model: null,
+    status: "idle", // "idle" | "loading" | "success" | "error"
+    message: ""
+  });
+
+  const openActivateConfirm = (model) => {
+    setModelActionModal({
+      isOpen: true,
+      type: "ACTIVATE",
+      model,
+      status: "idle",
+      message: ""
+    });
+  };
+
+  const openDeleteConfirm = (model) => {
+    setModelActionModal({
+      isOpen: true,
+      type: "DELETE",
+      model,
+      status: "idle",
+      message: ""
+    });
+  };
+
+  const closeModelActionModal = () => {
+    setModelActionModal({
+      isOpen: false,
+      type: null,
+      model: null,
+      status: "idle",
+      message: ""
+    });
+  };
+
+  const handleExecuteModelAction = async () => {
+    if (!modelActionModal.model) return;
+    setModelActionModal((prev) => ({ ...prev, status: "loading" }));
+    if (modelActionModal.type === "ACTIVATE") {
+      const res = await handleActivateModel(modelActionModal.model, { silent: true });
+      if (res && res.success) {
+        setModelActionModal((prev) => ({
+          ...prev,
+          status: "success",
+          message: res.message || `Model '${modelActionModal.model.name}' activated on i.MX8 NPU successfully.`
+        }));
+        setTimeout(() => {
+          closeModelActionModal();
+        }, 1500);
+      } else {
+        setModelActionModal((prev) => ({
+          ...prev,
+          status: "error",
+          message: (res && res.error) || "Failed to activate model."
+        }));
+      }
+    } else if (modelActionModal.type === "DELETE") {
+      const res = await handleDeleteModel(modelActionModal.model, true, { silent: true });
+      if (res && res.success) {
+        setModelActionModal((prev) => ({
+          ...prev,
+          status: "success",
+          message: res.message || `Model '${modelActionModal.model.name}' deleted successfully.`
+        }));
+        setTimeout(() => {
+          closeModelActionModal();
+        }, 1500);
+      } else {
+        setModelActionModal((prev) => ({
+          ...prev,
+          status: "error",
+          message: (res && res.error) || "Failed to delete model."
+        }));
+      }
+    }
+  };
 
   useEffect(() => {
     if (tabParam && ["hub", "registry", "validation", "training"].includes(tabParam)) {
@@ -163,13 +239,13 @@ export default function ModelsPage() {
                   {/* 1. TOP QUALITY KPI DASHBOARD */}
                   <div className="kpi-dashboard-grid">
                     {/* Overkill Rate */}
-                    <div className={`kpi-card ${(benchmarkKpis.overkill_rate || 0) > 3 ? "alert-warning" : "highlight-info"}`}>
+                    <div className={`kpi-card ${(benchmarkKpis.overkill_rate || 0) > 3 ? "alert-warning" : ""}`}>
                       <div className="kpi-header">
                         <span className="kpi-title">OVERKILL RATE</span>
                       </div>
-                      <div className="kpi-value-row">
+                      <div className="kpi-value-row" style={{ display: "flex", alignItems: "baseline", gap: "8px", flexWrap: "wrap" }}>
                         <span className="kpi-main-val" style={{ color: (benchmarkKpis.overkill_rate || 0) > 3 ? "var(--color-warn)" : "inherit" }}>
-                          {Number(benchmarkKpis.overkill_rate ?? 0).toFixed(1)}%
+                          {Number(benchmarkKpis.overkill_rate ?? 0).toFixed(2)}%
                         </span>
                       </div>
                     </div>
@@ -179,9 +255,9 @@ export default function ModelsPage() {
                       <div className="kpi-header">
                         <span className="kpi-title">UNDERKILL</span>
                       </div>
-                      <div className="kpi-value-row">
+                      <div className="kpi-value-row" style={{ display: "flex", alignItems: "baseline", gap: "8px", flexWrap: "wrap" }}>
                         <span className="kpi-main-val" style={{ color: (benchmarkKpis.underkill_rate || 0) > 0 ? "var(--color-fail)" : "var(--color-pass)" }}>
-                          {Number(benchmarkKpis.underkill_rate ?? 0).toFixed(1)}%
+                          {Number(benchmarkKpis.underkill_rate ?? 0).toFixed(2)}%
                         </span>
                       </div>
                     </div>
@@ -191,8 +267,8 @@ export default function ModelsPage() {
                       <div className="kpi-header">
                         <span className="kpi-title">YIELD BENCHMARK</span>
                       </div>
-                      <div className="kpi-value-row">
-                        <span className="kpi-main-val">{Number(benchmarkKpis.true_yield ?? 0).toFixed(1)}%</span>
+                      <div className="kpi-value-row" style={{ display: "flex", alignItems: "baseline", gap: "8px", flexWrap: "wrap" }}>
+                        <span className="kpi-main-val">{Number(benchmarkKpis.true_yield ?? 0).toFixed(2)}%</span>
                       </div>
                     </div>
                   </div>
@@ -402,17 +478,11 @@ export default function ModelsPage() {
                       <div className="hmi-card" style={{ height: "100%", display: "flex", flexDirection: "column" }}>
                         <div className="card-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "8px" }}>
                           <div>
-                            <h3>HUMAN REVIEW STATION</h3>
-                            <span style={{ fontSize: "14px", color: "var(--text-muted)" }}>
-                              Compare AI Decision vs QA Ground Truth ({benchmarkResults.length} Items)
-                            </span>
+                            <h3>HUMAN REVIEW</h3>
                           </div>
                           <div style={{ display: "flex", gap: "8px" }}>
                             <button className="review-action-btn" style={{ fontSize: "14px", padding: "7px 16px" }} onClick={handleExportBenchmarkCSV} title="Export CSV summary report">
                               EXPORT CSV
-                            </button>
-                            <button className="review-action-btn" style={{ fontSize: "14px", padding: "7px 16px" }} onClick={handleViewReport} title="Open analytical validation report card">
-                              VIEW REPORT
                             </button>
                           </div>
                         </div>
@@ -856,54 +926,31 @@ export default function ModelsPage() {
                                     </select>
                                   </td>
                                   <td>
-                                    <span className={`badge-result ${model.active ? "pass" : "warn"}`}>
-                                      {model.active ? "ACTIVE RUNNING" : "INACTIVE"}
+                                    <span className={`badge-result ${model.active ? "pass" : "warn"}`} style={{ fontSize: "11px", fontWeight: "700" }}>
+                                      {model.active ? "ACTIVE ON NPU (EDGE)" : "CENTRAL STORE (PC)"}
                                     </span>
                                   </td>
                                   <td style={{ textAlign: "center" }}>
                                     {model.active ? (
-                                      <button className="action-btn-sm active-green" disabled title="Currently active model on NPU">
+                                      <button className="action-btn-sm active-green" disabled title="Currently active model on i.MX8 NPU delegate">
                                         ACTIVE (IN USE)
                                       </button>
                                     ) : (
                                       <div style={{ display: "flex", gap: "6px", justifyContent: "center" }}>
                                         <button
                                           className="action-btn-sm"
-                                          onClick={() => handleActivateModel(model)}
-                                          title={`Activate ${model.name} on i.MX8 NPU`}
+                                          onClick={() => openActivateConfirm(model)}
+                                          title={`Activate ${model.name}`}
                                         >
                                           ACTIVATE
                                         </button>
-                                        {deletingModelName === model.name ? (
-                                          <div style={{ display: "flex", gap: "4px" }}>
-                                            <button
-                                              className="action-btn-sm delete-red"
-                                              style={{ background: "#dc2626", color: "#fff", fontWeight: "700" }}
-                                              onClick={async () => {
-                                                await handleDeleteModel(model, true);
-                                                setDeletingModelName(null);
-                                              }}
-                                              title="Confirm permanent deletion"
-                                            >
-                                              CONFIRM
-                                            </button>
-                                            <button
-                                              className="action-btn-sm"
-                                              onClick={() => setDeletingModelName(null)}
-                                              title="Cancel deletion"
-                                            >
-                                              ✕
-                                            </button>
-                                          </div>
-                                        ) : (
-                                          <button
-                                            className="action-btn-sm delete-red"
-                                            onClick={() => setDeletingModelName(model.name)}
-                                            title="Delete model"
-                                          >
-                                            DELETE
-                                          </button>
-                                        )}
+                                        <button
+                                          className="action-btn-sm delete-red"
+                                          onClick={() => openDeleteConfirm(model)}
+                                          title="Delete model from Central Store"
+                                        >
+                                          DELETE
+                                        </button>
                                       </div>
                                     )}
                                   </td>
@@ -927,6 +974,291 @@ export default function ModelsPage() {
               )}
 
             </main>
+
+            {/* MODEL ACTION CONFIRMATION & RESULT MODAL */}
+            {modelActionModal.isOpen && (
+              <div
+                className="split-view-modal-backdrop"
+                onClick={modelActionModal.status === "loading" ? undefined : closeModelActionModal}
+                style={{
+                  position: "fixed",
+                  top: 0,
+                  left: 0,
+                  width: "100vw",
+                  height: "100vh",
+                  backgroundColor: "rgba(0, 0, 0, 0.7)",
+                  backdropFilter: "blur(4px)",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  zIndex: 99999,
+                  padding: "20px",
+                  boxSizing: "border-box"
+                }}
+              >
+                <div
+                  className="hmi-card"
+                  onClick={(e) => e.stopPropagation()}
+                  style={{
+                    width: "440px",
+                    maxWidth: "92vw",
+                    height: "330px",
+                    display: "flex",
+                    flexDirection: "column",
+                    borderRadius: "10px",
+                    border: "1px solid var(--border-color)",
+                    backgroundColor: "var(--bg-card)",
+                    boxShadow: "0 20px 40px rgba(0, 0, 0, 0.4)",
+                    overflow: "hidden"
+                  }}
+                >
+                  {/* Modal Header */}
+                  <div
+                    style={{
+                      padding: "14px 20px",
+                      borderBottom: "1px solid var(--border-color)",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      background: "var(--bg-subtle)",
+                      flexShrink: 0
+                    }}
+                  >
+                    <h3 style={{ margin: 0, fontSize: "15px", fontWeight: "700", color: "var(--text-main)" }}>
+                      {modelActionModal.status === "success" || modelActionModal.status === "error"
+                        ? "STATUS RESULT"
+                        : modelActionModal.type === "ACTIVATE"
+                        ? "CONFIRM ACTIVATION"
+                        : "CONFIRM DELETION"}
+                    </h3>
+                    {modelActionModal.status !== "loading" && (
+                      <button
+                        onClick={closeModelActionModal}
+                        className="btn-secondary"
+                        style={{
+                          width: "28px",
+                          height: "28px",
+                          padding: 0,
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          borderRadius: "6px",
+                          cursor: "pointer"
+                        }}
+                      >
+                        ✕
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Modal Body */}
+                  <div
+                    style={{
+                      padding: "20px",
+                      flex: 1,
+                      display: "flex",
+                      flexDirection: "column",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      textAlign: "center",
+                      overflow: "hidden"
+                    }}
+                  >
+                    {/* IDLE STATE: CONFIRMATION PROMPT */}
+                    {modelActionModal.status === "idle" && (
+                      <div style={{ display: "flex", flexDirection: "column", gap: "12px", alignItems: "center", width: "100%" }}>
+                        <div
+                          style={{
+                            width: "48px",
+                            height: "48px",
+                            borderRadius: "50%",
+                            background: modelActionModal.type === "ACTIVATE" ? "rgba(59, 130, 246, 0.12)" : "rgba(239, 68, 68, 0.12)",
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            color: modelActionModal.type === "ACTIVATE" ? "#3b82f6" : "#ef4444",
+                            border: `1px solid ${modelActionModal.type === "ACTIVATE" ? "rgba(59, 130, 246, 0.3)" : "rgba(239, 68, 68, 0.3)"}`
+                          }}
+                        >
+                          {modelActionModal.type === "ACTIVATE" ? (
+                            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                              <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
+                            </svg>
+                          ) : (
+                            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                              <path d="M3 6h18m-2 0v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6m3 0V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
+                            </svg>
+                          )}
+                        </div>
+
+                        <div style={{ textAlign: "center" }}>
+                          <h4 style={{ margin: 0, fontSize: "15px", fontWeight: "600", color: "var(--text-main)" }}>
+                            {modelActionModal.type === "ACTIVATE" ? "Activate this model?" : "Delete this model?"}
+                          </h4>
+                        </div>
+
+                        {/* Prominent Model Name Box */}
+                        <div
+                          className="font-mono"
+                          style={{
+                            width: "100%",
+                            padding: "10px 14px",
+                            borderRadius: "6px",
+                            background: modelActionModal.type === "ACTIVATE" ? "rgba(59, 130, 246, 0.08)" : "rgba(239, 68, 68, 0.08)",
+                            border: `1px solid ${modelActionModal.type === "ACTIVATE" ? "rgba(59, 130, 246, 0.25)" : "rgba(239, 68, 68, 0.25)"}`,
+                            color: modelActionModal.type === "ACTIVATE" ? "#3b82f6" : "#ef4444",
+                            fontSize: "15px",
+                            fontWeight: "700",
+                            textAlign: "center",
+                            wordBreak: "break-all",
+                            boxSizing: "border-box"
+                          }}
+                        >
+                          {modelActionModal.model?.name}
+                        </div>
+
+                        <p style={{ margin: 0, fontSize: "12.5px", color: "var(--text-muted)", textAlign: "center" }}>
+                          {modelActionModal.type === "ACTIVATE"
+                            ? "Will deploy as active AI model on i.MX8 NPU."
+                            : "This action is permanent and cannot be undone."}
+                        </p>
+                      </div>
+                    )}
+
+                    {/* LOADING STATE */}
+                    {modelActionModal.status === "loading" && (
+                      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "14px" }}>
+                        <div style={{ width: "36px", height: "36px", border: "3px solid rgba(255,255,255,0.1)", borderTopColor: "#3b82f6", borderRadius: "50%", animation: "spin 0.8s linear infinite" }} />
+                        <div style={{ fontSize: "14px", fontWeight: "600", color: "var(--text-main)" }}>
+                          {modelActionModal.type === "ACTIVATE" ? "Activating model..." : "Deleting model..."}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* SUCCESS STATE */}
+                    {modelActionModal.status === "success" && (
+                      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "10px" }}>
+                        <div
+                          style={{
+                            width: "48px",
+                            height: "48px",
+                            borderRadius: "50%",
+                            background: "rgba(16, 185, 129, 0.15)",
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            color: "#10b981",
+                            border: "1px solid rgba(16, 185, 129, 0.3)"
+                          }}
+                        >
+                          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                            <polyline points="20 6 9 17 4 12" />
+                          </svg>
+                        </div>
+                        <h4 style={{ margin: 0, fontSize: "15px", color: "#10b981", fontWeight: "700" }}>
+                          {modelActionModal.type === "ACTIVATE" ? "Model Activated" : "Model Deleted"}
+                        </h4>
+                        <p style={{ margin: 0, fontSize: "12.5px", color: "var(--text-muted)", lineHeight: "1.4", wordBreak: "break-word" }}>
+                          {modelActionModal.message}
+                        </p>
+                      </div>
+                    )}
+
+                    {/* ERROR STATE */}
+                    {modelActionModal.status === "error" && (
+                      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "10px" }}>
+                        <div
+                          style={{
+                            width: "48px",
+                            height: "48px",
+                            borderRadius: "50%",
+                            background: "rgba(239, 68, 68, 0.15)",
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            color: "#ef4444",
+                            border: "1px solid rgba(239, 68, 68, 0.3)"
+                          }}
+                        >
+                          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                            <line x1="18" y1="6" x2="6" y2="18" />
+                            <line x1="6" y1="6" x2="18" y2="18" />
+                          </svg>
+                        </div>
+                        <h4 style={{ margin: 0, fontSize: "15px", color: "#ef4444", fontWeight: "700" }}>
+                          Operation Failed
+                        </h4>
+                        <p style={{ margin: 0, fontSize: "12.5px", color: "var(--color-fail)", lineHeight: "1.4", wordBreak: "break-word" }}>
+                          {modelActionModal.message}
+                        </p>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Modal Footer */}
+                  <div
+                    style={{
+                      padding: "12px 20px",
+                      borderTop: "1px solid var(--border-color)",
+                      display: "flex",
+                      justifyContent: "flex-end",
+                      gap: "10px",
+                      background: "var(--bg-subtle)",
+                      flexShrink: 0
+                    }}
+                  >
+                    {modelActionModal.status === "idle" && (
+                      <>
+                        <button
+                          className="btn-secondary"
+                          onClick={closeModelActionModal}
+                          style={{ padding: "7px 16px", fontSize: "13px", borderRadius: "6px", cursor: "pointer" }}
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          onClick={handleExecuteModelAction}
+                          style={{
+                            padding: "7px 18px",
+                            fontSize: "13px",
+                            fontWeight: "700",
+                            borderRadius: "6px",
+                            cursor: "pointer",
+                            border: "none",
+                            color: "#fff",
+                            background: modelActionModal.type === "ACTIVATE" ? "#2563eb" : "#dc2626"
+                          }}
+                        >
+                          {modelActionModal.type === "ACTIVATE" ? "Confirm Activate" : "Delete Model"}
+                        </button>
+                      </>
+                    )}
+
+                    {modelActionModal.status === "loading" && (
+                      <span style={{ fontSize: "12px", color: "var(--text-muted)", alignSelf: "center" }}>
+                        Processing...
+                      </span>
+                    )}
+
+                    {(modelActionModal.status === "success" || modelActionModal.status === "error") && (
+                      <button
+                        className="btn-secondary"
+                        onClick={closeModelActionModal}
+                        style={{
+                          padding: "7px 22px",
+                          fontSize: "13px",
+                          fontWeight: "600",
+                          borderRadius: "6px",
+                          cursor: "pointer"
+                        }}
+                      >
+                        Close
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
   );
 }
