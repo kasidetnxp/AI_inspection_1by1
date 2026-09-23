@@ -97,16 +97,20 @@ def resolve_windows_drive_path(raw_path: str, sim_root: str = None) -> str:
     clean = raw_path.replace("\\", "/")
     
     # 1. Direct Linux absolute path (e.g. /mnt/N/..., /media/...)
-    if os.path.isabs(clean):
+    match = re.match(r"^([A-Za-z]):/(.*)$", clean)
+    if not match and os.path.isabs(clean):
         return clean
 
     # 2. Windows Drive format (e.g. N:/..., M:/..., T:/...)
-    match = re.match(r"^([A-Za-z]):/(.*)$", clean)
     if match:
         drive_upper = match.group(1).upper()
         drive_lower = match.group(1).lower()
         rest = match.group(2).strip("/")
         
+        # On Windows: if physical drive exists (e.g. N:/ or C:/), return clean
+        if os.name == 'nt' and os.path.exists(f"{drive_upper}:/"):
+            return clean
+
         # Check potential Linux mount points on actual i.MX8
         custom_root = os.environ.get("IMX8_FACTORY_MOUNT_ROOT")
         candidate_mounts = []
@@ -136,7 +140,7 @@ def resolve_windows_drive_path(raw_path: str, sim_root: str = None) -> str:
                 parts = rest.split("/")
                 for idx in range(1, len(parts)):
                     sub_candidate = os.path.join(m_base, *parts[idx:])
-                    if os.path.exists(sub_candidate):
+                    if os.path.exists(sub_candidate) or os.path.exists(os.path.dirname(sub_candidate)):
                         return sub_candidate
                         
                 # If neither subpath exists yet (e.g. creating new output folder), default to exact
@@ -619,16 +623,19 @@ def init_ingestion_baseline(proc_base_dir: str = None) -> float:
     return max_m
 
 # Initialize Machine Shared & Internal Folders
-if IMAGE_DIR:
-    os.makedirs(IMAGE_DIR, exist_ok=True)
-if PROCESS_DIR:
-    os.makedirs(PROCESS_DIR, exist_ok=True)
-if OUTPUT_DIR:
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
-if JUDGEMENT_DIR:
-    os.makedirs(JUDGEMENT_DIR, exist_ok=True)
-if MODELS_DIR:
-    os.makedirs(MODELS_DIR, exist_ok=True)
+try:
+    if IMAGE_DIR:
+        os.makedirs(IMAGE_DIR, exist_ok=True)
+    if PROCESS_DIR:
+        os.makedirs(PROCESS_DIR, exist_ok=True)
+    if OUTPUT_DIR:
+        os.makedirs(OUTPUT_DIR, exist_ok=True)
+    if JUDGEMENT_DIR:
+        os.makedirs(JUDGEMENT_DIR, exist_ok=True)
+    if MODELS_DIR:
+        os.makedirs(MODELS_DIR, exist_ok=True)
+except Exception as e:
+    print(f"[BOOT] Notice initializing directories: {e}")
 
 app = FastAPI(title="Edge AI Wafer Inspection System - i.MX8 Node")
 
@@ -1201,14 +1208,29 @@ def build_batch_judgement(batch_records: list) -> tuple:
 
     return "FAIL", "".join(mask_chars), fail_summary
 
+def format_judge_machine_name(machine_name: str) -> str:
+    """
+    Extracts only digits from machine name and prefixes with 'TETSK' ensuring 8 characters total:
+    'TETSK' (5 chars) + 3 digits (e.g. 'WP288' -> 'TETSK288', 'WP001' -> 'TETSK001', 'PROBER01' -> 'TETSK001').
+    """
+    if not machine_name:
+        return "TETSK000"
+    digits = re.sub(r"\D", "", str(machine_name))
+    if digits:
+        num_str = digits.zfill(3)
+        if len(num_str) > 3:
+            num_str = num_str[-3:]
+        return f"TETSK{num_str}"
+    return "TETSK000"
+
 _last_judge_filenames = set()
 _judge_file_lock = threading.Lock()
 
 def generate_machine_judgement_file(batch_decision: str, mask8_str: str, prober_name: str, t_stamp: str = None, lot_no: str = None, purge_existing: bool = True) -> tuple:
     """
     Generates single 8-digit Machine Judgement text file e.g.
-    'FAIL_02000008_PROBER01_20260818112106.txt' (Content: '02000008\n')
-    'PASS_00000000_PROBER01_20260818112106.txt' (Content: '00000000\n')
+    'FAIL_02000008_TETSK288_20260818112106.txt' (Content: '02000008\n')
+    'PASS_00000000_TETSK288_20260818112106.txt' (Content: '00000000\n')
     
     Adheres strictly to the 8-digit code format requested by factory specification.
     Guarantees overwrite protection and timestamp uniqueness per machine.result.fileFormat.
@@ -1226,6 +1248,8 @@ def generate_machine_judgement_file(batch_decision: str, mask8_str: str, prober_
 
     file_fmt = ACTIVE_MACHINE_SETTING.get("machine.result.fileFormat", "{output.result}_{output.code}_{output.machine}_{output.ts}.txt")
     txt_content = f"{mask8_str}\n"
+
+    judge_machine = format_judge_machine_name(prober_name)
 
     target_dirs = set()
     cfg_j = PATHS_CFG.get("judge_dir")
@@ -1268,13 +1292,13 @@ def generate_machine_judgement_file(batch_decision: str, mask8_str: str, prober_
             if "{output.ts}" in file_fmt:
                 candidate_fname = file_fmt.replace("{output.result}", batch_decision) \
                                           .replace("{output.code}", mask8_str) \
-                                          .replace("{output.machine}", prober_name) \
+                                          .replace("{output.machine}", judge_machine) \
                                           .replace("{output.lotNo}", lot_val) \
                                           .replace("{output.ts}", cur_ts)
             else:
                 base_fmt = file_fmt.replace("{output.result}", batch_decision) \
                                    .replace("{output.code}", mask8_str) \
-                                   .replace("{output.machine}", prober_name) \
+                                   .replace("{output.machine}", judge_machine) \
                                    .replace("{output.lotNo}", lot_val)
                 stem, ext = os.path.splitext(base_fmt)
                 candidate_fname = f"{stem}_{cur_ts}{ext}"
@@ -1346,6 +1370,7 @@ def complete_batch_for_lot(lot_no_str: str) -> dict:
         "failCount": len(failed_list),
         "failedRecords": failed_list,
         "machineNo": prober_name,
+        "judgeMachine": format_judge_machine_name(prober_name),
         "batch": lot_no_str if lot_no_str != "UNKNOWN_LOT" else (records[0].get("batch", "-") if records else "-"),
         "waferNo": records[0].get("waferNo", "-") if records else "-",
         "mask": mask8_str,
@@ -1378,8 +1403,8 @@ def complete_batch_for_lot(lot_no_str: str) -> dict:
 def check_idle_batch_completions():
     """
     Evaluates lot idle timeouts based on process.end.timeout (default 10,000 ms) from Machine_Setting.txt.
-    When no new images arrive in a lot's PROCESSED folder for longer than the timeout period
-    (and at least one image was processed for that lot), declare the batch complete.
+    When no new images arrive from Drive N and all queued images have finished processing,
+    declare the batch complete after the idle timeout period.
     """
     global lot_tracker
     timeout_ms = ACTIVE_MACHINE_SETTING.get("process.end.timeout", 10000)
@@ -1397,8 +1422,9 @@ def check_idle_batch_completions():
             continue
         if lot_info.get("processed", 0) < 1:
             continue
-        # Ensure all queued images for this lot have been processed
-        if lot_info.get("processed", 0) < lot_info.get("queued", 0):
+
+        # Ensure P0 priority queue is completely drained and no active production inference is running
+        if not P0_QUEUE.empty() or priority_dispatcher_state.get("active_priority") == "P0_PRODUCTION":
             continue
 
         if lot_info.get("end_signal_received"):
@@ -1406,30 +1432,10 @@ def check_idle_batch_completions():
             complete_batch_for_lot(lot_no_str)
             continue
 
-        last_act = lot_info.get("last_arrival")
-        if last_act is None or last_act == 0:
-            last_act = lot_info.get("last_activity", now)
+        # Evaluate idle time from when the last image finished processing (last_activity)
+        last_act = lot_info.get("last_activity") or lot_info.get("last_arrival") or now
         idle_time = now - last_act
         if idle_time >= timeout_sec:
-            # Check if there are still unprocessed image files on disk for this lot before completing
-            inp_tmpl = ACTIVE_MACHINE_SETTING.get("lot.input.folder", "M:\\WP288\\PMI\\PROCESSED\\{output.lotNo}")
-            lot_proc_dir = resolve_windows_drive_path(inp_tmpl.replace("{output.lotNo}", lot_no_str)) if inp_tmpl else None
-            has_pending_on_disk = False
-            if lot_proc_dir and os.path.isdir(lot_proc_dir):
-                try:
-                    for fname in os.listdir(lot_proc_dir):
-                        if fname.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp')):
-                            fp = os.path.join(lot_proc_dir, fname)
-                            if not is_file_already_processed(fp, fname, lot_no_str):
-                                has_pending_on_disk = True
-                                break
-                except Exception:
-                    pass
-
-            if has_pending_on_disk:
-                lot_info["last_arrival"] = now
-                continue
-
             print(f"⏱️ [IDLE TIMEOUT] Lot {lot_no_str} idle for {idle_time:.2f}s >= timeout {timeout_sec:.2f}s -> Triggering batch completion.")
             complete_batch_for_lot(lot_no_str)
 
@@ -2782,12 +2788,14 @@ def poll_source_transfer_once() -> int:
 async def async_source_transfer_loop():
     """
     Asynchronous watcher for source folder (Drive N or Drive T).
-    Continuously discovers batches and moves incoming images to Drive M PROCESSED.
+    Continuously discovers batches and moves incoming images to Drive M PROCESSED,
+    and continuously evaluates batch idle timeouts.
     """
     print("i.MX8 Source Transfer Watcher initialized (Drive N/T -> Drive M PROCESSED).")
     while True:
         try:
             await poll_source_transfer_async()
+            await asyncio.to_thread(check_idle_batch_completions)
         except Exception as e:
             print(f"Error in async source transfer watcher: {e}")
         await asyncio.sleep(0.1)  # 100ms polling interval
@@ -2942,32 +2950,20 @@ def verify_and_enqueue_candidates(candidates: list) -> int:
 
 async def poll_drive_m_async():
     """
-    Non-blocking async polling cycle for Drive M PROCESSED:
-    - Scans directory in background thread via asyncio.to_thread
-    - Performs 100ms write stability check via await asyncio.sleep (NEVER blocking event loop!)
-    - Enqueues stable images and checks idle completions in background thread
+    Compatibility wrapper: evaluates idle batch completions.
+    Drive M PROCESSED is strictly an archive and is NOT scanned for new inputs.
     """
-    candidates = await asyncio.to_thread(scan_drive_m_processed)
-    if candidates:
-        await asyncio.sleep(0.1)  # Non-blocking async sleep!
-        await asyncio.to_thread(verify_and_enqueue_candidates, candidates)
-
     await asyncio.to_thread(check_idle_batch_completions)
 
 
 def poll_drive_m_once() -> int:
     """
-    Single-pass synchronous polling function (used by tests or synchronous callers).
-    Performs source transfer (Drive N/T -> Drive M) followed by Drive M ingestion.
+    Single-pass synchronous polling function (used by tests or manual triggers).
+    Performs source transfer (Drive N/T -> Drive M) and checks idle completions.
     """
     transfer_enqueued = poll_source_transfer_once()
-    candidates = scan_drive_m_processed()
-    drive_m_enqueued = 0
-    if candidates:
-        time.sleep(0.1)
-        drive_m_enqueued = verify_and_enqueue_candidates(candidates)
     check_idle_batch_completions()
-    return transfer_enqueued + drive_m_enqueued
+    return transfer_enqueued
 
 
 async def async_folder_watcher_loop():
@@ -3141,11 +3137,8 @@ async def startup_event():
     # Ingestion baseline starts at 0.0 by default so uninspected lots are processed
     # init_ingestion_baseline()
 
-    # Start async source transfer watcher (Drive N/T -> Drive M PROCESSED)
+    # Start async source transfer watcher (Drive N/T -> Drive M PROCESSED + Idle Timeout Evaluation)
     asyncio.create_task(async_source_transfer_loop())
-
-    # Start async folder watcher on the main event loop (non-blocking)
-    asyncio.create_task(async_folder_watcher_loop())
 
     t_dispatcher = threading.Thread(target=priority_dispatcher_thread, daemon=True)
     t_dispatcher.start()
