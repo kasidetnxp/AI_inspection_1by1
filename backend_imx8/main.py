@@ -418,6 +418,12 @@ def apply_recipe_by_filename(filename: str):
                     reg = load_config_registry()
                     reg["active_recipe"] = filename
                     save_config_registry(reg)
+                    # Persist to active_product_setting.json on disk
+                    try:
+                        with open(os.path.join(_THIS_DIR, "active_product_setting.json"), "w", encoding="utf-8") as af:
+                            json.dump(ACTIVE_PRODUCT_SETTING, af, indent=2)
+                    except Exception as we:
+                        print(f"[CONFIG] Warning saving active_product_setting.json: {we}")
                     print(f"[CONFIG] Applied Recipe: {filename}")
                     return True
         except Exception as e:
@@ -444,6 +450,12 @@ def apply_machine_by_filename(filename: str):
                             base_val = raw_val.split("{output.lotNo}")[0].rstrip("/\\") if "{output.lotNo}" in raw_val else raw_val
                             sim_path = resolve_windows_drive_path(base_val)
                             os.makedirs(sim_path, exist_ok=True)
+                    # Persist to active_machine_setting.json on disk
+                    try:
+                        with open(os.path.join(_THIS_DIR, "active_machine_setting.json"), "w", encoding="utf-8") as af:
+                            json.dump(ACTIVE_MACHINE_SETTING, af, indent=2)
+                    except Exception as we:
+                        print(f"[CONFIG] Warning saving active_machine_setting.json: {we}")
                     print(f"[CONFIG] Applied Machine Setting: {filename} (Detected Machine: {get_current_prober_name()})")
                     return True
         except Exception as e:
@@ -2681,10 +2693,62 @@ def verify_and_transfer_candidates(candidates: list) -> int:
                 os.utime(dst_path, None)
             except Exception:
                 pass
+
+            # Stale output cleanup for re-tested images
+            out_tmpl = ACTIVE_MACHINE_SETTING.get("lot.output.folder", "M:\\WP288\\PMI\\OUTPUT\\{output.lotNo}")
+            if out_tmpl:
+                out_lot_dir = resolve_windows_drive_path(out_tmpl.replace("{output.lotNo}", batch_name))
+                if out_lot_dir:
+                    stale_out = os.path.join(out_lot_dir, filename)
+                    if os.path.exists(stale_out):
+                        try:
+                            os.remove(stale_out)
+                        except Exception:
+                            pass
+
+            # Directly enqueue to P0_QUEUE (Prober submitted new image to Source)
             with seen_files_lock:
-                seen_ingested_files.discard(dst_path)
+                seen_ingested_files.add(dst_path)
+            with in_flight_lock:
+                in_flight_files.add(dst_path)
+
+            with batch_lock:
+                now_t = time.time()
+                if batch_name not in lot_tracker:
+                    lot_tracker[batch_name] = {
+                        "lot_no": batch_name,
+                        "queued": 0,
+                        "processed": 0,
+                        "records": [],
+                        "last_activity": now_t,
+                        "last_arrival": now_t,
+                        "is_completed": False,
+                        "summary": None
+                    }
+                elif lot_tracker[batch_name].get("is_completed", False):
+                    # Clean reset for new batch of same lot
+                    lot_tracker[batch_name]["records"] = []
+                    lot_tracker[batch_name]["queued"] = 0
+                    lot_tracker[batch_name]["processed"] = 0
+                    lot_tracker[batch_name]["is_completed"] = False
+                    lot_tracker[batch_name]["summary"] = None
+
+                lot_tracker[batch_name]["queued"] += 1
+                lot_tracker[batch_name]["last_activity"] = now_t
+                lot_tracker[batch_name]["last_arrival"] = now_t
+                is_batch_complete = False
+
+            P0_QUEUE.put({
+                "filepath": dst_path,
+                "filename": filename,
+                "lot_no": batch_name,
+                "raw_preserved_path": dst_path
+            })
+            priority_dispatcher_state["p0_pending"] = P0_QUEUE.qsize()
+            save_seen_ingested_files(seen_ingested_files)
+
             moved_count += 1
-            print(f"[TRANSFER] ✅ Moved image {filename} (Lot: {batch_name}) -> Drive M: {dst_path}")
+            print(f"[TRANSFER->INGEST] ✅ Transferred image {filename} (Lot: {batch_name}) -> Drive M & Queued P0")
         except Exception as move_err:
             print(f"[TRANSFER] ❌ Error moving file {src_path} -> {target_dir}: {move_err}")
 
@@ -2896,14 +2960,14 @@ def poll_drive_m_once() -> int:
     Single-pass synchronous polling function (used by tests or synchronous callers).
     Performs source transfer (Drive N/T -> Drive M) followed by Drive M ingestion.
     """
-    poll_source_transfer_once()
+    transfer_enqueued = poll_source_transfer_once()
     candidates = scan_drive_m_processed()
-    enqueued = 0
+    drive_m_enqueued = 0
     if candidates:
         time.sleep(0.1)
-        enqueued = verify_and_enqueue_candidates(candidates)
+        drive_m_enqueued = verify_and_enqueue_candidates(candidates)
     check_idle_batch_completions()
-    return enqueued
+    return transfer_enqueued + drive_m_enqueued
 
 
 async def async_folder_watcher_loop():

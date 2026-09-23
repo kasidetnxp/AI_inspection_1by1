@@ -153,8 +153,14 @@ def postprocess_unet(output_tensor, output_info, meta, class_names):
     masks, class_ids = [], []
     for class_id in range(1, num_classes):
         if class_id == 1:
-            # Build solid Pad mask by combining Pad (1), Probemark (2), and Grain (3)
-            c_mask = ((orig_mask == 1) | (orig_mask == 2) | (orig_mask == 3)).astype(np.uint8)
+            # Build solid Pad mask by filling interior holes without leaking outward around external defects
+            pad_raw = (orig_mask == 1).astype(np.uint8)
+            pad_cnts, _ = cv2.findContours(pad_raw, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            c_mask = np.zeros_like(pad_raw)
+            if pad_cnts:
+                cv2.drawContours(c_mask, pad_cnts, -1, 1, thickness=-1)
+            else:
+                c_mask = pad_raw
         else:
             c_mask = (orig_mask == class_id).astype(np.uint8)
         if np.sum(c_mask) > 0:

@@ -59,6 +59,9 @@ image*.png
 
 # Local backups
 frontend copy/
+*_backup/
+backend_imx8_backup/
+/Machine_Setting*.txt
 
 datasets/
 .ingested_files_cache*.json

@@ -365,6 +365,45 @@ def save_config_registry(data):
     except Exception as err:
         print(f"[CONFIG] Error saving bindings: {err}")
 
+def save_model_recipe_bindings(data):
+    """Alias for save_config_registry to prevent NameError."""
+    return save_config_registry(data)
+
+def sanitize_safe_filename(filename: str, allowed_extensions: Optional[List[str]] = None) -> str:
+    """
+    Sanitizes user-provided filename by extracting only the base name (preventing directory traversal)
+    and validating against allowed file extensions.
+    """
+    if not filename:
+        raise HTTPException(status_code=400, detail="Filename cannot be empty")
+    
+    # Strip any directory path components (e.g., ../../../etc/passwd -> passwd)
+    clean_name = os.path.basename(str(filename).replace("\\", "/")).strip()
+    if not clean_name or clean_name in (".", ".."):
+        raise HTTPException(status_code=400, detail="Invalid filename format")
+    
+    # Check for path traversal characters
+    if ".." in clean_name or "/" in clean_name or "\\" in clean_name:
+        raise HTTPException(status_code=400, detail="Path traversal characters not allowed in filename")
+        
+    if allowed_extensions:
+        ext = os.path.splitext(clean_name)[1].lower()
+        allowed_lower = [e.lower() for e in allowed_extensions]
+        if ext not in allowed_lower:
+            raise HTTPException(
+                status_code=400,
+                detail=f"File extension '{ext}' not allowed. Allowed: {', '.join(allowed_extensions)}"
+            )
+            
+    return clean_name
+
+def is_safe_target_path(base_dir: str, target_path: str) -> bool:
+    """Ensures target path stays strictly inside base_dir (resolves all symlinks)."""
+    base_real = os.path.realpath(base_dir)
+    target_real = os.path.realpath(target_path)
+    return os.path.commonpath([base_real]) == os.path.commonpath([base_real, target_real])
+
+
 def apply_recipe_by_filename(filename: str):
     global ACTIVE_PRODUCT_SETTING
     fpath = os.path.join(RECIPES_DIR, filename)
@@ -379,6 +418,12 @@ def apply_recipe_by_filename(filename: str):
                     reg = load_config_registry()
                     reg["active_recipe"] = filename
                     save_config_registry(reg)
+                    # Persist to active_product_setting.json on disk
+                    try:
+                        with open(os.path.join(_THIS_DIR, "active_product_setting.json"), "w", encoding="utf-8") as af:
+                            json.dump(ACTIVE_PRODUCT_SETTING, af, indent=2)
+                    except Exception as we:
+                        print(f"[CONFIG] Warning saving active_product_setting.json: {we}")
                     print(f"[CONFIG] Applied Recipe: {filename}")
                     return True
         except Exception as e:
@@ -405,6 +450,12 @@ def apply_machine_by_filename(filename: str):
                             base_val = raw_val.split("{output.lotNo}")[0].rstrip("/\\") if "{output.lotNo}" in raw_val else raw_val
                             sim_path = resolve_windows_drive_path(base_val)
                             os.makedirs(sim_path, exist_ok=True)
+                    # Persist to active_machine_setting.json on disk
+                    try:
+                        with open(os.path.join(_THIS_DIR, "active_machine_setting.json"), "w", encoding="utf-8") as af:
+                            json.dump(ACTIVE_MACHINE_SETTING, af, indent=2)
+                    except Exception as we:
+                        print(f"[CONFIG] Warning saving active_machine_setting.json: {we}")
                     print(f"[CONFIG] Applied Machine Setting: {filename} (Detected Machine: {get_current_prober_name()})")
                     return True
         except Exception as e:
@@ -494,9 +545,9 @@ def is_file_already_processed(src_path: str, filename: str, lot_no_str: str) -> 
     Checks whether a file has already been ingested or processed:
     1. Checks seen_ingested_files (persisted cache of files that have been enqueued/processed).
     2. Checks in-memory in_flight_files (currently queued in P0_QUEUE or actively inferring).
-    3. Checks if output split comparison image already exists on Drive M OUTPUT (size > 0).
+    3. Checks if the lot has already been completed (is_completed == True).
+    4. Checks if output split comparison image already exists on Drive M OUTPUT (size > 0).
        If found in OUTPUT, registers src_path in seen_ingested_files and discards from in_flight_files.
-    4. Checks if the lot has already been completed (is_completed == True).
     If none match, returns False so it can be processed.
     """
     with seen_files_lock:
@@ -599,16 +650,17 @@ async def get_benchmark_visual_image(filename: str):
     """
     Serves benchmark inspection visuals directly from benchmark_uploads/{session_id}/visuals/.
     """
+    clean_name = sanitize_safe_filename(filename, allowed_extensions=[".bmp", ".jpg", ".png", ".jpeg"])
     base_dir = os.path.join(_THIS_DIR, "simulation", "benchmark_uploads")
     if os.path.exists(base_dir):
         for sess in os.listdir(base_dir):
             sess_path = os.path.join(base_dir, sess)
             if os.path.isdir(sess_path):
-                fpath = os.path.join(sess_path, "visuals", filename)
-                if os.path.exists(fpath):
+                fpath = os.path.join(sess_path, "visuals", clean_name)
+                if is_safe_target_path(base_dir, fpath) and os.path.exists(fpath):
                     return FileResponse(fpath)
-                fpath2 = os.path.join(sess_path, filename)
-                if os.path.exists(fpath2):
+                fpath2 = os.path.join(sess_path, clean_name)
+                if is_safe_target_path(base_dir, fpath2) and os.path.exists(fpath2):
                     return FileResponse(fpath2)
     raise HTTPException(status_code=404, detail="Benchmark visual image not found")
 
@@ -1359,6 +1411,25 @@ def check_idle_batch_completions():
             last_act = lot_info.get("last_activity", now)
         idle_time = now - last_act
         if idle_time >= timeout_sec:
+            # Check if there are still unprocessed image files on disk for this lot before completing
+            inp_tmpl = ACTIVE_MACHINE_SETTING.get("lot.input.folder", "M:\\WP288\\PMI\\PROCESSED\\{output.lotNo}")
+            lot_proc_dir = resolve_windows_drive_path(inp_tmpl.replace("{output.lotNo}", lot_no_str)) if inp_tmpl else None
+            has_pending_on_disk = False
+            if lot_proc_dir and os.path.isdir(lot_proc_dir):
+                try:
+                    for fname in os.listdir(lot_proc_dir):
+                        if fname.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp')):
+                            fp = os.path.join(lot_proc_dir, fname)
+                            if not is_file_already_processed(fp, fname, lot_no_str):
+                                has_pending_on_disk = True
+                                break
+                except Exception:
+                    pass
+
+            if has_pending_on_disk:
+                lot_info["last_arrival"] = now
+                continue
+
             print(f"⏱️ [IDLE TIMEOUT] Lot {lot_no_str} idle for {idle_time:.2f}s >= timeout {timeout_sec:.2f}s -> Triggering batch completion.")
             complete_batch_for_lot(lot_no_str)
 
@@ -1412,6 +1483,7 @@ def process_new_file(filepath, filename, lot_no=None):
             time.sleep(0.1)
 
     is_corrupt = (img_cv is None)
+    ai_error = None
 
     # 1. Reuse existing pre-loaded & warmed-up tflite_runner if available
     if not is_corrupt and tflite_runner is not None:
@@ -1443,6 +1515,7 @@ def process_new_file(filepath, filename, lot_no=None):
             confidence = 98.0
         except Exception as e:
             print(f"[ERROR] Reused tflite_runner inference failed: {e}")
+            ai_error = f"Reused tflite_runner inference failed: {e}"
     elif not is_corrupt:
         # Fallback if tflite_runner was not pre-loaded at startup
         model_path = tflite_model_path or PATHS_CFG.get("model_path") or SYS_CONFIG.get("ai", {}).get("model_path")
@@ -1573,14 +1646,27 @@ def process_new_file(filepath, filename, lot_no=None):
                                     elif class_name in ("grain", "contam") and active_class_mode >= 3: grain_polys.append(polygon)
             except Exception as ai_err:
                 import traceback
-                print(f"AI Model execution error ({ai_err}). Using simulation metrics.")
+                print(f"AI Model execution error ({ai_err}).")
                 traceback.print_exc()
+                ai_error = f"AI Model execution error: {ai_err}"
+        else:
+            ai_error = f"AI model path not found: {model_path}"
 
 
     if is_corrupt:
         decision = "FAIL"
         prober_action = "STOP MACHINE"
         cat_reason = "Corrupted or Unreadable Image"
+        alarms = [{"name": f"Rule Failure: {cat_reason}", "time": time.strftime("%X")}]
+    elif ai_error:
+        decision = "FAIL"
+        prober_action = "STOP MACHINE"
+        cat_reason = "AI Inference Failure"
+        alarms = [{"name": f"Rule Failure: {cat_reason}", "time": time.strftime("%X")}]
+    elif not has_actual_rules:
+        decision = "FAIL"
+        prober_action = "STOP MACHINE"
+        cat_reason = "Rule Engine Not Available"
         alarms = [{"name": f"Rule Failure: {cat_reason}", "time": time.strftime("%X")}]
     else:
         decision = "PASS"
@@ -1591,6 +1677,9 @@ def process_new_file(filepath, filename, lot_no=None):
     def categorize_failure_reason(reason_str: str) -> str:
         if not reason_str or reason_str.strip() == "-": return "-"
         r_lower = reason_str.lower()
+        if "corrupt" in r_lower or "unreadable" in r_lower: return "Corrupted or Unreadable Image"
+        if "ai" in r_lower and ("error" in r_lower or "failure" in r_lower): return "AI Inference Failure"
+        if "engine" in r_lower or "rule" in r_lower: return "Rule Engine Not Available"
         if "area too large" in r_lower or "big" in r_lower: return "Big Probe Mark"
         if "no probe" in r_lower or "missing" in r_lower: return "No Probe Mark"
         return "Probe Mark Close to Edge"
@@ -1625,7 +1714,7 @@ def process_new_file(filepath, filename, lot_no=None):
         os.makedirs(output_lot_dir, exist_ok=True)
 
     print(f"[DEBUG] pads={len(pads)}, marks={len(mark_polys)}, grains={len(grain_polys)}, has_actual_rules={has_actual_rules}")
-    if has_actual_rules and not is_corrupt:
+    if has_actual_rules and not is_corrupt and not ai_error:
         generic_results = [{
             "image_path": filepath,
             "pads": pads,
@@ -1645,17 +1734,22 @@ def process_new_file(filepath, filename, lot_no=None):
             )
             rule_time = round((time.time() - rule_start) * 1000, 2)
             if report and len(report) > 0:
-                raw_dec = report[0].get("decision", "PASS")
+                raw_dec = report[0].get("decision", "FAIL")
                 raw_reason = report[0].get("reason", "-")
-                if raw_dec != "PASS":
+                if raw_dec == "PASS":
+                    decision = "PASS"
+                    prober_action = "CONTINUE PROCESS"
+                    cat_reason = "-"
+                else:
                     decision = "FAIL"
                     prober_action = "STOP MACHINE"
                     cat_reason = categorize_failure_reason(raw_reason)
                     alarms.append({"name": f"Rule Failure: {cat_reason}", "time": time.strftime("%X")})
-                else:
-                    decision = "PASS"
-                    prober_action = "CONTINUE PROCESS"
-                    cat_reason = "-"
+            else:
+                decision = "FAIL"
+                prober_action = "STOP MACHINE"
+                cat_reason = "Empty Inspection Report"
+                alarms.append({"name": f"Rule Failure: {cat_reason}", "time": time.strftime("%X")})
         except Exception as rule_err:
             print(f"Error running inspection rule engine: {rule_err}")
             decision = "FAIL"
@@ -1669,7 +1763,8 @@ def process_new_file(filepath, filename, lot_no=None):
     # Fallback to generate split comparison canvas if rule engine didn't write it
     if not os.path.exists(ann_out_path):
         import cv2
-        if is_corrupt:
+        img_src = img_cv if img_cv is not None else (cv2.imread(filepath) if os.path.exists(filepath) else None)
+        if is_corrupt or img_src is None:
             canvas = np.zeros((230, 320, 3), dtype=np.uint8)
             cv2.rectangle(canvas, (0, 0), (320, 70), (0, 0, 255), -1)
             font = cv2.FONT_HERSHEY_SIMPLEX
@@ -1679,27 +1774,25 @@ def process_new_file(filepath, filename, lot_no=None):
             cv2.line(canvas, (160, 70), (160, 230), (100, 100, 100), 1)
             cv2.imwrite(ann_out_path, canvas)
         else:
-            img_src = img_cv if img_cv is not None else (cv2.imread(filepath) if os.path.exists(filepath) else None)
-            if img_src is not None:
-                h, w = img_src.shape[:2]
-                banner_h = 70
-                canvas = np.zeros((h + banner_h, w * 2, 3), dtype=np.uint8)
-                canvas[banner_h:, :w] = img_src
-                canvas[banner_h:, w:] = img_src.copy()
-                for p in pads:
-                    cv2.polylines(canvas[banner_h:, w:], [p], True, (0, 255, 0), 2)
-                for m in mark_polys:
-                    cv2.polylines(canvas[banner_h:, w:], [m], True, (0, 0, 255), 2)
-                for g in grain_polys:
-                    cv2.polylines(canvas[banner_h:, w:], [g], True, (255, 255, 0), 2)
-                banner_color = (0, 200, 0) if decision == "PASS" else (0, 0, 255)
-                cv2.rectangle(canvas, (0, 0), (w * 2, banner_h), banner_color, -1)
-                font = cv2.FONT_HERSHEY_SIMPLEX
-                cv2.putText(canvas, decision, (max(10, (w * 2 - 100) // 2), 35), font, 0.85, (255, 255, 255), 2)
-                sub_txt = f"Reason: {cat_reason}" if decision == "FAIL" else "Meets all inspection criteria."
-                cv2.putText(canvas, sub_txt, (max(10, (w * 2 - 200) // 2), 58), font, 0.50, (255, 255, 255), 1)
-                cv2.line(canvas, (w, banner_h), (w, h + banner_h), (255, 255, 255), 1)
-                cv2.imwrite(ann_out_path, canvas)
+            h, w = img_src.shape[:2]
+            banner_h = 70
+            canvas = np.zeros((h + banner_h, w * 2, 3), dtype=np.uint8)
+            canvas[banner_h:, :w] = img_src
+            canvas[banner_h:, w:] = img_src.copy()
+            for p in pads:
+                cv2.polylines(canvas[banner_h:, w:], [p], True, (0, 255, 0), 2)
+            for m in mark_polys:
+                cv2.polylines(canvas[banner_h:, w:], [m], True, (0, 0, 255), 2)
+            for g in grain_polys:
+                cv2.polylines(canvas[banner_h:, w:], [g], True, (255, 255, 0), 2)
+            banner_color = (0, 200, 0) if decision == "PASS" else (0, 0, 255)
+            cv2.rectangle(canvas, (0, 0), (w * 2, banner_h), banner_color, -1)
+            font = cv2.FONT_HERSHEY_SIMPLEX
+            cv2.putText(canvas, decision, (max(10, (w * 2 - 100) // 2), 35), font, 0.85, (255, 255, 255), 2)
+            sub_txt = f"Reason: {cat_reason}" if decision == "FAIL" else "Meets all inspection criteria."
+            cv2.putText(canvas, sub_txt, (max(10, (w * 2 - 200) // 2), 58), font, 0.50, (255, 255, 255), 1)
+            cv2.line(canvas, (w, banner_h), (w, h + banner_h), (255, 255, 255), 1)
+            cv2.imwrite(ann_out_path, canvas)
 
     # Clean up any legacy inspect_ prefixed file in output_lot_dir if created
     legacy_inspect = os.path.join(ann_target_dir, f"inspect_{filename}")
@@ -2600,10 +2693,62 @@ def verify_and_transfer_candidates(candidates: list) -> int:
                 os.utime(dst_path, None)
             except Exception:
                 pass
+
+            # Stale output cleanup for re-tested images
+            out_tmpl = ACTIVE_MACHINE_SETTING.get("lot.output.folder", "M:\\WP288\\PMI\\OUTPUT\\{output.lotNo}")
+            if out_tmpl:
+                out_lot_dir = resolve_windows_drive_path(out_tmpl.replace("{output.lotNo}", batch_name))
+                if out_lot_dir:
+                    stale_out = os.path.join(out_lot_dir, filename)
+                    if os.path.exists(stale_out):
+                        try:
+                            os.remove(stale_out)
+                        except Exception:
+                            pass
+
+            # Directly enqueue to P0_QUEUE (Prober submitted new image to Source)
             with seen_files_lock:
-                seen_ingested_files.discard(dst_path)
+                seen_ingested_files.add(dst_path)
+            with in_flight_lock:
+                in_flight_files.add(dst_path)
+
+            with batch_lock:
+                now_t = time.time()
+                if batch_name not in lot_tracker:
+                    lot_tracker[batch_name] = {
+                        "lot_no": batch_name,
+                        "queued": 0,
+                        "processed": 0,
+                        "records": [],
+                        "last_activity": now_t,
+                        "last_arrival": now_t,
+                        "is_completed": False,
+                        "summary": None
+                    }
+                elif lot_tracker[batch_name].get("is_completed", False):
+                    # Clean reset for new batch of same lot
+                    lot_tracker[batch_name]["records"] = []
+                    lot_tracker[batch_name]["queued"] = 0
+                    lot_tracker[batch_name]["processed"] = 0
+                    lot_tracker[batch_name]["is_completed"] = False
+                    lot_tracker[batch_name]["summary"] = None
+
+                lot_tracker[batch_name]["queued"] += 1
+                lot_tracker[batch_name]["last_activity"] = now_t
+                lot_tracker[batch_name]["last_arrival"] = now_t
+                is_batch_complete = False
+
+            P0_QUEUE.put({
+                "filepath": dst_path,
+                "filename": filename,
+                "lot_no": batch_name,
+                "raw_preserved_path": dst_path
+            })
+            priority_dispatcher_state["p0_pending"] = P0_QUEUE.qsize()
+            save_seen_ingested_files(seen_ingested_files)
+
             moved_count += 1
-            print(f"[TRANSFER] ✅ Moved image {filename} (Lot: {batch_name}) -> Drive M: {dst_path}")
+            print(f"[TRANSFER->INGEST] ✅ Transferred image {filename} (Lot: {batch_name}) -> Drive M & Queued P0")
         except Exception as move_err:
             print(f"[TRANSFER] ❌ Error moving file {src_path} -> {target_dir}: {move_err}")
 
@@ -2692,10 +2837,10 @@ def scan_drive_m_processed() -> list:
                     if sz == 0:
                         continue
 
-                    # Relative mtime baseline check (Skip stale images created before baseline)
+                    # Relative mtime baseline check (Only applied if baseline was explicitly established > 0)
                     with ingestion_baseline_lock:
                         current_baseline = INGESTION_BASELINE_MTIME
-                    if mt < current_baseline:
+                    if current_baseline > 0.0 and mt < current_baseline:
                         continue
 
                     found_entries.append((full_path, f, lot_no_str, sz, mt))
@@ -2783,7 +2928,7 @@ def verify_and_enqueue_candidates(candidates: list) -> int:
             priority_dispatcher_state["p0_pending"] = P0_QUEUE.qsize()
             enqueued += 1
             with ingestion_baseline_lock:
-                if mt > INGESTION_BASELINE_MTIME:
+                if INGESTION_BASELINE_MTIME > 0.0 and mt > INGESTION_BASELINE_MTIME:
                     INGESTION_BASELINE_MTIME = mt
             print(f"[INGEST] Read-only detected Drive M image: {src_path} (Lot: {lot_no_str}, mtime: {mt}) -> Queued P0")
         except Exception as ingest_err:
@@ -2815,14 +2960,14 @@ def poll_drive_m_once() -> int:
     Single-pass synchronous polling function (used by tests or synchronous callers).
     Performs source transfer (Drive N/T -> Drive M) followed by Drive M ingestion.
     """
-    poll_source_transfer_once()
+    transfer_enqueued = poll_source_transfer_once()
     candidates = scan_drive_m_processed()
-    enqueued = 0
+    drive_m_enqueued = 0
     if candidates:
         time.sleep(0.1)
-        enqueued = verify_and_enqueue_candidates(candidates)
+        drive_m_enqueued = verify_and_enqueue_candidates(candidates)
     check_idle_batch_completions()
-    return enqueued
+    return transfer_enqueued + drive_m_enqueued
 
 
 async def async_folder_watcher_loop():
@@ -3055,33 +3200,55 @@ def load_history_from_db():
 
 @app.get("/api/images/raw/{lot_no}/{filename}")
 async def get_raw_image_from_drive(lot_no: str, filename: str):
+    safe_lot_no = sanitize_safe_filename(lot_no)
+    safe_filename = sanitize_safe_filename(filename, allowed_extensions=[".bmp", ".jpg", ".png", ".jpeg"])
     inp_tmpl = ACTIVE_MACHINE_SETTING.get("lot.input.folder", "M:\\WP288\\PMI\\PROCESSED\\{output.lotNo}")
-    proc_dir = resolve_windows_drive_path(inp_tmpl.replace("{output.lotNo}", lot_no))
-    clean_name = re.sub(r"^(raw_|annotated_|inspect_)+", "", filename)
+    proc_dir = resolve_windows_drive_path(inp_tmpl.replace("{output.lotNo}", safe_lot_no))
+    clean_name = re.sub(r"^(raw_|annotated_|inspect_)+", "", safe_filename)
     if proc_dir:
-        for fname in [clean_name, filename, f"raw_{clean_name}"]:
+        for fname in [clean_name, safe_filename, f"raw_{clean_name}"]:
             fpath = os.path.join(proc_dir, fname)
-            if os.path.exists(fpath):
+            if is_safe_target_path(proc_dir, fpath) and os.path.exists(fpath):
                 return FileResponse(fpath)
             
     raise HTTPException(status_code=404, detail="Raw image not found in Drive M")
 
 @app.get("/api/images/annotated/{lot_no}/{filename}")
 async def get_annotated_image_from_drive(lot_no: str, filename: str, full: Optional[bool] = False):
+    safe_lot_no = sanitize_safe_filename(lot_no)
+    safe_filename = sanitize_safe_filename(filename, allowed_extensions=[".bmp", ".jpg", ".png", ".jpeg"])
     out_tmpl = ACTIVE_MACHINE_SETTING.get("lot.output.folder", "M:\\WP288\\PMI\\OUTPUT\\{output.lotNo}")
-    out_dir = resolve_windows_drive_path(out_tmpl.replace("{output.lotNo}", lot_no))
-    clean_name = re.sub(r"^(inspect_|annotated_|raw_)+", "", filename)
+    out_dir = resolve_windows_drive_path(out_tmpl.replace("{output.lotNo}", safe_lot_no))
+    clean_name = re.sub(r"^(inspect_|annotated_|raw_)+", "", safe_filename)
     fpath = None
     if out_dir:
         # If caller explicitly asked for inspect_ prefix, prioritize that filename
-        search_order = [filename, f"inspect_{clean_name}", clean_name, f"annotated_{clean_name}"] if filename.startswith("inspect_") else [clean_name, filename, f"inspect_{clean_name}", f"annotated_{clean_name}"]
+        search_order = [safe_filename, f"inspect_{clean_name}", clean_name, f"annotated_{clean_name}"] if safe_filename.startswith("inspect_") else [clean_name, safe_filename, f"inspect_{clean_name}", f"annotated_{clean_name}"]
         for fname in search_order:
             candidate = os.path.join(out_dir, fname)
-            if os.path.exists(candidate):
+            if is_safe_target_path(out_dir, candidate) and os.path.exists(candidate):
                 fpath = candidate
                 break
                 
     if not fpath:
+        # If output image was deleted or not found in Drive M, return a clean placeholder image with text
+        try:
+            placeholder = np.zeros((240, 480, 3), dtype=np.uint8)
+            placeholder[:] = (26, 26, 30)  # Dark theme background
+            cv2.rectangle(placeholder, (8, 8), (472, 232), (60, 60, 70), 1)
+            font = cv2.FONT_HERSHEY_SIMPLEX
+            cv2.putText(placeholder, "NO OUTPUT IMAGE", (120, 95), font, 0.8, (220, 220, 225), 2)
+            cv2.putText(placeholder, "FILE NOT FOUND OR DELETED", (135, 130), font, 0.5, (140, 140, 150), 1)
+            cv2.putText(placeholder, f"Lot: {safe_lot_no}", (160, 165), font, 0.45, (100, 100, 115), 1)
+            ok, encoded = cv2.imencode('.jpg', placeholder, [int(cv2.IMWRITE_JPEG_QUALITY), 90])
+            if ok:
+                return Response(
+                    content=encoded.tobytes(),
+                    media_type="image/jpeg",
+                    headers={"X-Image-Status": "Missing-Placeholder"}
+                )
+        except Exception as err:
+            print(f"[IMG] Error generating missing image placeholder: {err}")
         raise HTTPException(status_code=404, detail="Annotated image not found in Drive M")
 
     # If full split comparison requested, return the full image directly
@@ -3371,6 +3538,7 @@ async def get_all_configs():
 async def upload_product_config(file: UploadFile = File(...)):
     global ACTIVE_PRODUCT_SETTING
     try:
+        safe_name = sanitize_safe_filename(file.filename, allowed_extensions=[".json", ".txt"])
         content = await file.read()
         parsed = json.loads(content.decode("utf-8"))
         if not isinstance(parsed, dict):
@@ -3378,26 +3546,29 @@ async def upload_product_config(file: UploadFile = File(...)):
         
         # Save to persistent recipe library
         os.makedirs(RECIPES_DIR, exist_ok=True)
-        dest_path = os.path.join(RECIPES_DIR, file.filename)
+        dest_path = os.path.join(RECIPES_DIR, safe_name)
+        if not is_safe_target_path(RECIPES_DIR, dest_path):
+            raise HTTPException(status_code=400, detail="Invalid destination path")
+
         with open(dest_path, "w", encoding="utf-8") as f:
             json.dump(parsed, f, indent=2)
             
         ACTIVE_PRODUCT_SETTING.update(parsed)
         
         reg = load_config_registry()
-        reg["active_recipe"] = file.filename
+        reg["active_recipe"] = safe_name
         save_config_registry(reg)
         
         # Save active copy
         with open(os.path.join(_THIS_DIR, "active_product_setting.json"), "w", encoding="utf-8") as f:
             json.dump(ACTIVE_PRODUCT_SETTING, f, indent=2)
             
-        print(f"[CONFIG] Stored and activated Product Recipe from '{file.filename}'")
-        log_audit("RECIPE", "UPLOAD_RECIPE", f"Uploaded and activated recipe '{file.filename}'")
+        print(f"[CONFIG] Stored and activated Product Recipe from '{safe_name}'")
+        log_audit("RECIPE", "UPLOAD_RECIPE", f"Uploaded and activated recipe '{safe_name}'")
         return {
             "status": "success",
-            "message": f"Successfully stored and activated Product Recipe '{file.filename}'",
-            "name": file.filename,
+            "message": f"Successfully stored and activated Product Recipe '{safe_name}'",
+            "name": safe_name,
             "product": ACTIVE_PRODUCT_SETTING
         }
     except Exception as e:
@@ -3408,6 +3579,7 @@ async def upload_product_config(file: UploadFile = File(...)):
 async def upload_machine_config(file: UploadFile = File(...)):
     global ACTIVE_MACHINE_SETTING
     try:
+        safe_name = sanitize_safe_filename(file.filename, allowed_extensions=[".json", ".txt"])
         content = await file.read()
         parsed = json.loads(content.decode("utf-8"))
         if not isinstance(parsed, dict):
@@ -3415,14 +3587,17 @@ async def upload_machine_config(file: UploadFile = File(...)):
         
         # Save to persistent machine configs library
         os.makedirs(MACHINES_DIR, exist_ok=True)
-        dest_path = os.path.join(MACHINES_DIR, file.filename)
+        dest_path = os.path.join(MACHINES_DIR, safe_name)
+        if not is_safe_target_path(MACHINES_DIR, dest_path):
+            raise HTTPException(status_code=400, detail="Invalid destination path")
+
         with open(dest_path, "w", encoding="utf-8") as f:
             json.dump(parsed, f, indent=2)
 
         ACTIVE_MACHINE_SETTING.update(parsed)
         
         reg = load_config_registry()
-        reg["active_machine_config"] = file.filename
+        reg["active_machine_config"] = safe_name
         save_config_registry(reg)
         
         with open(os.path.join(_THIS_DIR, "active_machine_setting.json"), "w", encoding="utf-8") as f:
@@ -3435,12 +3610,12 @@ async def upload_machine_config(file: UploadFile = File(...)):
                 sim_path = resolve_windows_drive_path(base_val)
                 os.makedirs(sim_path, exist_ok=True)
                 
-        print(f"[CONFIG] Stored and activated Machine Setting from '{file.filename}'")
-        log_audit("MACHINE", "UPLOAD_MACHINE_CONFIG", f"Uploaded and activated machine setting '{file.filename}'")
+        print(f"[CONFIG] Stored and activated Machine Setting from '{safe_name}'")
+        log_audit("MACHINE", "UPLOAD_MACHINE_CONFIG", f"Uploaded and activated machine setting '{safe_name}'")
         return {
             "status": "success",
-            "message": f"Successfully stored and activated Machine Setting '{file.filename}'",
-            "name": file.filename,
+            "message": f"Successfully stored and activated Machine Setting '{safe_name}'",
+            "name": safe_name,
             "machine": ACTIVE_MACHINE_SETTING
         }
     except Exception as e:
@@ -3449,9 +3624,10 @@ async def upload_machine_config(file: UploadFile = File(...)):
 
 @app.post("/api/config/activate-recipe")
 async def activate_recipe_endpoint(payload: dict = Body(...)):
-    name = payload.get("name")
-    if not name:
+    raw_name = payload.get("name")
+    if not raw_name:
         raise HTTPException(status_code=400, detail="Recipe name is required")
+    name = sanitize_safe_filename(raw_name, allowed_extensions=[".txt", ".json"])
     success = apply_recipe_by_filename(name)
     if not success:
         raise HTTPException(status_code=404, detail=f"Recipe file '{name}' not found")
@@ -3460,9 +3636,10 @@ async def activate_recipe_endpoint(payload: dict = Body(...)):
 
 @app.post("/api/config/activate-machine")
 async def activate_machine_endpoint(payload: dict = Body(...)):
-    name = payload.get("name")
-    if not name:
+    raw_name = payload.get("name")
+    if not raw_name:
         raise HTTPException(status_code=400, detail="Machine config name is required")
+    name = sanitize_safe_filename(raw_name, allowed_extensions=[".txt", ".json"])
     success = apply_machine_by_filename(name)
     if not success:
         raise HTTPException(status_code=404, detail=f"Machine config '{name}' not found")
@@ -3471,11 +3648,14 @@ async def activate_machine_endpoint(payload: dict = Body(...)):
 
 @app.post("/api/config/bind")
 async def bind_model_config(payload: dict = Body(...)):
-    model_name = payload.get("model_name")
-    recipe = payload.get("recipe")
-    machine_config = payload.get("machine_config")
-    if not model_name:
+    raw_model = payload.get("model_name")
+    raw_recipe = payload.get("recipe")
+    raw_machine = payload.get("machine_config")
+    if not raw_model:
         raise HTTPException(status_code=400, detail="model_name is required")
+    model_name = sanitize_safe_filename(raw_model)
+    recipe = sanitize_safe_filename(raw_recipe, allowed_extensions=[".txt", ".json"]) if raw_recipe else None
+    machine_config = sanitize_safe_filename(raw_machine, allowed_extensions=[".txt", ".json"]) if raw_machine else None
     reg = load_config_registry()
     if "bindings" not in reg: reg["bindings"] = {}
     if model_name not in reg["bindings"]: reg["bindings"][model_name] = {}
@@ -3495,12 +3675,19 @@ async def bind_model_config(payload: dict = Body(...)):
 
 @app.delete("/api/config/{config_type}/{filename:path}")
 async def delete_config_file(config_type: str, filename: str):
+    if config_type not in ("product", "machine"):
+        raise HTTPException(status_code=400, detail="Invalid config type. Must be 'product' or 'machine'")
+
+    clean_name = sanitize_safe_filename(filename, allowed_extensions=[".txt", ".json"])
     base_dir = RECIPES_DIR if config_type == "product" else MACHINES_DIR
-    target = os.path.join(base_dir, filename)
+    target = os.path.join(base_dir, clean_name)
+    if not is_safe_target_path(base_dir, target):
+        raise HTTPException(status_code=400, detail="Invalid target path")
+
     reg = load_config_registry()
-    if config_type == "product" and reg.get("active_recipe") == filename:
+    if config_type == "product" and reg.get("active_recipe") == clean_name:
         raise HTTPException(status_code=400, detail="Cannot delete currently active recipe")
-    if config_type == "machine" and reg.get("active_machine_config") == filename:
+    if config_type == "machine" and reg.get("active_machine_config") == clean_name:
         raise HTTPException(status_code=400, detail="Cannot delete currently active machine setting")
         
     if os.path.exists(target):
@@ -3510,13 +3697,13 @@ async def delete_config_file(config_type: str, filename: str):
             if config_type == "product" and "bindings" in reg:
                 changed = False
                 for m_name, b_info in list(reg["bindings"].items()):
-                    if b_info.get("recipe") == filename:
+                    if b_info.get("recipe") == clean_name:
                         b_info["recipe"] = "Product_Setting.txt"
                         changed = True
                 if changed:
                     save_model_recipe_bindings(reg)
-            log_audit(config_type.upper(), f"DELETE_{config_type.upper()}_CONFIG", f"Deleted {config_type} config file '{filename}'")
-            return {"status": "success", "message": f"Deleted {config_type} config '{filename}'"}
+            log_audit(config_type.upper(), f"DELETE_{config_type.upper()}_CONFIG", f"Deleted {config_type} config file '{clean_name}'")
+            return {"status": "success", "message": f"Deleted {config_type} config '{clean_name}'"}
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
     raise HTTPException(status_code=404, detail="File not found")
@@ -3758,9 +3945,13 @@ async def deploy_active_model(
         shutil.move(temp_path, active_path)
 
         # 3. Clean filename
-        clean_name = model_name or file.filename or "active_model.tflite"
+        raw_mname = model_name or file.filename or "active_model.tflite"
+        clean_name = sanitize_safe_filename(raw_mname)
         if not clean_name.endswith(".tflite"):
             clean_name = f"{clean_name}.tflite"
+
+        safe_recipe_name = sanitize_safe_filename(recipe_name, allowed_extensions=[".txt", ".json"]) if recipe_name else None
+        safe_machine_name = sanitize_safe_filename(machine_config_name, allowed_extensions=[".txt", ".json"]) if machine_config_name else None
 
         # 4. Save metadata info file and update model_recipe_bindings.json
         info_path = os.path.join(MODELS_DIR, "active_model_info.json")
@@ -3768,8 +3959,8 @@ async def deploy_active_model(
             with open(info_path, "w", encoding="utf-8") as f:
                 json.dump({
                     "model_name": clean_name,
-                    "recipe_name": recipe_name or "Product_Setting.txt",
-                    "machine_config_name": machine_config_name or "Machine_Setting.txt",
+                    "recipe_name": safe_recipe_name or "Product_Setting.txt",
+                    "machine_config_name": safe_machine_name or "Machine_Setting.txt",
                     "deployed_at": time.strftime("%Y-%m-%d %H:%M:%S")
                 }, f, indent=2)
         except Exception:
@@ -3778,15 +3969,15 @@ async def deploy_active_model(
         try:
             reg = load_config_registry()
             reg["active_model"] = clean_name
-            if recipe_name:
-                reg["active_recipe"] = recipe_name
-            if machine_config_name:
-                reg["active_machine_config"] = machine_config_name
+            if safe_recipe_name:
+                reg["active_recipe"] = safe_recipe_name
+            if safe_machine_name:
+                reg["active_machine_config"] = safe_machine_name
             if "bindings" not in reg: reg["bindings"] = {}
             if clean_name not in reg["bindings"]:
                 reg["bindings"][clean_name] = {
-                    "recipe": recipe_name or "Product_Setting.txt",
-                    "machine_config": machine_config_name or "Machine_Setting.txt"
+                    "recipe": safe_recipe_name or "Product_Setting.txt",
+                    "machine_config": safe_machine_name or "Machine_Setting.txt"
                 }
             save_config_registry(reg)
             print(f"[EDGE CACHE] Updated model_recipe_bindings.json active_model='{clean_name}'")
@@ -3814,11 +4005,13 @@ async def deploy_active_model(
                 rec_path = os.path.join(_THIS_DIR, "active_product_setting.json")
                 with open(rec_path, "w", encoding="utf-8") as rf:
                     json.dump(ACTIVE_PRODUCT_SETTING, rf, indent=2)
-                if recipe_name:
+                if safe_recipe_name:
                     os.makedirs(RECIPES_DIR, exist_ok=True)
-                    with open(os.path.join(RECIPES_DIR, recipe_name), "w", encoding="utf-8") as mrf:
-                        mrf.write(recipe_content)
-                print(f"[EDGE CACHE] Deployed and loaded active recipe '{recipe_name}'")
+                    rec_dest = os.path.join(RECIPES_DIR, safe_recipe_name)
+                    if is_safe_target_path(RECIPES_DIR, rec_dest):
+                        with open(rec_dest, "w", encoding="utf-8") as mrf:
+                            mrf.write(recipe_content)
+                print(f"[EDGE CACHE] Deployed and loaded active recipe '{safe_recipe_name or ''}'")
             except Exception as re:
                 print(f"[EDGE CACHE] Warning applying deployed recipe: {re}")
 
@@ -3829,11 +4022,13 @@ async def deploy_active_model(
                 mach_path = os.path.join(_THIS_DIR, "active_machine_setting.json")
                 with open(mach_path, "w", encoding="utf-8") as mf:
                     json.dump(ACTIVE_MACHINE_SETTING, mf, indent=2)
-                if machine_config_name:
+                if safe_machine_name:
                     os.makedirs(MACHINES_DIR, exist_ok=True)
-                    with open(os.path.join(MACHINES_DIR, machine_config_name), "w", encoding="utf-8") as mmf:
-                        mmf.write(machine_config_content)
-                print(f"[EDGE CACHE] Deployed and loaded active machine setting '{machine_config_name}'")
+                    mach_dest = os.path.join(MACHINES_DIR, safe_machine_name)
+                    if is_safe_target_path(MACHINES_DIR, mach_dest):
+                        with open(mach_dest, "w", encoding="utf-8") as mmf:
+                            mmf.write(machine_config_content)
+                print(f"[EDGE CACHE] Deployed and loaded active machine setting '{safe_machine_name or ''}'")
             except Exception as me:
                 print(f"[EDGE CACHE] Warning applying deployed machine config: {me}")
 
@@ -3885,7 +4080,8 @@ async def deploy_active_model(
 
 @app.post("/api/models/upload")
 async def upload_model(file: UploadFile = File(...)):
-    fname_lower = file.filename.lower()
+    safe_filename = sanitize_safe_filename(file.filename)
+    fname_lower = safe_filename.lower()
     if fname_lower.endswith((".pth", ".pt")):
         raise HTTPException(
             status_code=400,
@@ -3895,19 +4091,22 @@ async def upload_model(file: UploadFile = File(...)):
         raise HTTPException(status_code=400, detail="Invalid model file extension. Only ready .tflite files are supported on Edge.")
     
     os.makedirs(MODELS_DIR, exist_ok=True)
-    target_path = os.path.join(MODELS_DIR, file.filename)
+    target_path = os.path.join(MODELS_DIR, safe_filename)
+    if not is_safe_target_path(MODELS_DIR, target_path):
+        raise HTTPException(status_code=400, detail="Invalid target path")
+
     try:
         with open(target_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
         
         size_mb = round(os.path.getsize(target_path) / (1024 * 1024), 1)
-        print(f"📥 [MODEL UPLOAD] Ready TFLite model '{file.filename}' ({size_mb} MB) in {MODELS_DIR}")
-        log_audit("MODEL", "UPLOAD_MODEL", f"Uploaded model '{file.filename}' ({size_mb} MB)")
+        print(f"📥 [MODEL UPLOAD] Ready TFLite model '{safe_filename}' ({size_mb} MB) in {MODELS_DIR}")
+        log_audit("MODEL", "UPLOAD_MODEL", f"Uploaded model '{safe_filename}' ({size_mb} MB)")
         return {
             "status": "success",
-            "name": file.filename,
+            "name": safe_filename,
             "size": f"{size_mb} MB",
-            "message": f"Model '{file.filename}' uploaded and ready on i.MX8 node."
+            "message": f"Model '{safe_filename}' uploaded and ready on i.MX8 node."
         }
     except Exception as e:
         print(f"❌ [MODEL UPLOAD] Upload failed: {e}")
@@ -3920,20 +4119,19 @@ async def upload_model(file: UploadFile = File(...)):
 @app.post("/api/models/activate")
 async def activate_model(payload: dict):
     global tflite_runner, tflite_model_path, active_class_mode
-    model_name = payload.get("name")
-    if not model_name:
+    raw_name = payload.get("name")
+    if not raw_name:
         raise HTTPException(status_code=400, detail="Model name is required")
+    model_name = sanitize_safe_filename(raw_name)
         
     target_path = None
     search_dirs = [
         MODELS_DIR,
-        _THIS_DIR,
-        os.path.join(CORE_DIR, "models"),
-        PROJECT_ROOT
+        os.path.join(CORE_DIR, "models")
     ]
     for s_dir in search_dirs:
         candidate = os.path.join(s_dir, model_name)
-        if os.path.exists(candidate) and os.path.isfile(candidate):
+        if is_safe_target_path(s_dir, candidate) and os.path.exists(candidate) and os.path.isfile(candidate):
             target_path = candidate
             break
 
@@ -4005,49 +4203,50 @@ async def activate_model(payload: dict):
 @app.delete("/api/models/{filename:path}")
 async def delete_model(filename: str):
     global tflite_model_path
+    clean_name = sanitize_safe_filename(filename, allowed_extensions=[".tflite", ".pth", ".pt", ".onnx"])
     cur_active = os.path.basename(tflite_model_path) if tflite_model_path else "unet.tflite"
-    if cur_active == filename:
-        raise HTTPException(status_code=400, detail=f"Cannot delete currently active model '{filename}' on NPU. Please activate another model first.")
+    if cur_active == clean_name:
+        raise HTTPException(status_code=400, detail=f"Cannot delete currently active model '{clean_name}' on NPU. Please activate another model first.")
         
     search_dirs = [
         MODELS_DIR,
-        _THIS_DIR,
-        os.path.join(CORE_DIR, "models"),
-        PROJECT_ROOT
+        os.path.join(CORE_DIR, "models")
     ]
     deleted = False
     for s_dir in search_dirs:
-        target_path = os.path.join(s_dir, filename)
+        target_path = os.path.join(s_dir, clean_name)
+        if not is_safe_target_path(s_dir, target_path):
+            continue
         if os.path.exists(target_path) and os.path.isfile(target_path):
             try:
                 os.remove(target_path)
                 deleted = True
-                print(f"🗑️ [MODEL DELETE] Deleted model '{filename}' from {s_dir}")
+                print(f"🗑️ [MODEL DELETE] Deleted model '{clean_name}' from {s_dir}")
                 # Clean up companion files if any
-                stem, _ = os.path.splitext(filename)
+                stem, _ = os.path.splitext(clean_name)
                 for comp_ext in [".pth", ".pt", ".quant.tflite"]:
                     comp_file = os.path.join(s_dir, f"{stem}{comp_ext}")
-                    if os.path.exists(comp_file) and os.path.isfile(comp_file):
+                    if is_safe_target_path(s_dir, comp_file) and os.path.exists(comp_file) and os.path.isfile(comp_file):
                         try: os.remove(comp_file)
                         except Exception: pass
             except Exception as e:
                 raise HTTPException(status_code=500, detail=f"Failed removing file: {e}")
 
     reg = load_config_registry()
-    had_binding = filename in reg.get("bindings", {})
+    had_binding = clean_name in reg.get("bindings", {})
     if deleted or had_binding:
         # Clean up model_recipe_bindings.json
         try:
             if had_binding:
-                reg["bindings"].pop(filename, None)
+                reg["bindings"].pop(clean_name, None)
                 save_model_recipe_bindings(reg)
         except Exception as b_err:
             print(f"[CONFIG] Warning cleaning binding for deleted model: {b_err}")
 
-        log_audit("MODEL", "DELETE_MODEL", f"Deleted model file '{filename}'")
-        return {"status": "success", "message": f"Deleted model '{filename}'"}
+        log_audit("MODEL", "DELETE_MODEL", f"Deleted model file '{clean_name}'")
+        return {"status": "success", "message": f"Deleted model '{clean_name}'"}
     else:
-        raise HTTPException(status_code=404, detail=f"Model file '{filename}' not found in model directories.")
+        raise HTTPException(status_code=404, detail=f"Model file '{clean_name}' not found in model directories.")
 
 # ==============================================================================
 # MODEL VALIDATION LAB & HUMAN REVIEW BENCHMARK API ENDPOINTS
@@ -4180,7 +4379,12 @@ async def start_benchmark(payload: dict):
     if limit and isinstance(limit, int) and limit > 0:
         image_paths = image_paths[:limit]
 
-    session_id = payload.get("session_id") or f"BM-{time.strftime('%Y%m%d-%H%M%S')}"
+    raw_sid = payload.get("session_id")
+    if raw_sid:
+        clean_sid = re.sub(r'[^A-Za-z0-9_-]', '', str(raw_sid)).strip()
+        session_id = clean_sid or f"BM-{time.strftime('%Y%m%d-%H%M%S')}"
+    else:
+        session_id = f"BM-{time.strftime('%Y%m%d-%H%M%S')}"
     created_at = time.strftime("%d-%b-%Y %H:%M:%S")
     rules_json = json.dumps(rules)
     initial_metrics = json.dumps({
@@ -4276,6 +4480,8 @@ async def upload_benchmark_images(
                             continue
                         if basename.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp')):
                             extracted_path = os.path.join(upload_dir, basename)
+                            if not is_safe_target_path(upload_dir, extracted_path):
+                                continue
                             with z.open(member) as src, open(extracted_path, "wb") as dst:
                                 shutil.copyfileobj(src, dst)
                             saved_paths.append(extracted_path)
@@ -4288,7 +4494,10 @@ async def upload_benchmark_images(
                     except:
                         pass
         elif fname.endswith(('.png', '.jpg', '.jpeg', '.bmp')):
-            target = os.path.join(upload_dir, f.filename)
+            safe_fname = sanitize_safe_filename(f.filename, allowed_extensions=['.png', '.jpg', '.jpeg', '.bmp'])
+            target = os.path.join(upload_dir, safe_fname)
+            if not is_safe_target_path(upload_dir, target):
+                continue
             with open(target, "wb") as buffer:
                 shutil.copyfileobj(f.file, buffer)
             saved_paths.append(target)
