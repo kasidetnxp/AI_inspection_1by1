@@ -146,9 +146,31 @@ def load_inspection_config(config_path: str) -> dict:
 
     if isinstance(config_path, dict):
         merged = defaults.copy()
+        edge_factor = config_path.get("edgeConversionFactor", 1.0)
+        default_px = 1.0 / edge_factor if edge_factor > 0 else 1.0
+        t_w = config_path.get("targetWidth")
+        t_h = config_path.get("targetHeight")
         for k, v in config_path.items():
             if k in merged and v is not None:
                 merged[k] = v
+        if "edgeThreshold" in config_path and config_path["edgeThreshold"] is not None:
+            merged["fail_distance_um"] = float(config_path["edgeThreshold"])
+        if "areaRatioThreshold" in config_path and config_path["areaRatioThreshold"] is not None:
+            merged["max_area_ratio_pct"] = float(config_path["areaRatioThreshold"])
+        if "verticalRoi" in config_path and config_path["verticalRoi"] is not None:
+            merged["v_roi"] = float(config_path["verticalRoi"])
+        if "horizontalRoi" in config_path and config_path["horizontalRoi"] is not None:
+            merged["h_roi"] = float(config_path["horizontalRoi"])
+        if "minAreaSizes" in config_path and config_path["minAreaSizes"] is not None:
+            merged["min_area_sizes"] = config_path["minAreaSizes"]
+        if "greyscaleThreshold" in config_path and config_path["greyscaleThreshold"] is not None:
+            merged["greyscale_threshold"] = float(config_path["greyscaleThreshold"])
+        if t_w is not None:
+            merged["target_width"] = int(t_w)
+        if t_h is not None:
+            merged["target_height"] = int(t_h)
+        if "edgeConversionFactor" in config_path:
+            merged["default_px_per_um"] = default_px
         return merged
 
     if config_path is None or not os.path.exists(config_path):
@@ -172,11 +194,11 @@ def load_inspection_config(config_path: str) -> dict:
             
             cfg = {
                 "fail_distance_um":             float(data.get("edgeThreshold", 8.0)),
-                "warning_distance_um":          0.0,  # No warning in old config
-                "warning_occurrence_threshold": 1,
+                "warning_distance_um":          float(data.get("warningDistanceUm", 0.0)),
+                "warning_occurrence_threshold": int(data.get("warningOccurrenceThreshold", 1)),
                 "max_area_ratio_pct":           float(data.get("areaRatioThreshold", 25.0)),
-                "min_area_ratio_pct":           0.0,  # Disabled
-                "missing_mark_action":          "warning",
+                "min_area_ratio_pct":           float(data.get("minAreaRatioPct", 0.0)),
+                "missing_mark_action":          str(data.get("missing_mark_action", "fail")).lower(),
                 "min_overlap_pct":              float(data.get("minOverlapPct", 0.0)),
                 "pad_width_um":                 None,  # No auto-calibration in old config
                 "default_px_per_um":            default_px_per_um,

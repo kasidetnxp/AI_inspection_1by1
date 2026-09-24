@@ -212,38 +212,111 @@ DEFAULT_MACHINE_SETTING = {
     "output.format": "jpg"
 }
 
-def load_initial_product_setting():
-    for candidate in [
-        os.path.join(_THIS_DIR, "active_product_setting.json"),
-        os.path.join(_THIS_DIR, "configs", "recipes", "Product_Setting.txt"),
-        os.path.join(_THIS_DIR, "configs", "recipes", "Product_Settine.txt"),
-        os.path.join(PROJECT_ROOT, "Product_Setting.txt"),
-        os.path.join(PROJECT_ROOT, "Product_Settine.txt"),
-    ]:
-        if os.path.exists(candidate):
-            try:
-                with open(candidate, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                    print(f"[CONFIG] Loaded Product Recipe from: {candidate}")
+ACTIVE_PRODUCT_SETTING_FILE = os.path.join(_THIS_DIR, "active_product_setting.json")
+ACTIVE_MACHINE_SETTING_FILE = os.path.join(_THIS_DIR, "active_machine_setting.json")
+CONFIGS_DIR = os.path.join(_THIS_DIR, "configs")
+RECIPES_DIR = os.path.join(CONFIGS_DIR, "recipes")
+MACHINES_DIR = os.path.join(CONFIGS_DIR, "machines")
+BINDINGS_FILE = os.path.join(CONFIGS_DIR, "model_recipe_bindings.json")
+
+os.makedirs(RECIPES_DIR, exist_ok=True)
+os.makedirs(MACHINES_DIR, exist_ok=True)
+
+def save_active_product_setting(data: dict):
+    try:
+        with open(ACTIVE_PRODUCT_SETTING_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+    except Exception as e:
+        print(f"[CONFIG] Error saving {ACTIVE_PRODUCT_SETTING_FILE}: {e}")
+
+def save_active_machine_setting(data: dict):
+    try:
+        with open(ACTIVE_MACHINE_SETTING_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+    except Exception as e:
+        print(f"[CONFIG] Error saving {ACTIVE_MACHINE_SETTING_FILE}: {e}")
+
+def load_config_registry():
+    default_reg = {
+        "active_recipe": "Product_Setting_ForTest.txt",
+        "active_machine_config": "Machine_Setting_WP269.txt",
+        "bindings": {}
+    }
+    if os.path.exists(BINDINGS_FILE):
+        try:
+            with open(BINDINGS_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if isinstance(data, dict):
                     return data
-            except Exception as e:
-                print(f"[CONFIG] Warning loading {candidate}: {e}")
+        except Exception as err:
+            print(f"[CONFIG] Error loading bindings: {err}")
+    return default_reg
+
+def save_config_registry(data):
+    try:
+        with open(BINDINGS_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+    except Exception as err:
+        print(f"[CONFIG] Error saving bindings: {err}")
+
+def save_model_recipe_bindings(data):
+    """Alias for save_config_registry to prevent NameError."""
+    return save_config_registry(data)
+
+def load_initial_product_setting():
+    if os.path.exists(ACTIVE_PRODUCT_SETTING_FILE):
+        try:
+            with open(ACTIVE_PRODUCT_SETTING_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if isinstance(data, dict):
+                    print(f"[CONFIG] Loaded Active Product Recipe from: {ACTIVE_PRODUCT_SETTING_FILE}")
+                    return data
+        except Exception as e:
+            print(f"[CONFIG] Warning loading {ACTIVE_PRODUCT_SETTING_FILE}: {e}")
+    # Fallback to recipes dir or defaults
+    for fb in [
+        os.path.join(RECIPES_DIR, "Product_Setting_ForTest.txt"),
+        os.path.join(RECIPES_DIR, "Product_Setting.txt"),
+        os.path.join(PROJECT_ROOT, "Product_Setting.txt"),
+    ]:
+        if os.path.exists(fb):
+            try:
+                with open(fb, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    save_active_product_setting(data)
+                    print(f"[CONFIG] Initialized Active Product Recipe from: {fb}")
+                    return data
+            except Exception:
+                pass
+    save_active_product_setting(DEFAULT_PRODUCT_SETTING)
     return DEFAULT_PRODUCT_SETTING.copy()
 
 def load_initial_machine_setting():
-    for candidate in [
-        os.path.join(_THIS_DIR, "active_machine_setting.json"),
-        os.path.join(_THIS_DIR, "configs", "machines", "Machine_Setting.txt"),
+    if os.path.exists(ACTIVE_MACHINE_SETTING_FILE):
+        try:
+            with open(ACTIVE_MACHINE_SETTING_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if isinstance(data, dict):
+                    print(f"[CONFIG] Loaded Active Machine Setting from: {ACTIVE_MACHINE_SETTING_FILE}")
+                    return data
+        except Exception as e:
+            print(f"[CONFIG] Warning loading {ACTIVE_MACHINE_SETTING_FILE}: {e}")
+    # Fallback to machines dir or defaults
+    for fb in [
+        os.path.join(MACHINES_DIR, "Machine_Setting_WP269.txt"),
+        os.path.join(MACHINES_DIR, "Machine_Setting.txt"),
         os.path.join(PROJECT_ROOT, "Machine_Setting.txt"),
     ]:
-        if os.path.exists(candidate):
+        if os.path.exists(fb):
             try:
-                with open(candidate, "r", encoding="utf-8") as f:
+                with open(fb, "r", encoding="utf-8") as f:
                     data = json.load(f)
-                    print(f"[CONFIG] Loaded Machine Setting from: {candidate}")
+                    save_active_machine_setting(data)
+                    print(f"[CONFIG] Initialized Active Machine Setting from: {fb}")
                     return data
-            except Exception as e:
-                print(f"[CONFIG] Warning loading {candidate}: {e}")
+            except Exception:
+                pass
+    save_active_machine_setting(DEFAULT_MACHINE_SETTING)
     return DEFAULT_MACHINE_SETTING.copy()
 
 ACTIVE_PRODUCT_SETTING = load_initial_product_setting()
@@ -344,40 +417,7 @@ def get_current_prober_name() -> str:
 # ==============================================================================
 # CONFIG & RECIPE LIBRARY MANAGEMENT
 # ==============================================================================
-CONFIGS_DIR = os.path.join(_THIS_DIR, "configs")
-RECIPES_DIR = os.path.join(CONFIGS_DIR, "recipes")
-MACHINES_DIR = os.path.join(CONFIGS_DIR, "machines")
-BINDINGS_FILE = os.path.join(CONFIGS_DIR, "model_recipe_bindings.json")
 
-os.makedirs(RECIPES_DIR, exist_ok=True)
-os.makedirs(MACHINES_DIR, exist_ok=True)
-
-def load_config_registry():
-    default_reg = {
-        "active_recipe": "Product_Setting.txt",
-        "active_machine_config": "Machine_Setting.txt",
-        "bindings": {}
-    }
-    if os.path.exists(BINDINGS_FILE):
-        try:
-            with open(BINDINGS_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                if isinstance(data, dict):
-                    return data
-        except Exception as err:
-            print(f"[CONFIG] Error loading bindings: {err}")
-    return default_reg
-
-def save_config_registry(data):
-    try:
-        with open(BINDINGS_FILE, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2)
-    except Exception as err:
-        print(f"[CONFIG] Error saving bindings: {err}")
-
-def save_model_recipe_bindings(data):
-    """Alias for save_config_registry to prevent NameError."""
-    return save_config_registry(data)
 
 def sanitize_safe_filename(filename: str, allowed_extensions: Optional[List[str]] = None) -> str:
     """
@@ -425,15 +465,10 @@ def apply_recipe_by_filename(filename: str):
                 parsed = json.load(f)
                 if isinstance(parsed, dict):
                     ACTIVE_PRODUCT_SETTING.update(parsed)
+                    save_active_product_setting(ACTIVE_PRODUCT_SETTING)
                     reg = load_config_registry()
                     reg["active_recipe"] = filename
                     save_config_registry(reg)
-                    # Persist to active_product_setting.json on disk
-                    try:
-                        with open(os.path.join(_THIS_DIR, "active_product_setting.json"), "w", encoding="utf-8") as af:
-                            json.dump(ACTIVE_PRODUCT_SETTING, af, indent=2)
-                    except Exception as we:
-                        print(f"[CONFIG] Warning saving active_product_setting.json: {we}")
                     print(f"[CONFIG] Applied Recipe: {filename}")
                     return True
         except Exception as e:
@@ -451,6 +486,7 @@ def apply_machine_by_filename(filename: str):
                 parsed = json.load(f)
                 if isinstance(parsed, dict):
                     ACTIVE_MACHINE_SETTING.update(parsed)
+                    save_active_machine_setting(ACTIVE_MACHINE_SETTING)
                     reg = load_config_registry()
                     reg["active_machine_config"] = filename
                     save_config_registry(reg)
@@ -460,12 +496,6 @@ def apply_machine_by_filename(filename: str):
                             base_val = raw_val.split("{output.lotNo}")[0].rstrip("/\\") if "{output.lotNo}" in raw_val else raw_val
                             sim_path = resolve_windows_drive_path(base_val)
                             os.makedirs(sim_path, exist_ok=True)
-                    # Persist to active_machine_setting.json on disk
-                    try:
-                        with open(os.path.join(_THIS_DIR, "active_machine_setting.json"), "w", encoding="utf-8") as af:
-                            json.dump(ACTIVE_MACHINE_SETTING, af, indent=2)
-                    except Exception as we:
-                        print(f"[CONFIG] Warning saving active_machine_setting.json: {we}")
                     print(f"[CONFIG] Applied Machine Setting: {filename} (Detected Machine: {get_current_prober_name()})")
                     return True
         except Exception as e:
@@ -518,35 +548,7 @@ latest_batch_summary = {
     "waferNo": "-"
 }
 
-# Read-only ingestion and lot idle timeout tracking
-SEEN_FILES_CACHE_PATH = os.path.join(_THIS_DIR, ".ingested_files_cache.json")
-
-def load_seen_ingested_files() -> set:
-    loaded = set()
-    if os.path.exists(SEEN_FILES_CACHE_PATH):
-        try:
-            with open(SEEN_FILES_CACHE_PATH, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                if isinstance(data, list):
-                    loaded = set(data)
-        except Exception as e:
-            print(f"[INGEST] Warning loading seen files cache: {e}")
-    return loaded
-
-def save_seen_ingested_files(seen_set: set):
-    try:
-        items = list(seen_set)[-50000:]
-        tmp_path = SEEN_FILES_CACHE_PATH + ".tmp"
-        with open(tmp_path, "w", encoding="utf-8") as f:
-            json.dump(items, f)
-        os.replace(tmp_path, SEEN_FILES_CACHE_PATH)
-    except Exception as e:
-        print(f"[INGEST] Warning saving seen files cache: {e}")
-
-seen_ingested_files = load_seen_ingested_files()
-seen_files_lock = threading.RLock()
-in_flight_files = set()
-in_flight_lock = threading.RLock()
+# Lot idle timeout tracking
 lot_tracker = {}
 batch_lock = threading.RLock()
 
@@ -789,15 +791,30 @@ def init_database():
     prune_all_benchmark_caches()
 
 
+MEMORY_AUDIT_LOGS = []
+MEMORY_INSPECTION_HISTORY = []
+
 def log_audit(category: str, action: str, details: str, author: str = "Operator"):
-    """Appends an immutable audit log record to PostgreSQL database if available."""
+    """Appends an immutable audit log record to PostgreSQL database if available, and memory cache."""
+    now_str = time.strftime("%Y-%m-%d %H:%M:%S")
+    log_entry = {
+        "id": len(MEMORY_AUDIT_LOGS) + 1,
+        "timestamp": now_str,
+        "category": category,
+        "action": action,
+        "details": details,
+        "author": author
+    }
+    MEMORY_AUDIT_LOGS.insert(0, log_entry)
+    if len(MEMORY_AUDIT_LOGS) > 500:
+        MEMORY_AUDIT_LOGS.pop()
+
     conn = get_pg_connection()
     if conn is None:
         print(f"[AUDIT] [{category}] {action}: {details}")
         return
     try:
         cursor = conn.cursor()
-        now_str = time.strftime("%Y-%m-%d %H:%M:%S")
         cursor.execute("""
             INSERT INTO audit_logs (timestamp, category, action, details, author)
             VALUES (%s, %s, %s, %s, %s);
@@ -829,6 +846,9 @@ def get_initial_inspection_count() -> int:
 
 
 def save_inspection_to_db(record):
+    MEMORY_INSPECTION_HISTORY.insert(0, record)
+    if len(MEMORY_INSPECTION_HISTORY) > 100:
+        MEMORY_INSPECTION_HISTORY.pop()
     conn = get_pg_connection()
     if conn is None:
         return
@@ -1656,7 +1676,7 @@ def process_new_file(filepath, filename, lot_no=None):
             "grains": grain_polys
         }]
 
-        config_path = os.path.join(CORE_DIR, "configs", "inspection_rules.yaml")
+        config_path = ACTIVE_PRODUCT_SETTING_FILE if os.path.exists(ACTIVE_PRODUCT_SETTING_FILE) else os.path.join(CORE_DIR, "configs", "inspection_rules.yaml")
         rule_start = time.time()
         try:
             report = run_inspection(
@@ -1736,12 +1756,7 @@ def process_new_file(filepath, filename, lot_no=None):
         except Exception:
             pass
 
-    # Ensure processed file is registered in persistent seen cache and removed from in-flight
-    with seen_files_lock:
-        seen_ingested_files.add(filepath)
-        save_seen_ingested_files(seen_ingested_files)
-    with in_flight_lock:
-        in_flight_files.discard(filepath)
+
 
     # Format failure mode string for filename
     if decision == "PASS" or not cat_reason or cat_reason.strip() in ("-", "None", ""):
@@ -2009,7 +2024,6 @@ def compute_session_kpis(session_id: str) -> dict:
 
 def update_benchmark_session_progress(session_id: str, processed_count: int, kpis: dict):
     global db_type
-def update_benchmark_session_progress(session_id: str, processed_count: int, kpis: dict):
     metrics_str = json.dumps(kpis)
     try:
         conn = get_pg_connection()
@@ -2613,10 +2627,6 @@ def verify_and_transfer_candidates(candidates: list) -> int:
                             pass
 
             # Directly enqueue to P0_QUEUE (Prober submitted new image to Source)
-            with seen_files_lock:
-                seen_ingested_files.add(dst_path)
-            with in_flight_lock:
-                in_flight_files.add(dst_path)
 
             with batch_lock:
                 now_t = time.time()
@@ -2651,7 +2661,6 @@ def verify_and_transfer_candidates(candidates: list) -> int:
                 "raw_preserved_path": dst_path
             })
             priority_dispatcher_state["p0_pending"] = P0_QUEUE.qsize()
-            save_seen_ingested_files(seen_ingested_files)
 
             moved_count += 1
             print(f"[TRANSFER->INGEST] ✅ Transferred image {filename} (Lot: {batch_name}) -> Drive M & Queued P0")
@@ -2737,8 +2746,6 @@ def priority_dispatcher_thread():
                         if l_no in lot_tracker:
                             lot_tracker[l_no]["processed"] += 1
                 finally:
-                    with in_flight_lock:
-                        in_flight_files.discard(p0_task.get("filepath"))
                     P0_QUEUE.task_done()
                     priority_dispatcher_state["p0_pending"] = P0_QUEUE.qsize()
                     if P0_QUEUE.qsize() == 0:
@@ -2870,10 +2877,12 @@ async def websocket_endpoint(websocket: WebSocket):
         manager.disconnect(websocket)
 
 def load_history_from_db():
+    conn = get_pg_connection()
+    if conn is None:
+        return list(MEMORY_INSPECTION_HISTORY)
     prober_name = get_current_prober_name()
     records = []
     try:
-        conn = get_pg_connection()
         cursor = conn.cursor()
         cursor.execute("SELECT wafer_id, timestamp, decision, pads_total, pads_detected, probe_marks, grains, confidence, inference_time, rule_time, machine_action, reason, image_url FROM inspections ORDER BY id DESC")
         rows = cursor.fetchall()
@@ -2904,6 +2913,7 @@ def load_history_from_db():
         conn.close()
     except Exception as e:
         print("[DB] Failed to load history from PostgreSQL:", e)
+        return list(MEMORY_INSPECTION_HISTORY)
     return records
 
 
@@ -3072,7 +3082,7 @@ async def get_batch_summary(lot_no: Optional[str] = Query(None)):
 @app.post("/api/batch/reset")
 @app.post("/api/v1/batch/reset")
 async def reset_batch_state(lot_no: Optional[str] = Query(None), clear_seen: bool = Query(False)):
-    global is_batch_complete, latest_batch_summary, current_batch_records, seen_ingested_files, lot_tracker
+    global is_batch_complete, latest_batch_summary, current_batch_records, lot_tracker
     with batch_lock:
         if lot_no and lot_no in lot_tracker:
             lot_tracker.pop(lot_no, None)
@@ -3080,17 +3090,6 @@ async def reset_batch_state(lot_no: Optional[str] = Query(None), clear_seen: boo
         else:
             current_batch_records.clear()
             lot_tracker.clear()
-        
-        if clear_seen:
-            with seen_files_lock:
-                seen_ingested_files.clear()
-            with in_flight_lock:
-                in_flight_files.clear()
-            if os.path.exists(SEEN_FILES_CACHE_PATH):
-                try:
-                    os.remove(SEEN_FILES_CACHE_PATH)
-                except Exception:
-                    pass
 
         is_batch_complete = False
         latest_batch_summary = {
@@ -3117,19 +3116,21 @@ async def get_history():
 @app.delete("/api/history")
 @app.delete("/api/v1/history")
 async def clear_history():
-    global latest_inspection, active_alarms, inspection_count
+    global latest_inspection, active_alarms, inspection_count, MEMORY_INSPECTION_HISTORY
     latest_inspection = {}
     active_alarms = []
     inspection_count = 0
-    try:
-        conn = get_pg_connection()
-        cursor = conn.cursor()
-        cursor.execute("TRUNCATE TABLE inspections RESTART IDENTITY;")
-        conn.commit()
-        cursor.close()
-        conn.close()
-    except Exception as e:
-        print("[DB] Failed to clear history from PostgreSQL:", e)
+    MEMORY_INSPECTION_HISTORY.clear()
+    conn = get_pg_connection()
+    if conn is not None:
+        try:
+            cursor = conn.cursor()
+            cursor.execute("TRUNCATE TABLE inspections RESTART IDENTITY;")
+            conn.commit()
+            cursor.close()
+            conn.close()
+        except Exception as e:
+            print("[DB] Failed to clear history from PostgreSQL:", e)
     prune_all_benchmark_caches()
     return {"status": "cleared"}
 
@@ -3264,14 +3265,11 @@ async def upload_product_config(file: UploadFile = File(...)):
             json.dump(parsed, f, indent=2)
             
         ACTIVE_PRODUCT_SETTING.update(parsed)
+        save_active_product_setting(ACTIVE_PRODUCT_SETTING)
         
         reg = load_config_registry()
         reg["active_recipe"] = safe_name
         save_config_registry(reg)
-        
-        # Save active copy
-        with open(os.path.join(_THIS_DIR, "active_product_setting.json"), "w", encoding="utf-8") as f:
-            json.dump(ACTIVE_PRODUCT_SETTING, f, indent=2)
             
         print(f"[CONFIG] Stored and activated Product Recipe from '{safe_name}'")
         log_audit("RECIPE", "UPLOAD_RECIPE", f"Uploaded and activated recipe '{safe_name}'")
@@ -3305,13 +3303,11 @@ async def upload_machine_config(file: UploadFile = File(...)):
             json.dump(parsed, f, indent=2)
 
         ACTIVE_MACHINE_SETTING.update(parsed)
+        save_active_machine_setting(ACTIVE_MACHINE_SETTING)
         
         reg = load_config_registry()
         reg["active_machine_config"] = safe_name
         save_config_registry(reg)
-        
-        with open(os.path.join(_THIS_DIR, "active_machine_setting.json"), "w", encoding="utf-8") as f:
-            json.dump(ACTIVE_MACHINE_SETTING, f, indent=2)
             
         for k in ["lot.input.folder", "lot.output.folder", "machine.result.folder"]:
             if k in ACTIVE_MACHINE_SETTING:
@@ -3439,6 +3435,8 @@ async def apply_config_preset(preset_name: str = Body(..., embed=True)):
                 "verticalRoi": 0.6,
                 "horizontalRoi": 0.6
             })
+        save_active_product_setting(ACTIVE_PRODUCT_SETTING)
+        save_active_machine_setting(ACTIVE_MACHINE_SETTING)
         log_audit("SETTINGS", "APPLY_PRESET", f"Applied preset configuration '{preset_name}'")
         return {
             "status": "success",
@@ -3459,8 +3457,16 @@ async def update_thresholds(payload: dict = Body(...)):
         max_area = float(payload.get("max_area_ratio_pct", 25.0))
         ACTIVE_PRODUCT_SETTING["edgeThreshold"] = fail_dist
         ACTIVE_PRODUCT_SETTING["areaRatioThreshold"] = max_area
-        with open(os.path.join(_THIS_DIR, "active_product_setting.json"), "w", encoding="utf-8") as f:
-            json.dump(ACTIVE_PRODUCT_SETTING, f, indent=2)
+        save_active_product_setting(ACTIVE_PRODUCT_SETTING)
+        reg = load_config_registry()
+        active_rec = reg.get("active_recipe", "Product_Setting.txt")
+        rec_path = os.path.join(RECIPES_DIR, active_rec)
+        if os.path.exists(rec_path):
+            try:
+                with open(rec_path, "w", encoding="utf-8") as f:
+                    json.dump(ACTIVE_PRODUCT_SETTING, f, indent=2)
+            except Exception as we:
+                print(f"[CONFIG] Warning saving tuned thresholds to {active_rec}: {we}")
         log_audit("SETTINGS", "UPDATE_THRESHOLDS", f"Fail Distance: {old_dist:.1f}µm ➔ {fail_dist:.1f}µm, Max Area: {old_area:.0f}% ➔ {max_area:.0f}%")
         return {
             "status": "success",
@@ -3476,8 +3482,16 @@ async def update_thresholds(payload: dict = Body(...)):
 @app.get("/api/audit-logs")
 async def get_audit_logs(limit: int = 100, category: str = None, search: str = None):
     """Fetches system audit trail with filtering and search."""
+    conn = get_pg_connection()
+    if conn is None:
+        filtered = list(MEMORY_AUDIT_LOGS)
+        if category and category.upper() != "ALL":
+            filtered = [l for l in filtered if l.get("category", "").upper() == category.upper()]
+        if search and search.strip():
+            sq = search.strip().lower()
+            filtered = [l for l in filtered if sq in l.get("action", "").lower() or sq in l.get("details", "").lower() or sq in l.get("author", "").lower()]
+        return {"status": "success", "total": len(filtered[:limit]), "logs": filtered[:limit]}
     try:
-        conn = get_pg_connection()
         cursor = conn.cursor()
         query = "SELECT id, timestamp, category, action, details, author FROM audit_logs"
         params = []
@@ -3507,8 +3521,8 @@ async def get_audit_logs(limit: int = 100, category: str = None, search: str = N
         } for r in rows]
         return {"status": "success", "total": len(logs), "logs": logs}
     except Exception as e:
-        print("[AUDIT LOG] Error fetching audit logs:", e)
-        return JSONResponse(status_code=500, content={"status": "error", "message": str(e), "logs": []})
+        print("[AUDIT LOG] Error fetching audit logs from DB, falling back to memory:", e)
+        return {"status": "success", "total": len(MEMORY_AUDIT_LOGS[:limit]), "logs": list(MEMORY_AUDIT_LOGS[:limit])}
 
 @app.get("/api/audit-logs/export-csv")
 async def export_audit_logs_csv(category: str = None):
@@ -3516,8 +3530,21 @@ async def export_audit_logs_csv(category: str = None):
     import io
     import csv
     from fastapi.responses import Response
+    conn = get_pg_connection()
+    if conn is None:
+        filtered = list(MEMORY_AUDIT_LOGS)
+        if category and category.upper() != "ALL":
+            filtered = [l for l in filtered if l.get("category", "").upper() == category.upper()]
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow(["Timestamp", "Category", "Action", "Details", "Author"])
+        for r in filtered:
+            writer.writerow([r.get("timestamp"), r.get("category"), r.get("action"), r.get("details"), r.get("author")])
+        csv_content = output.getvalue()
+        output.close()
+        filename = f"audit_logs_{time.strftime('%Y%m%d_%H%M%S')}.csv"
+        return Response(content=csv_content, media_type="text/csv", headers={"Content-Disposition": f"attachment; filename={filename}"})
     try:
-        conn = get_pg_connection()
         cursor = conn.cursor()
         query = "SELECT timestamp, category, action, details, author FROM audit_logs"
         params = []
@@ -3712,15 +3739,16 @@ async def deploy_active_model(
             try:
                 parsed_recipe = json.loads(recipe_content)
                 ACTIVE_PRODUCT_SETTING.update(parsed_recipe)
-                rec_path = os.path.join(_THIS_DIR, "active_product_setting.json")
-                with open(rec_path, "w", encoding="utf-8") as rf:
-                    json.dump(ACTIVE_PRODUCT_SETTING, rf, indent=2)
+                save_active_product_setting(ACTIVE_PRODUCT_SETTING)
                 if safe_recipe_name:
                     os.makedirs(RECIPES_DIR, exist_ok=True)
                     rec_dest = os.path.join(RECIPES_DIR, safe_recipe_name)
                     if is_safe_target_path(RECIPES_DIR, rec_dest):
                         with open(rec_dest, "w", encoding="utf-8") as mrf:
                             mrf.write(recipe_content)
+                    reg = load_config_registry()
+                    reg["active_recipe"] = safe_recipe_name
+                    save_config_registry(reg)
                 print(f"[EDGE CACHE] Deployed and loaded active recipe '{safe_recipe_name or ''}'")
             except Exception as re:
                 print(f"[EDGE CACHE] Warning applying deployed recipe: {re}")
@@ -3729,15 +3757,16 @@ async def deploy_active_model(
             try:
                 parsed_mach = json.loads(machine_config_content)
                 ACTIVE_MACHINE_SETTING.update(parsed_mach)
-                mach_path = os.path.join(_THIS_DIR, "active_machine_setting.json")
-                with open(mach_path, "w", encoding="utf-8") as mf:
-                    json.dump(ACTIVE_MACHINE_SETTING, mf, indent=2)
+                save_active_machine_setting(ACTIVE_MACHINE_SETTING)
                 if safe_machine_name:
                     os.makedirs(MACHINES_DIR, exist_ok=True)
                     mach_dest = os.path.join(MACHINES_DIR, safe_machine_name)
                     if is_safe_target_path(MACHINES_DIR, mach_dest):
                         with open(mach_dest, "w", encoding="utf-8") as mmf:
                             mmf.write(machine_config_content)
+                    reg = load_config_registry()
+                    reg["active_machine_config"] = safe_machine_name
+                    save_config_registry(reg)
                 print(f"[EDGE CACHE] Deployed and loaded active machine setting '{safe_machine_name or ''}'")
             except Exception as me:
                 print(f"[EDGE CACHE] Warning applying deployed machine config: {me}")

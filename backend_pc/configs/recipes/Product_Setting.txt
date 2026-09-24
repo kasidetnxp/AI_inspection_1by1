@@ -1,0 +1,47 @@
+{
+  "scriptName": "unet-inferencer.py",
+  "algorithm": "unet",
+  "classNames": [
+    "pad",
+    "probemark"
+  ],
+  "servicePort": 10010,
+  "devices": [
+    "T073C3BTAA-PL211",
+    "T073C3BTAA-PL2-PS16-PT-1",
+    "T073352TAG-PL2-PS16-PT-1",
+    "T073352TAH-PL2-PS16-PT-1",
+    "T073C3ATAD-PL2-PS16-PT-1"
+  ],
+  "padShape": "rectangle",
+  "thingColors": [
+    "#FF0000",
+    "#00FF00"
+  ],
+  "minAreaSizes": [
+    300,
+    10
+  ],
+  "targetWidth": 160,
+  "targetHeight": 160,
+  "badLabels": [
+    "bad",
+    "defect"
+  ],
+  "skipDevices": [],
+  "padIndex": 0,
+  "generateOutput": true,
+  "combineOutput": true,
+  "greyscaleThreshold": 0,
+  "verticalRoi": 0.7,
+  "horizontalRoi": 0.7,
+  "edgeThreshold": 8,
+  "edgeConversionFactor": 1,
+  "areaRatioThreshold": 25,
+  "autolabel.output.annotation.folder": "/app/adc/autolabel/KMI710/json/",
+  "autolabel.output.image.folder": "/app/adc/autolabel/KMI710/images/",
+  "autolabel.convexHull.labels": [
+    "pad"
+  ],
+  "processor": "/app/adc/scripts/autolabel-processor.py"
+}
