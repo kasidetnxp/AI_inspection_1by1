@@ -1,5 +1,11 @@
 import os
 import sys
+if sys.platform == "win32":
+    try:
+        sys.stdout.reconfigure(encoding='utf-8')
+        sys.stderr.reconfigure(encoding='utf-8')
+    except Exception:
+        pass
 import time
 import json
 import random
@@ -543,84 +549,6 @@ in_flight_files = set()
 in_flight_lock = threading.RLock()
 lot_tracker = {}
 batch_lock = threading.RLock()
-
-def is_file_already_processed(src_path: str, filename: str, lot_no_str: str) -> bool:
-    """
-    Checks whether a file has already been ingested or processed:
-    1. Checks seen_ingested_files (persisted cache of files that have been enqueued/processed).
-    2. Checks in-memory in_flight_files (currently queued in P0_QUEUE or actively inferring).
-    3. Checks if the lot has already been completed (is_completed == True).
-    4. Checks if output split comparison image already exists on Drive M OUTPUT (size > 0).
-       If found in OUTPUT, registers src_path in seen_ingested_files and discards from in_flight_files.
-    If none match, returns False so it can be processed.
-    """
-    with seen_files_lock:
-        if src_path in seen_ingested_files:
-            return True
-
-    with in_flight_lock:
-        if src_path in in_flight_files:
-            return True
-
-    out_tmpl = ACTIVE_MACHINE_SETTING.get("lot.output.folder", "M:\\WP288\\PMI\\OUTPUT\\{output.lotNo}")
-    out_lot_dir = resolve_windows_drive_path(out_tmpl.replace("{output.lotNo}", lot_no_str)) if out_tmpl else None
-    if out_lot_dir:
-        out_img_path = os.path.join(out_lot_dir, filename)
-        if os.path.exists(out_img_path) and os.path.getsize(out_img_path) > 0:
-            with seen_files_lock:
-                seen_ingested_files.add(src_path)
-            with in_flight_lock:
-                in_flight_files.discard(src_path)
-            return True
-
-    return False
-
-# ==============================================================================
-# Relative mtime Baseline Filter (Self-referential mtime tracking independent of i.MX8 system clock)
-# ==============================================================================
-INGESTION_BASELINE_MTIME = 0.0
-ingestion_baseline_lock = threading.Lock()
-
-def set_ingestion_baseline_mtime(val: float):
-    global INGESTION_BASELINE_MTIME
-    with ingestion_baseline_lock:
-        INGESTION_BASELINE_MTIME = float(val)
-
-def get_ingestion_baseline_mtime() -> float:
-    with ingestion_baseline_lock:
-        return INGESTION_BASELINE_MTIME
-
-def init_ingestion_baseline(proc_base_dir: str = None) -> float:
-    """
-    Scans existing images in Drive M PROCESSED and establishes the relative mtime baseline.
-    Returns max(mtimes of existing files).
-    """
-    global INGESTION_BASELINE_MTIME
-    if not proc_base_dir:
-        inp_tmpl = ACTIVE_MACHINE_SETTING.get("lot.input.folder", "M:\\WP288\\PMI\\PROCESSED\\{output.lotNo}")
-        base_inp = inp_tmpl.split("{output.lotNo}")[0].rstrip("/\\") if "{output.lotNo}" in inp_tmpl else inp_tmpl
-        proc_base_dir = resolve_windows_drive_path(base_inp)
-
-    max_m = 0.0
-    if proc_base_dir and os.path.exists(proc_base_dir):
-        try:
-            for root, _, files in os.walk(proc_base_dir):
-                for f in files:
-                    if f.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp')):
-                        fp = os.path.join(root, f)
-                        try:
-                            mt = os.path.getmtime(fp)
-                            if mt > max_m:
-                                max_m = mt
-                        except OSError:
-                            pass
-        except Exception as e:
-            print(f"[INGEST] Warning initializing relative mtime baseline: {e}")
-
-    with ingestion_baseline_lock:
-        INGESTION_BASELINE_MTIME = max_m + 0.000001 if max_m > 0 else 0.0
-    print(f"[INGEST] Relative mtime baseline initialized: {INGESTION_BASELINE_MTIME} (Drive M PROCESSED)", flush=True)
-    return max_m
 
 # Initialize Machine Shared & Internal Folders
 try:
@@ -2594,34 +2522,6 @@ def scan_source_folder_for_candidates() -> list:
                                     })
                     except Exception as sub_err:
                         print(f"[TRANSFER] Error scanning batch dir {entry.path}: {sub_err}")
-
-                elif entry.is_file(follow_symlinks=False) and entry.name.lower().endswith(valid_exts):
-                    prober_name = get_current_prober_name()
-                    meta = parse_wafer_filename(entry.name, prober_name)
-                    batch_name = meta.get("batch") if meta.get("batch") and meta["batch"] != "-" else "UNKNOWN_LOT"
-                    if "{output.lotNo}" in inp_tmpl:
-                        dst_batch_tmpl = inp_tmpl.replace("{output.lotNo}", batch_name)
-                        target_batch_dir = resolve_windows_drive_path(dst_batch_tmpl)
-                    else:
-                        base_dest = resolve_windows_drive_path(inp_tmpl)
-                        target_batch_dir = os.path.join(base_dest, batch_name)
-
-                    try:
-                        stat = entry.stat()
-                        sz = stat.st_size
-                        mt = stat.st_mtime
-                    except OSError:
-                        continue
-                    if sz == 0:
-                        continue
-                    candidates.append({
-                        "src_path": entry.path,
-                        "filename": entry.name,
-                        "batch_name": batch_name,
-                        "target_dir": target_batch_dir,
-                        "size": sz,
-                        "mtime": mt
-                    })
     except Exception as scan_err:
         print(f"[TRANSFER] Error scanning source folder {src_base_dir}: {scan_err}")
 
@@ -2801,161 +2701,6 @@ async def async_source_transfer_loop():
         await asyncio.sleep(0.1)  # 100ms polling interval
 
 
-def scan_drive_m_processed() -> list:
-    """
-    Scans Drive M PROCESSED in strictly read-only mode.
-    Returns list of candidate tuples: (full_path, file, lot_no_str, size1)
-    """
-    inp_tmpl = ACTIVE_MACHINE_SETTING.get("lot.input.folder", "M:\\WP288\\PMI\\PROCESSED\\{output.lotNo}")
-    base_inp = inp_tmpl.split("{output.lotNo}")[0].rstrip("/\\") if "{output.lotNo}" in inp_tmpl else inp_tmpl
-    proc_base_dir = resolve_windows_drive_path(base_inp)
-
-    if not proc_base_dir or not os.path.exists(proc_base_dir):
-        return []
-
-    found_entries = []
-    try:
-        for root, dirs, files in os.walk(proc_base_dir):
-            for f in files:
-                if f.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp')):
-                    full_path = os.path.join(root, f)
-                    rel = os.path.relpath(root, proc_base_dir)
-                    sub_lot = rel.split(os.sep)[0] if rel != "." else None
-
-                    prober_name = get_current_prober_name()
-                    meta = parse_wafer_filename(f, prober_name)
-                    if sub_lot:
-                        lot_no_str = sub_lot.strip()
-                    elif meta.get("batch") and meta["batch"] != "-":
-                        lot_no_str = meta["batch"].strip()
-                    elif meta.get("waferNo") and meta["waferNo"] != "-":
-                        lot_no_str, _ = extract_lot_and_wafer(meta["waferNo"])
-                    else:
-                        lot_no_str = "UNKNOWN_LOT"
-
-                    # Check persistence / output file existence
-                    if is_file_already_processed(full_path, f, lot_no_str):
-                        continue
-
-                    try:
-                        sz = os.path.getsize(full_path)
-                        mt = os.path.getmtime(full_path)
-                    except OSError:
-                        continue
-                    if sz == 0:
-                        continue
-
-                    # Relative mtime baseline check (Only applied if baseline was explicitly established > 0)
-                    with ingestion_baseline_lock:
-                        current_baseline = INGESTION_BASELINE_MTIME
-                    if current_baseline > 0.0 and mt < current_baseline:
-                        continue
-
-                    found_entries.append((full_path, f, lot_no_str, sz, mt))
-
-        found_entries.sort(key=lambda item: (1 if is_end_filename(item[1]) else 0, item[0]))
-    except Exception as walk_err:
-        print(f"[INGEST] Error walking input directory {proc_base_dir}: {walk_err}")
-
-    return found_entries
-
-
-def verify_and_enqueue_candidates(candidates: list) -> int:
-    """
-    Verifies write-completion stability across SMB and enqueues stable images to P0_QUEUE.
-    Returns number of newly enqueued files.
-    """
-    global is_batch_complete, INGESTION_BASELINE_MTIME
-    enqueued = 0
-    newly_seen = False
-
-    for candidate in candidates:
-        if len(candidate) >= 5:
-            src_path, file, lot_no_str, s1, mt = candidate[:5]
-        else:
-            src_path, file, lot_no_str, s1 = candidate[:4]
-            try:
-                mt = os.path.getmtime(src_path)
-            except OSError:
-                mt = 0.0
-        try:
-            if not os.path.exists(src_path):
-                continue
-            try:
-                s2 = os.path.getsize(src_path)
-            except OSError:
-                continue
-            if s2 != s1 or s2 == 0:
-                continue  # Still being written
-
-            # Verify file is readable
-            try:
-                with open(src_path, "rb") as tf:
-                    tf.read(min(1024, s2))
-            except (OSError, IOError, PermissionError):
-                continue
-
-            with seen_files_lock:
-                seen_ingested_files.add(src_path)
-            with in_flight_lock:
-                in_flight_files.add(src_path)
-            newly_seen = True
-
-            with batch_lock:
-                now_t = time.time()
-                if lot_no_str not in lot_tracker:
-                    lot_tracker[lot_no_str] = {
-                        "lot_no": lot_no_str,
-                        "queued": 0,
-                        "processed": 0,
-                        "records": [],
-                        "last_activity": now_t,
-                        "last_arrival": now_t,
-                        "is_completed": False,
-                        "summary": None
-                    }
-                elif lot_tracker[lot_no_str].get("is_completed", False):
-                    # Clean reset for new batch of same lot
-                    lot_tracker[lot_no_str]["records"] = []
-                    lot_tracker[lot_no_str]["queued"] = 0
-                    lot_tracker[lot_no_str]["processed"] = 0
-                    lot_tracker[lot_no_str]["is_completed"] = False
-                    lot_tracker[lot_no_str]["summary"] = None
-
-                lot_tracker[lot_no_str]["queued"] += 1
-                lot_tracker[lot_no_str]["last_activity"] = now_t
-                lot_tracker[lot_no_str]["last_arrival"] = now_t
-                is_batch_complete = False
-
-            P0_QUEUE.put({
-                "filepath": src_path,
-                "filename": file,
-                "lot_no": lot_no_str,
-                "raw_preserved_path": src_path
-            })
-            priority_dispatcher_state["p0_pending"] = P0_QUEUE.qsize()
-            enqueued += 1
-            with ingestion_baseline_lock:
-                if INGESTION_BASELINE_MTIME > 0.0 and mt > INGESTION_BASELINE_MTIME:
-                    INGESTION_BASELINE_MTIME = mt
-            print(f"[INGEST] Read-only detected Drive M image: {src_path} (Lot: {lot_no_str}, mtime: {mt}) -> Queued P0")
-        except Exception as ingest_err:
-            print(f"Failed to ingest file {file}: {ingest_err}")
-
-    if newly_seen:
-        save_seen_ingested_files(seen_ingested_files)
-
-    return enqueued
-
-
-async def poll_drive_m_async():
-    """
-    Compatibility wrapper: evaluates idle batch completions.
-    Drive M PROCESSED is strictly an archive and is NOT scanned for new inputs.
-    """
-    await asyncio.to_thread(check_idle_batch_completions)
-
-
 def poll_drive_m_once() -> int:
     """
     Single-pass synchronous polling function (used by tests or manual triggers).
@@ -2964,31 +2709,6 @@ def poll_drive_m_once() -> int:
     transfer_enqueued = poll_source_transfer_once()
     check_idle_batch_completions()
     return transfer_enqueued
-
-
-async def async_folder_watcher_loop():
-    """
-    Asynchronous watcher for Drive M PROCESSED.
-    Uses await asyncio.sleep() instead of blocking synchronous sleep inside async loops.
-    """
-    print("i.MX8 Machine Folder Watcher initialized (Async Mode for Drive M PROCESSED).")
-    while True:
-        try:
-            await poll_drive_m_async()
-        except Exception as e:
-            print(f"Error in async folder watcher: {e}")
-        await asyncio.sleep(0.08)  # Non-blocking async sleep!
-
-
-def folder_watcher_thread():
-    """Synchronous thread runner for Drive M folder watcher (legacy / fallback)."""
-    print("i.MX8 Machine Folder Watcher initialized (Read-Only Mode for Drive M PROCESSED).")
-    while True:
-        try:
-            poll_drive_m_once()
-        except Exception as e:
-            print(f"Error in watcher thread: {e}")
-        time.sleep(0.08)
 
 
 def priority_dispatcher_thread():
@@ -3133,9 +2853,6 @@ async def startup_event():
             print(f"[BOOT] ❌ TFLite pre-load failed: {e}")
     else:
         print(f"[BOOT] ⚠️  No TFLite model found at '{_model}' — inference fallback mode")
-
-    # Ingestion baseline starts at 0.0 by default so uninspected lots are processed
-    # init_ingestion_baseline()
 
     # Start async source transfer watcher (Drive N/T -> Drive M PROCESSED + Idle Timeout Evaluation)
     asyncio.create_task(async_source_transfer_loop())
