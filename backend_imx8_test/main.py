@@ -137,19 +137,35 @@ def resolve_windows_drive_path(raw_path: str, sim_root: str = None) -> str:
         
         for m_base in candidate_mounts:
             if os.path.exists(m_base):
-                # Check exact path under mount point
                 exact_path = os.path.join(m_base, rest)
+                parts = [p for p in rest.split("/") if p]
+                
+                # 1. Exact path already exists
                 if os.path.exists(exact_path):
                     return exact_path
                     
-                # Check if share root was mounted directly to subfolder (e.g. /mnt/N is already WP288)
-                parts = rest.split("/")
+                # 2. If the first path segment (e.g. 'WP269') exists under m_base,
+                # then m_base is the root of the Windows drive. Keep exact path structure.
+                if parts and os.path.exists(os.path.join(m_base, parts[0])):
+                    return exact_path
+                    
+                # 3. Check if share root was mounted directly to a subfolder (e.g. /mnt/N is already WP288)
+                # Ensure the matched parent is deeper than m_base itself to prevent collapsing into root
+                found_sub = None
                 for idx in range(1, len(parts)):
                     sub_candidate = os.path.join(m_base, *parts[idx:])
-                    if os.path.exists(sub_candidate) or os.path.exists(os.path.dirname(sub_candidate)):
-                        return sub_candidate
+                    if os.path.exists(sub_candidate):
+                        found_sub = sub_candidate
+                        break
+                    parent = os.path.dirname(sub_candidate)
+                    if parent != m_base and os.path.exists(parent):
+                        found_sub = sub_candidate
+                        break
                         
-                # If neither subpath exists yet (e.g. creating new output folder), default to exact
+                if found_sub:
+                    return found_sub
+                    
+                # 4. If neither subpath exists yet (e.g. creating new output folder), default to exact
                 return exact_path
                 
         # Fallback to local simulation workspace

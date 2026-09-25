@@ -1,0 +1,20 @@
+# Edge AI Semiconductor Wafer Defect Inspection System - i.MX8 Configuration
+
+# Folder Paths for Machine Shared Interfacing (Mapped to N: and M: Factory Drives)
+paths:
+  # Set to null to dynamically read from Machine_Setting.txt (e.g. /mnt/M/WP288/PMI/PROCESSED)
+  image_dir: null     # Input from Prober (Drive M: PROCESSED)
+  judge_dir: null     # Single txt Judgement to Prober (Drive N: JUDGE)
+  output_dir: null    # Split comparison defect images archive (Drive M: OUTPUT)
+  process_dir: "/tmp/imx8_process"                    # Fast RAM-disk temporary processing buffer
+
+# AI Model Inference Settings
+ai:
+  model_path: "unet.tflite"
+  conf_threshold: 0.25
+  mask_threshold: 0.50
+
+# Central NestJS Server Connection (PC Server)
+central_server:
+  enabled: true
+  url: "http://localhost:3000/api/v1/inspections"
