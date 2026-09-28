@@ -180,7 +180,7 @@ export default function InspectPage() {
                 </div>
                 <div className="metric-row">
                   <span className="met-label">Date & Time</span>
-                  <span className="met-value font-mono" id="val-datetime" style={{ fontSize: "11px" }}>{currentInspection.dateTime || currentInspection.timestamp || "-"}</span>
+                  <span className="met-value font-mono" id="val-datetime">{currentInspection.dateTime || currentInspection.timestamp || "-"}</span>
                 </div>
               </div>
             </div>
