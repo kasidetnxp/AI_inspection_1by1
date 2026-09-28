@@ -2431,7 +2431,6 @@ export function InspectionProvider({ children }) {
     benchmarkSplitModalIndex,
     benchmarkSplitModalItem,
     benchmarkZipFile,
-    bigMarkChart,
     canvasRef,
     clockStr,
     closeModal,
