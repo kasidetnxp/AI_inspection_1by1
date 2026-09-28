@@ -38,7 +38,7 @@ confuse/
 models/
 **/models/
 backend_imx8/models/
-backend_imx8_test/models/
+backend_imx8_test_final/models/
 
 # Datasets, raw images, and simulation outputs
 simulation
