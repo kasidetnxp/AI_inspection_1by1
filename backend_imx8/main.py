@@ -1125,26 +1125,76 @@ def parse_wafer_filename(filename: str, prober_default=None) -> dict:
     return meta
 
 
-def map_reason_to_mode(reason: str) -> int:
+DEFECT_MODE_NAMES = {
+    1: "Probe mark damage",
+    2: "Probe mark close to edge",
+    3: "Probe mark too large",
+    4: "Probe mark too small",
+    5: "Probe mark not found",
+    6: "Probe mark white",
+    7: "Probe mark too long",
+    8: "Others"
+}
+
+def categorize_single_reason(r_txt: str) -> str:
+    if not r_txt or r_txt.strip() in ("-", "None", ""):
+        return "-"
+    r = r_txt.lower()
+    if "damage" in r or "chip" in r:
+        return DEFECT_MODE_NAMES[1]
+    if "close to edge" in r or "near edge" in r or "edge" in r:
+        return DEFECT_MODE_NAMES[2]
+    if "too large" in r or "large" in r or "oversize" in r or "big" in r:
+        return DEFECT_MODE_NAMES[3]
+    if "too small" in r or "small" in r or "undersize" in r:
+        return DEFECT_MODE_NAMES[4]
+    if "not found" in r or "missing" in r or "no mark" in r or "no pad" in r or "no probe" in r:
+        return DEFECT_MODE_NAMES[5]
+    if "white" in r or "light" in r:
+        return DEFECT_MODE_NAMES[6]
+    if "too long" in r or "long" in r:
+        return DEFECT_MODE_NAMES[7]
+    return DEFECT_MODE_NAMES[8]
+
+def categorize_failure_reason(reason_str: str) -> str:
+    if not reason_str or reason_str.strip() in ("-", "None", ""):
+        return "-"
+    parts = [p.strip() for p in reason_str.split("&") if p.strip()]
+    if not parts:
+        return "-"
+    cats = []
+    for part in parts:
+        cat = categorize_single_reason(part)
+        if cat != "-" and cat not in cats:
+            cats.append(cat)
+    return " & ".join(cats) if cats else DEFECT_MODE_NAMES[8]
+
+def extract_modes_from_reason(reason: str) -> set:
     if not reason or reason.strip() in ("-", "None", ""):
-        return 0
-    r_lower = reason.lower()
-    if "damage" in r_lower:
-        return 1
-    elif "close to edge" in r_lower or "near edge" in r_lower or "edge" in r_lower:
-        return 2
-    elif "too large" in r_lower or "large" in r_lower or "oversize" in r_lower:
-        return 3
-    elif "too small" in r_lower or "small" in r_lower or "undersize" in r_lower:
-        return 4
-    elif "not found" in r_lower or "missing" in r_lower or "no mark" in r_lower or "no pad" in r_lower:
-        return 5
-    elif "white" in r_lower:
-        return 6
-    elif "too long" in r_lower or "long" in r_lower:
-        return 7
-    else:
-        return 8
+        return set()
+    r = reason.lower()
+    modes = set()
+    if "damage" in r or "chip" in r:
+        modes.add(1)
+    if "close to edge" in r or "near edge" in r or "edge" in r:
+        modes.add(2)
+    if "too large" in r or "large" in r or "oversize" in r or "big" in r:
+        modes.add(3)
+    if "too small" in r or "small" in r or "undersize" in r:
+        modes.add(4)
+    if "not found" in r or "missing" in r or "no mark" in r or "no pad" in r or "no probe" in r:
+        modes.add(5)
+    if "white" in r or "light" in r:
+        modes.add(6)
+    if "too long" in r or "long" in r:
+        modes.add(7)
+    if "other" in r or "corrupt" in r or "unreadable" in r or "ai" in r or "unknown" in r or not modes:
+        modes.add(8)
+    return modes
+
+def map_reason_to_mode(reason: str) -> int:
+    modes = extract_modes_from_reason(reason)
+    return min(modes) if modes else 0
 
 def build_batch_judgement(batch_records: list) -> tuple:
     modes_found = set()
@@ -1155,10 +1205,10 @@ def build_batch_judgement(batch_records: list) -> tuple:
         if rec.get("decision") == "FAIL":
             has_fail = True
             reason = rec.get("reason", "-")
-            mode = map_reason_to_mode(reason)
-            if mode > 0:
-                modes_found.add(mode)
-                fail_summary[mode] = reason
+            modes = extract_modes_from_reason(reason)
+            for m in modes:
+                modes_found.add(m)
+                fail_summary[m] = DEFECT_MODE_NAMES.get(m, "Others")
 
     if not has_fail:
         return "PASS", "00000000", {}
@@ -1644,16 +1694,6 @@ def process_new_file(filepath, filename, lot_no=None):
         cat_reason = "-"
         alarms = []
     
-    def categorize_failure_reason(reason_str: str) -> str:
-        if not reason_str or reason_str.strip() == "-": return "-"
-        r_lower = reason_str.lower()
-        if "corrupt" in r_lower or "unreadable" in r_lower: return "Corrupted or Unreadable Image"
-        if "ai" in r_lower and ("error" in r_lower or "failure" in r_lower): return "AI Inference Failure"
-        if "engine" in r_lower or "rule" in r_lower: return "Rule Engine Not Available"
-        if "area too large" in r_lower or "big" in r_lower: return "Big Probe Mark"
-        if "no probe" in r_lower or "missing" in r_lower: return "No Probe Mark"
-        return "Probe Mark Close to Edge"
-
     prober_name = get_current_prober_name()
     parsed_meta = parse_wafer_filename(filename, prober_name)
     wafer_id = parsed_meta["waferNo"] if parsed_meta["waferNo"] and parsed_meta["waferNo"] != "-" else f"#WF-{inspection_count}"

@@ -719,24 +719,12 @@ def run_inspection(image_results,
         font = cv2.FONT_HERSHEY_SIMPLEX
         total_width = w * 2
 
-        # Center-align Main Decision text (PASS / FAIL)
+        # Center-align Main Decision text (PASS / FAIL) cleanly in the top banner
         banner_text = f"{decision}"
-        (t_w_main, _), _ = cv2.getTextSize(banner_text, font, 0.85, 2)
+        (t_w_main, t_h_main), _ = cv2.getTextSize(banner_text, font, 1.15, 3)
         x_main = max(10, (total_width - t_w_main) // 2)
-        cv2.putText(canvas, banner_text, (x_main, 30), font, 0.85, text_color_main, 2)
-
-        # Determine subtext (reason or status) including Probemark Area %
-        if decision == "FAIL":
-            import re
-            clean_reasons = [re.sub(r'\s*\([^)]*\)', '', r_txt) for r_txt in unique_reasons]
-            sub_text = f"PM Area: {max_ratio_pct:.1f}% | " + " & ".join(clean_reasons)
-        else:
-            sub_text = f"PM Area: {max_ratio_pct:.1f}% | Meets all inspection criteria."
-
-        # Center-align Subtext
-        (t_w_sub, _), _ = cv2.getTextSize(sub_text, font, 0.55, 1)
-        x_sub = max(10, (total_width - t_w_sub) // 2)
-        cv2.putText(canvas, sub_text, (x_sub, 55), font, 0.55, text_color_sub, 1)
+        y_main = (banner_h + t_h_main) // 2
+        cv2.putText(canvas, banner_text, (x_main, y_main), font, 1.15, text_color_main, 3)
  
         cv2.line(canvas, (w, banner_h), (w, h + banner_h), (255, 255, 255), 1)
  

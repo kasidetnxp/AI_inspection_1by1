@@ -2202,26 +2202,72 @@ export function InspectionProvider({ children }) {
     }
   };
 
-  let bigMarkChart = 0, closeEdgeChart = 0, noMarkChart = 0;
+  const DEFECT_CONFIG = [
+    { key: "damage", label: "Probe mark damage", color: "#f43f5e" },
+    { key: "edge", label: "Probe mark close to edge", color: "#f97316" },
+    { key: "large", label: "Probe mark too large", color: "#ef4444" },
+    { key: "small", label: "Probe mark too small", color: "#eab308" },
+    { key: "missing", label: "Probe mark not found", color: "#a855f7" },
+    { key: "white", label: "Probe mark white", color: "#06b6d4" },
+    { key: "long", label: "Probe mark too long", color: "#3b82f6" },
+    { key: "others", label: "Others", color: "#64748b" }
+  ];
+
+  const defectCounts = {};
+  DEFECT_CONFIG.forEach(d => { defectCounts[d.key] = 0; });
+
   chartDataSource.forEach(r => {
+    if (r.decision !== "FAIL") return;
     const r_str = (r.reason || "").toLowerCase();
-    const a_str = (r.alarms || []).map(a => a.name.toLowerCase()).join(" ");
-    if (r_str.includes("big") || r_str.includes("area too large") || a_str.includes("big")) {
-      bigMarkChart++;
-    } else if (r_str.includes("no probe") || r_str.includes("missing") || r_str.includes("cannot classify") || a_str.includes("no probe") || a_str.includes("missing")) {
-      noMarkChart++;
-    } else if (r.decision === "FAIL") {
-      closeEdgeChart++;
+    const a_str = (r.alarms || []).map(a => (a.name || "").toLowerCase()).join(" ");
+    const full = `${r_str} ${a_str}`;
+    let matched = false;
+
+    if (full.includes("damage") || full.includes("chip")) {
+      defectCounts["damage"]++;
+      matched = true;
+    }
+    if (full.includes("close to edge") || full.includes("near edge") || full.includes("edge")) {
+      defectCounts["edge"]++;
+      matched = true;
+    }
+    if (full.includes("too large") || full.includes("large") || full.includes("oversize") || full.includes("big")) {
+      defectCounts["large"]++;
+      matched = true;
+    }
+    if (full.includes("too small") || full.includes("small") || full.includes("undersize")) {
+      defectCounts["small"]++;
+      matched = true;
+    }
+    if (full.includes("not found") || full.includes("missing") || full.includes("no mark") || full.includes("no pad") || full.includes("no probe") || full.includes("cannot classify")) {
+      defectCounts["missing"]++;
+      matched = true;
+    }
+    if (full.includes("white") || full.includes("light")) {
+      defectCounts["white"]++;
+      matched = true;
+    }
+    if (full.includes("too long") || full.includes("long")) {
+      defectCounts["long"]++;
+      matched = true;
+    }
+    if (!matched) {
+      defectCounts["others"]++;
     }
   });
 
+  const activeDefects = DEFECT_CONFIG.filter(d => defectCounts[d.key] > 0);
+  const barChartLabels = activeDefects.length > 0 ? activeDefects.map(d => d.label) : ["No Defects"];
+  const barChartCounts = activeDefects.length > 0 ? activeDefects.map(d => defectCounts[d.key]) : [0];
+  const barChartColors = activeDefects.length > 0 ? activeDefects.map(d => d.color) : ["#10b981"];
+
   const barChartData = {
-    labels: ["Big Probe Mark", "Close to Edge", "No Probe Mark"],
+    labels: barChartLabels,
     datasets: [
       {
         label: "Defects",
-        data: [bigMarkChart, closeEdgeChart, noMarkChart],
-        backgroundColor: ["#ef4444", "#f97316", "#a855f7"],
+        data: barChartCounts,
+        backgroundColor: barChartColors,
         borderRadius: 4
       }
     ]
