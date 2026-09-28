@@ -10,6 +10,7 @@
 
 /* Default Dark Theme Variables */
 :root {
+  color-scheme: dark;
   --bg-primary: #08090e;
   --bg-card: #11131c;
   --border-color: rgba(255, 255, 255, 0.05);
@@ -44,6 +45,7 @@
 
 /* Light Theme Variables */
 body.light-theme {
+  color-scheme: light;
   --bg-primary: #f1f5f9;
   --bg-card: #ffffff;
   --border-color: rgba(15, 23, 42, 0.08);
@@ -78,6 +80,54 @@ body {
   align-items: center;
   justify-content: center;
   transition: background-color 0.3s ease;
+}
+
+/* Native controls dark/light adaptation */
+select option {
+  background-color: var(--bg-card);
+  color: var(--text-main);
+}
+
+body.light-theme select option {
+  background-color: #ffffff;
+  color: #0f172a;
+}
+
+/* Button utility classes used across views & modals */
+.btn-primary {
+  background: var(--color-info);
+  color: #ffffff !important;
+  border: 1px solid var(--color-info);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.btn-primary:hover:not(:disabled) {
+  filter: brightness(1.1);
+}
+
+.btn-secondary {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-main) !important;
+  border: 1px solid var(--border-color);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.btn-secondary:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.14);
+  border-color: var(--border-highlight);
+}
+
+body.light-theme .btn-secondary {
+  background: #f1f5f9;
+  color: #0f172a !important;
+  border-color: #cbd5e1;
+}
+
+body.light-theme .btn-secondary:hover:not(:disabled) {
+  background: #e2e8f0;
+  border-color: #94a3b8;
 }
 
 /* Controls Bar (Desktop vs HMI) */

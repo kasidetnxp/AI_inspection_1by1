@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useRef, useCallback } from "react";
+import React, { createContext, useContext, useState, useEffect, useRef, useCallback, useMemo } from "react";
 import {
   Chart as ChartJS,
   CategoryScale,
@@ -213,50 +213,54 @@ export function InspectionProvider({ children }) {
     return `${y}-${m}-${d}`;
   })();
 
-  const rawFilteredHistory = historyList.filter(record => {
-    if (analyticsFilter === "PASS" && record.decision !== "PASS") return false;
-    if (analyticsFilter === "FAIL" && record.decision === "PASS") return false;
-    if (analyticsBatchFilter !== "ALL" && record.batch !== analyticsBatchFilter) return false;
-    if (analyticsMachineFilter !== "ALL" && (record.machineNo || "PROBER01") !== analyticsMachineFilter) return false;
-    
-    // Date Filtering
-    const recDate = normalizeRecordDate(record);
-    const recMs = getRecordTimestampMs(record);
-    const nowMs = Date.now();
+  const filteredHistory = useMemo(() => {
+    const rawFilteredHistory = historyList.filter(record => {
+      if (analyticsFilter === "PASS" && record.decision !== "PASS") return false;
+      if (analyticsFilter === "FAIL" && record.decision === "PASS") return false;
+      if (analyticsBatchFilter !== "ALL" && record.batch !== analyticsBatchFilter) return false;
+      if (analyticsMachineFilter !== "ALL" && (record.machineNo || "PROBER01") !== analyticsMachineFilter) return false;
+      
+      // Date Filtering
+      const recDate = normalizeRecordDate(record);
+      const recMs = getRecordTimestampMs(record);
+      const nowMs = Date.now();
 
-    if (dateRangePreset === "TODAY") {
-      if (recDate && recDate !== todayStr) return false;
-    } else if (dateRangePreset === "7D") {
-      if (recMs > 0 && recMs < (nowMs - 7 * 86400000)) return false;
-    } else if (dateRangePreset === "30D") {
-      if (recMs > 0 && recMs < (nowMs - 30 * 86400000)) return false;
-    } else if (dateRangePreset === "CUSTOM") {
-      if (startDate && recDate && recDate < startDate) return false;
-      if (endDate && recDate && recDate > endDate) return false;
-    } else if (analyticsDateFilter !== "ALL") {
-      if (recDate !== analyticsDateFilter) return false;
-    }
+      if (dateRangePreset === "TODAY") {
+        if (recDate && recDate !== todayStr) return false;
+      } else if (dateRangePreset === "7D") {
+        if (recMs > 0 && recMs < (nowMs - 7 * 86400000)) return false;
+      } else if (dateRangePreset === "30D") {
+        if (recMs > 0 && recMs < (nowMs - 30 * 86400000)) return false;
+      } else if (dateRangePreset === "CUSTOM") {
+        if (startDate && recDate && recDate < startDate) return false;
+        if (endDate && recDate && recDate > endDate) return false;
+      } else if (analyticsDateFilter !== "ALL") {
+        if (recDate !== analyticsDateFilter) return false;
+      }
 
-    // Search Filtering
-    if (filterSearch.trim() !== "") {
-      const q = filterSearch.toLowerCase().trim();
-      const searchableStr = [
-        record.machineNo, record.batch, record.waferNo, record.xyCoord,
-        record.site, record.pad, record.timeShort, record.timestamp, record.dateTime,
-        record.decision, record.reason, record.productSetup, record.temp, record.id
-      ].join(" ").toLowerCase();
-      if (!searchableStr.includes(q)) return false;
-    }
-    return true;
-  });
+      // Search Filtering
+      if (filterSearch.trim() !== "") {
+        const q = filterSearch.toLowerCase().trim();
+        const searchableStr = [
+          record.machineNo, record.batch, record.waferNo, record.xyCoord,
+          record.site, record.pad, record.timeShort, record.timestamp, record.dateTime,
+          record.decision, record.reason, record.productSetup, record.temp, record.id
+        ].join(" ").toLowerCase();
+        if (!searchableStr.includes(q)) return false;
+      }
+      return true;
+    });
 
-  const filteredHistory = sortRecords(rawFilteredHistory, sortField, sortOrder);
+    return sortRecords(rawFilteredHistory, sortField, sortOrder);
+  }, [historyList, analyticsFilter, analyticsBatchFilter, analyticsMachineFilter, dateRangePreset, todayStr, startDate, endDate, analyticsDateFilter, filterSearch, sortField, sortOrder]);
 
   const totalHistoryPages = Math.max(1, Math.ceil(filteredHistory.length / (historyPageSize === "ALL" ? Math.max(1, filteredHistory.length) : Number(historyPageSize))));
   const effectiveHistoryPage = Math.min(historyPage, totalHistoryPages);
-  const paginatedHistory = (historyPageSize === "ALL")
-    ? filteredHistory
-    : filteredHistory.slice((effectiveHistoryPage - 1) * Number(historyPageSize), effectiveHistoryPage * Number(historyPageSize));
+  const paginatedHistory = useMemo(() => {
+    return (historyPageSize === "ALL")
+      ? filteredHistory
+      : filteredHistory.slice((effectiveHistoryPage - 1) * Number(historyPageSize), effectiveHistoryPage * Number(historyPageSize));
+  }, [filteredHistory, historyPageSize, effectiveHistoryPage]);
 
   // Historical Inspection Image Modal State
   const [selectedModalItem, setSelectedModalItem] = useState(null);
@@ -1604,14 +1608,13 @@ export function InspectionProvider({ children }) {
           mapInspectionData(payload.data);
           setHistory(prev => {
             const list = Array.isArray(prev) ? prev : [];
-            const combined = [payload.data, ...list];
-            const seen = new Set();
-            return combined.filter(item => {
+            const newKey = payload.data.imageUrl || (payload.data.id + "_" + payload.data.timestamp + "_" + (payload.data.pad || "") + "_" + (payload.data.xyCoord || ""));
+            const isDup = list.slice(0, 10).some(item => {
               const key = item.imageUrl || (item.id + "_" + item.timestamp + "_" + (item.pad || "") + "_" + (item.xyCoord || ""));
-              if (seen.has(key)) return false;
-              seen.add(key);
-              return true;
+              return key === newKey;
             });
+            if (isDup) return list;
+            return [payload.data, ...list];
           });
         } else if (payload.event === "BENCHMARK_PROGRESS" && payload.data) {
           const pData = payload.data;
@@ -2155,22 +2158,122 @@ export function InspectionProvider({ children }) {
   // CHARTS CONFIGURATION ENGINE (Chart.js React)
   // Dynamic calculation based on filteredHistory
   // ==========================================
-  const chartDataSource = filteredHistory.length > 0 ? filteredHistory : [];
-  const passCountChart = chartDataSource.filter(r => r.decision === "PASS").length;
-  const failCountChart = chartDataSource.filter(r => r.decision !== "PASS").length;
+  const { donutChartData, barChartData, lineChartData, passCountChart, failCountChart, latencyRecent } = useMemo(() => {
+    const chartDataSource = filteredHistory.length > 0 ? filteredHistory : [];
+    const passCount = chartDataSource.filter(r => r.decision === "PASS").length;
+    const failCount = chartDataSource.filter(r => r.decision !== "PASS").length;
 
-  const donutChartData = {
-    labels: ["PASS", "FAIL"],
-    datasets: [
-      {
-        data: [passCountChart, failCountChart],
-        backgroundColor: [isLight ? "#059669" : "#10b981", isLight ? "#dc2626" : "#ef4444"],
-        borderColor: isLight ? "#ffffff" : "#1e293b",
-        borderWidth: 2,
-        hoverOffset: 6
+    const donut = {
+      labels: ["PASS", "FAIL"],
+      datasets: [
+        {
+          data: [passCount, failCount],
+          backgroundColor: [isLight ? "#059669" : "#10b981", isLight ? "#dc2626" : "#ef4444"],
+          borderColor: isLight ? "#ffffff" : "#1e293b",
+          borderWidth: 2,
+          hoverOffset: 6
+        }
+      ]
+    };
+
+    const DEFECT_CONFIG = [
+      { key: "damage", label: "Probe mark damage", color: "#f43f5e" },
+      { key: "edge", label: "Probe mark close to edge", color: "#f97316" },
+      { key: "large", label: "Probe mark too large", color: "#ef4444" },
+      { key: "small", label: "Probe mark too small", color: "#eab308" },
+      { key: "missing", label: "Probe mark not found", color: "#a855f7" },
+      { key: "white", label: "Probe mark white", color: "#06b6d4" },
+      { key: "long", label: "Probe mark too long", color: "#3b82f6" },
+      { key: "others", label: "Others", color: "#64748b" }
+    ];
+
+    const defectCounts = {};
+    DEFECT_CONFIG.forEach(d => { defectCounts[d.key] = 0; });
+
+    chartDataSource.forEach(r => {
+      if (r.decision !== "FAIL") return;
+      const r_str = (r.reason || "").toLowerCase();
+      const a_str = (r.alarms || []).map(a => (a.name || "").toLowerCase()).join(" ");
+      const full = `${r_str} ${a_str}`;
+      let matched = false;
+
+      if (full.includes("damage") || full.includes("chip")) {
+        defectCounts["damage"]++;
+        matched = true;
       }
-    ]
-  };
+      if (full.includes("close to edge") || full.includes("near edge") || full.includes("edge")) {
+        defectCounts["edge"]++;
+        matched = true;
+      }
+      if (full.includes("too large") || full.includes("large") || full.includes("oversize") || full.includes("big")) {
+        defectCounts["large"]++;
+        matched = true;
+      }
+      if (full.includes("too small") || full.includes("small") || full.includes("undersize")) {
+        defectCounts["small"]++;
+        matched = true;
+      }
+      if (full.includes("not found") || full.includes("missing") || full.includes("no mark") || full.includes("no pad") || full.includes("no probe") || full.includes("cannot classify")) {
+        defectCounts["missing"]++;
+        matched = true;
+      }
+      if (full.includes("white") || full.includes("light")) {
+        defectCounts["white"]++;
+        matched = true;
+      }
+      if (full.includes("too long") || full.includes("long")) {
+        defectCounts["long"]++;
+        matched = true;
+      }
+      if (!matched) {
+        defectCounts["others"]++;
+      }
+    });
+
+    const activeDefects = DEFECT_CONFIG.filter(d => defectCounts[d.key] > 0);
+    const barChartLabels = activeDefects.length > 0 ? activeDefects.map(d => d.label) : ["No Defects"];
+    const barChartCounts = activeDefects.length > 0 ? activeDefects.map(d => defectCounts[d.key]) : [0];
+    const barChartColors = activeDefects.length > 0 ? activeDefects.map(d => d.color) : ["#10b981"];
+
+    const bar = {
+      labels: barChartLabels,
+      datasets: [
+        {
+          label: "Defects",
+          data: barChartCounts,
+          backgroundColor: barChartColors,
+          borderRadius: 4
+        }
+      ]
+    };
+
+    const latencyRecent = chartDataSource.slice(0, 15).reverse();
+    const line = {
+      labels: latencyRecent.map(d => (d.id || "").replace("#WF-", "")),
+      datasets: [
+        {
+          label: "Inference Latency (ms)",
+          data: latencyRecent.map(d => Number(d.inferenceTime) || 0),
+          borderColor: isLight ? "#0284c7" : "#38bdf8",
+          backgroundColor: isLight ? "rgba(2, 132, 199, 0.15)" : "rgba(56, 189, 248, 0.15)",
+          fill: true,
+          tension: 0.35,
+          pointBackgroundColor: isLight ? "#0284c7" : "#38bdf8",
+          pointRadius: 4,
+          pointHoverRadius: 6
+        }
+      ]
+    };
+
+    return {
+      donutChartData: donut,
+      barChartData: bar,
+      lineChartData: line,
+      passCountChart: passCount,
+      failCountChart: failCount,
+      latencyRecent: latencyRecent
+    };
+  }, [filteredHistory, isLight]);
 
   const donutChartOptions = {
     responsive: true,
@@ -2202,77 +2305,6 @@ export function InspectionProvider({ children }) {
     }
   };
 
-  const DEFECT_CONFIG = [
-    { key: "damage", label: "Probe mark damage", color: "#f43f5e" },
-    { key: "edge", label: "Probe mark close to edge", color: "#f97316" },
-    { key: "large", label: "Probe mark too large", color: "#ef4444" },
-    { key: "small", label: "Probe mark too small", color: "#eab308" },
-    { key: "missing", label: "Probe mark not found", color: "#a855f7" },
-    { key: "white", label: "Probe mark white", color: "#06b6d4" },
-    { key: "long", label: "Probe mark too long", color: "#3b82f6" },
-    { key: "others", label: "Others", color: "#64748b" }
-  ];
-
-  const defectCounts = {};
-  DEFECT_CONFIG.forEach(d => { defectCounts[d.key] = 0; });
-
-  chartDataSource.forEach(r => {
-    if (r.decision !== "FAIL") return;
-    const r_str = (r.reason || "").toLowerCase();
-    const a_str = (r.alarms || []).map(a => (a.name || "").toLowerCase()).join(" ");
-    const full = `${r_str} ${a_str}`;
-    let matched = false;
-
-    if (full.includes("damage") || full.includes("chip")) {
-      defectCounts["damage"]++;
-      matched = true;
-    }
-    if (full.includes("close to edge") || full.includes("near edge") || full.includes("edge")) {
-      defectCounts["edge"]++;
-      matched = true;
-    }
-    if (full.includes("too large") || full.includes("large") || full.includes("oversize") || full.includes("big")) {
-      defectCounts["large"]++;
-      matched = true;
-    }
-    if (full.includes("too small") || full.includes("small") || full.includes("undersize")) {
-      defectCounts["small"]++;
-      matched = true;
-    }
-    if (full.includes("not found") || full.includes("missing") || full.includes("no mark") || full.includes("no pad") || full.includes("no probe") || full.includes("cannot classify")) {
-      defectCounts["missing"]++;
-      matched = true;
-    }
-    if (full.includes("white") || full.includes("light")) {
-      defectCounts["white"]++;
-      matched = true;
-    }
-    if (full.includes("too long") || full.includes("long")) {
-      defectCounts["long"]++;
-      matched = true;
-    }
-    if (!matched) {
-      defectCounts["others"]++;
-    }
-  });
-
-  const activeDefects = DEFECT_CONFIG.filter(d => defectCounts[d.key] > 0);
-  const barChartLabels = activeDefects.length > 0 ? activeDefects.map(d => d.label) : ["No Defects"];
-  const barChartCounts = activeDefects.length > 0 ? activeDefects.map(d => defectCounts[d.key]) : [0];
-  const barChartColors = activeDefects.length > 0 ? activeDefects.map(d => d.color) : ["#10b981"];
-
-  const barChartData = {
-    labels: barChartLabels,
-    datasets: [
-      {
-        label: "Defects",
-        data: barChartCounts,
-        backgroundColor: barChartColors,
-        borderRadius: 4
-      }
-    ]
-  };
-
   const barChartOptions = {
     indexAxis: "y",
     responsive: true,
@@ -2296,24 +2328,6 @@ export function InspectionProvider({ children }) {
         ticks: { color: isLight ? "#334155" : "#cbd5e1", font: { family: "'Outfit'", weight: "600" } }
       }
     }
-  };
-
-  const latencyRecent = chartDataSource.slice(0, 15).reverse();
-  const lineChartData = {
-    labels: latencyRecent.map(d => (d.id || "").replace("#WF-", "")),
-    datasets: [
-      {
-        label: "Inference Latency (ms)",
-        data: latencyRecent.map(d => Number(d.inferenceTime) || 0),
-        borderColor: isLight ? "#0284c7" : "#38bdf8",
-        backgroundColor: isLight ? "rgba(2, 132, 199, 0.15)" : "rgba(56, 189, 248, 0.15)",
-        fill: true,
-        tension: 0.35,
-        pointBackgroundColor: isLight ? "#0284c7" : "#38bdf8",
-        pointRadius: 4,
-        pointHoverRadius: 6
-      }
-    ]
   };
 
   const lineChartOptions = {
@@ -2386,16 +2400,38 @@ export function InspectionProvider({ children }) {
     document.body.removeChild(link);
   };
 
-  // Filter logs logic for Analytics Tab
-  const uniqueDates = Array.from(new Set(historyList.map(getRecordDate).filter(Boolean)));
-  const uniqueBatches = Array.from(new Set(historyList.map(item => item.batch).filter(b => b && b !== "-")));
-  const uniqueMachines = Array.from(new Set(historyList.map(item => item.machineNo || "PROBER01").filter(m => m && m !== "-")));
+  // Filter logs logic for Analytics Tab & local yields (memoized for high record volumes)
+  const { uniqueDates, uniqueBatches, uniqueMachines, totalScans, passCount, failCount, yieldRate } = useMemo(() => {
+    const dates = new Set();
+    const batches = new Set();
+    const machines = new Set();
+    let pass = 0;
+    let fail = 0;
 
-  // Calculate local yields
-  const totalScans = historyList.length;
-  const passCount = historyList.filter(h => h.decision === "PASS").length;
-  const failCount = historyList.filter(h => h.decision !== "PASS").length;
-  const yieldRate = totalScans > 0 ? ((passCount / totalScans) * 100).toFixed(2) : "0.00";
+    for (let i = 0; i < historyList.length; i++) {
+      const item = historyList[i];
+      const d = getRecordDate(item);
+      if (d) dates.add(d);
+      if (item.batch && item.batch !== "-") batches.add(item.batch);
+      const m = item.machineNo || "PROBER01";
+      if (m && m !== "-") machines.add(m);
+      if (item.decision === "PASS") pass++;
+      else fail++;
+    }
+
+    const total = historyList.length;
+    const yRate = total > 0 ? ((pass / total) * 100).toFixed(2) : "0.00";
+
+    return {
+      uniqueDates: Array.from(dates),
+      uniqueBatches: Array.from(batches),
+      uniqueMachines: Array.from(machines),
+      totalScans: total,
+      passCount: pass,
+      failCount: fail,
+      yieldRate: yRate
+    };
+  }, [historyList]);
 
 
   const value = {
