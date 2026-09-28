@@ -336,28 +336,31 @@ export default function HistoryDetailModal() {
                         onDragStart={(e) => e.preventDefault()}
                         key={`${selectedModalItem.id}_${selectedModalItem.imageUrl || ""}_${selectedModalItem.xyCoord || ""}_${modalViewMode}`}
                         src={(() => {
+                          const mach = selectedModalItem?.machineNo;
                           const baseAnn = selectedModalItem.annotatedImageUrl || selectedModalItem.imageUrl || "";
                           const baseRaw = selectedModalItem.rawImageUrl || "";
                           const baseComp = selectedModalItem.comparisonImageUrl || "";
 
                           if (modalViewMode === "raw") {
                             if (baseRaw && !baseRaw.includes("/annotated/")) {
-                              return resolveImageUrl(baseRaw);
+                              return resolveImageUrl(baseRaw, mach);
                             }
                             return resolveImageUrl(
                               baseAnn
                                 .replace("/api/images/annotated/", "/api/images/raw/")
                                 .replace("/api/images/comparison/", "/api/images/raw/")
-                                .replace(/\/inspect_/, "/")
+                                .replace(/\/inspect_/, "/"),
+                              mach
                             );
                           }
 
                           if (modalViewMode === "comparison" || modalViewMode === "split") {
                             if (baseComp) {
-                              return resolveImageUrl(baseComp);
+                              return resolveImageUrl(baseComp, mach);
                             }
                             return resolveImageUrl(
-                              baseAnn.replace("/api/images/annotated/", "/api/images/comparison/")
+                              baseAnn.replace("/api/images/annotated/", "/api/images/comparison/"),
+                              mach
                             );
                           }
 
@@ -366,10 +369,11 @@ export default function HistoryDetailModal() {
                             return resolveImageUrl(
                               baseAnn
                                 .replace("/api/images/comparison/", "/api/images/annotated/")
-                                .replace(/\/inspect_/, "/")
+                                .replace(/\/inspect_/, "/"),
+                              mach
                             );
                           }
-                          return resolveImageUrl(baseAnn);
+                          return resolveImageUrl(baseAnn, mach);
                         })()}
                         onError={() => setImageLoadError(true)}
                         alt={selectedModalItem.id}

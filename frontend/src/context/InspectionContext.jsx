@@ -66,15 +66,21 @@ export function InspectionProvider({ children }) {
   const [edgeIp, setEdgeIp] = useState(getDefaultEdgeIp);
   const apiBase = `http://${edgeIp}:8001`;
 
-  const resolveImageUrl = (url) => {
+  const resolveImageUrl = (url, machine) => {
     if (!url) return null;
+    let fullUrl = url;
     if (url.startsWith("http://") || url.startsWith("https://")) {
-      return url.replace(/^https?:\/\/[^/]+/, apiBase);
+      fullUrl = url.replace(/^https?:\/\/[^/]+/, apiBase);
+    } else if (url.startsWith("/")) {
+      fullUrl = `${apiBase}${url}`;
+    } else {
+      fullUrl = `${apiBase}/${url}`;
     }
-    if (url.startsWith("/")) {
-      return `${apiBase}${url}`;
+    if (machine && machine !== "-" && !fullUrl.includes("machine=")) {
+      const sep = fullUrl.includes("?") ? "&" : "?";
+      fullUrl = `${fullUrl}${sep}machine=${encodeURIComponent(machine)}`;
     }
-    return `${apiBase}/${url}`;
+    return fullUrl;
   };
 
   const updateEdgeIp = (newIp) => {

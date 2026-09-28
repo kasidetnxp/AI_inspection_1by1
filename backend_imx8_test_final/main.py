@@ -2945,16 +2945,20 @@ def load_history_from_db():
         for r in rows:
             t_short = r[1].split(" ")[1] if len(r[1].split(" ")) > 1 else r[1]
             stored_url = r[12] if len(r) > 12 and r[12] else None
-            ann_url = stored_url if stored_url else None
+            meta = parse_wafer_filename(stored_url or r[0], prober_name)
+            mach = meta.get("machineNo")
+            mach_param = f"machine={mach}" if (mach and mach not in ("-", "PROBER01")) else None
             if stored_url:
                 clean_stored = stored_url.replace("/inspect_", "/")
+                if mach_param and "machine=" not in clean_stored:
+                    sep = "&" if "?" in clean_stored else "?"
+                    clean_stored = f"{clean_stored}{sep}{mach_param}"
                 raw_url = clean_stored.replace("/api/images/annotated/", "/api/images/raw/")
                 comp_url = clean_stored.replace("/api/images/annotated/", "/api/images/comparison/")
                 ann_url = clean_stored
             else:
                 raw_url = None
                 comp_url = None
-            meta = parse_wafer_filename(stored_url or r[0], prober_name)
             records.append({
                 "id": r[0], "timestamp": r[1], "timeShort": t_short, "decision": r[2],
                 "padsTotal": r[3], "padsDetected": r[4], "probeMarks": r[5], "grains": r[6],
@@ -2997,6 +3001,12 @@ def find_image_in_drive(lot_no: str, filename: str, subfolder: str = "OUTPUT", t
     # Deduplicate preserving order
     seen = set()
     search_names = [x for x in search_names if not (x in seen or seen.add(x))]
+
+    # If target_machine not provided, try to extract from wafer filename
+    if not target_machine:
+        extracted = parse_wafer_filename(safe_filename)
+        if extracted and extracted.get("machineNo") and extracted["machineNo"] not in ("-", "PROBER01"):
+            target_machine = extracted["machineNo"]
 
     # 1. Primary check: use active machine setting (or targeted machine if specified)
     if subfolder.upper() == "PROCESSED":
