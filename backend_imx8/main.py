@@ -2974,39 +2974,97 @@ def load_history_from_db():
 
 
 
-@app.get("/api/images/raw/{lot_no}/{filename}")
-async def get_raw_image_from_drive(lot_no: str, filename: str):
+def find_image_in_drive(lot_no: str, filename: str, subfolder: str = "OUTPUT", target_machine: Optional[str] = None) -> Optional[str]:
+    """
+    Locates an image file in Drive M under {machine}/PMI/{subfolder}/{lot_no}/{filename}.
+    1. First tries the active configured machine setting (or explicitly requested target_machine).
+    2. If not found, scans across sibling machine folders under Drive M root (e.g. /mnt/M/* or simulation/drive_M/*).
+    Supports smart filename variants: exact, clean (stripped prefixes), inspect_, annotated_, raw_.
+    Returns absolute path if found and safe, or None.
+    """
     safe_lot_no = sanitize_safe_filename(lot_no)
     safe_filename = sanitize_safe_filename(filename, allowed_extensions=[".bmp", ".jpg", ".png", ".jpeg"])
-    inp_tmpl = ACTIVE_MACHINE_SETTING.get("lot.input.folder", "M:\\WP288\\PMI\\PROCESSED\\{output.lotNo}")
-    proc_dir = resolve_windows_drive_path(inp_tmpl.replace("{output.lotNo}", safe_lot_no))
-    clean_name = re.sub(r"^(raw_|annotated_|inspect_)+", "", safe_filename)
-    if proc_dir:
-        for fname in [clean_name, safe_filename, f"raw_{clean_name}"]:
-            fpath = os.path.join(proc_dir, fname)
-            if is_safe_target_path(proc_dir, fpath) and os.path.exists(fpath):
-                return FileResponse(fpath)
-            
+    clean_name = re.sub(r"^(raw_|annotated_|inspect_)+", "", safe_filename, flags=re.IGNORECASE)
+
+    # Candidate file names to look for
+    if safe_filename.startswith("inspect_"):
+        search_names = [safe_filename, f"inspect_{clean_name}", clean_name, f"annotated_{clean_name}"]
+    elif safe_filename.startswith("raw_"):
+        search_names = [safe_filename, f"raw_{clean_name}", clean_name]
+    else:
+        search_names = [clean_name, safe_filename, f"inspect_{clean_name}", f"annotated_{clean_name}", f"raw_{clean_name}"]
+
+    # Deduplicate preserving order
+    seen = set()
+    search_names = [x for x in search_names if not (x in seen or seen.add(x))]
+
+    # 1. Primary check: use active machine setting (or targeted machine if specified)
+    if subfolder.upper() == "PROCESSED":
+        tmpl = ACTIVE_MACHINE_SETTING.get("lot.input.folder", "M:\\WP288\\PMI\\PROCESSED\\{output.lotNo}")
+    else:
+        tmpl = ACTIVE_MACHINE_SETTING.get("lot.output.folder", "M:\\WP288\\PMI\\OUTPUT\\{output.lotNo}")
+
+    if target_machine:
+        curr_mach = get_current_prober_name()
+        if curr_mach and curr_mach in tmpl:
+            tmpl = tmpl.replace(curr_mach, target_machine)
+        else:
+            tmpl = re.sub(r"([A-Za-z]:[\\/])[^\\/]+", r"\g<1>" + target_machine, tmpl)
+
+    primary_dir = resolve_windows_drive_path(tmpl.replace("{output.lotNo}", safe_lot_no))
+    if primary_dir and os.path.isdir(primary_dir):
+        for fname in search_names:
+            candidate = os.path.join(primary_dir, fname)
+            if is_safe_target_path(primary_dir, candidate) and os.path.exists(candidate):
+                return candidate
+
+    # 2. Secondary fallback: Auto cross-machine scan across sibling machine folders under Drive M
+    candidate_roots = []
+    if primary_dir:
+        norm_p = primary_dir.replace("\\", "/")
+        if "/PMI/" in norm_p:
+            mach_dir_root = norm_p.split("/PMI/")[0]
+            m_parent = os.path.dirname(mach_dir_root)
+            if os.path.isdir(m_parent):
+                candidate_roots.append(m_parent)
+
+    for std_root in ["/mnt/M", "/mnt/m", "/media/M", "/media/m", os.path.join(_THIS_DIR, "simulation", "drive_M")]:
+        if os.path.isdir(std_root) and std_root not in candidate_roots:
+            candidate_roots.append(std_root)
+
+    subfolders_to_try = [subfolder]
+    alt_sub = "PROCESSED" if subfolder.upper() == "OUTPUT" else "OUTPUT"
+    subfolders_to_try.append(alt_sub)
+
+    for m_root in candidate_roots:
+        try:
+            for entry in os.scandir(m_root):
+                if entry.is_dir() and not entry.name.startswith("."):
+                    for sub in subfolders_to_try:
+                        cand_batch_dir = os.path.join(m_root, entry.name, "PMI", sub, safe_lot_no)
+                        if os.path.isdir(cand_batch_dir):
+                            for fname in search_names:
+                                cand_file = os.path.join(cand_batch_dir, fname)
+                                if is_safe_target_path(cand_batch_dir, cand_file) and os.path.exists(cand_file):
+                                    return cand_file
+        except Exception:
+            pass
+
+    return None
+
+
+@app.get("/api/images/raw/{lot_no}/{filename}")
+async def get_raw_image_from_drive(lot_no: str, filename: str, machine: Optional[str] = Query(None)):
+    fpath = find_image_in_drive(lot_no, filename, subfolder="PROCESSED", target_machine=machine)
+    if fpath and os.path.exists(fpath):
+        return FileResponse(fpath)
     raise HTTPException(status_code=404, detail="Raw image not found in Drive M")
 
 @app.get("/api/images/annotated/{lot_no}/{filename}")
-async def get_annotated_image_from_drive(lot_no: str, filename: str, full: Optional[bool] = False):
-    safe_lot_no = sanitize_safe_filename(lot_no)
-    safe_filename = sanitize_safe_filename(filename, allowed_extensions=[".bmp", ".jpg", ".png", ".jpeg"])
-    out_tmpl = ACTIVE_MACHINE_SETTING.get("lot.output.folder", "M:\\WP288\\PMI\\OUTPUT\\{output.lotNo}")
-    out_dir = resolve_windows_drive_path(out_tmpl.replace("{output.lotNo}", safe_lot_no))
-    clean_name = re.sub(r"^(inspect_|annotated_|raw_)+", "", safe_filename)
-    fpath = None
-    if out_dir:
-        # If caller explicitly asked for inspect_ prefix, prioritize that filename
-        search_order = [safe_filename, f"inspect_{clean_name}", clean_name, f"annotated_{clean_name}"] if safe_filename.startswith("inspect_") else [clean_name, safe_filename, f"inspect_{clean_name}", f"annotated_{clean_name}"]
-        for fname in search_order:
-            candidate = os.path.join(out_dir, fname)
-            if is_safe_target_path(out_dir, candidate) and os.path.exists(candidate):
-                fpath = candidate
-                break
-                
+async def get_annotated_image_from_drive(lot_no: str, filename: str, full: Optional[bool] = False, machine: Optional[str] = Query(None)):
+    fpath = find_image_in_drive(lot_no, filename, subfolder="OUTPUT", target_machine=machine)
     if not fpath:
+        safe_lot_no = sanitize_safe_filename(lot_no)
         # If output image was deleted or not found in Drive M, return a clean placeholder image with text
         try:
             placeholder = np.zeros((240, 480, 3), dtype=np.uint8)
@@ -3056,8 +3114,8 @@ async def get_annotated_image_from_drive(lot_no: str, filename: str, full: Optio
     return FileResponse(fpath)
 
 @app.get("/api/images/comparison/{lot_no}/{filename}")
-async def get_comparison_image_from_drive(lot_no: str, filename: str):
-    return await get_annotated_image_from_drive(lot_no, filename, full=True)
+async def get_comparison_image_from_drive(lot_no: str, filename: str, machine: Optional[str] = Query(None)):
+    return await get_annotated_image_from_drive(lot_no, filename, full=True, machine=machine)
 
 @app.get("/api/latest-inspection")
 @app.get("/api/v1/latest-inspection")
