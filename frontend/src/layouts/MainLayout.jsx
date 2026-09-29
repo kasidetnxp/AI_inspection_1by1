@@ -8,6 +8,7 @@ import SettingsPage from "../pages/SettingsPage";
 import SplitViewModal from "../components/SplitViewModal";
 import BenchmarkReportModal from "../components/BenchmarkReportModal";
 import HistoryDetailModal from "../components/HistoryDetailModal";
+import ExportCSVModal from "../components/ExportCSVModal";
 
 export default function MainLayout() {
   const {
@@ -17,7 +18,10 @@ export default function MainLayout() {
     benchmarkSplitModalItem,
     benchmarkReportModalOpen,
     benchmarkReportData,
-    selectedModalItem
+    selectedModalItem,
+    exportModalState,
+    closeExportModal,
+    apiBase
   } = useInspection();
 
   return (
@@ -86,6 +90,18 @@ export default function MainLayout() {
       {benchmarkSplitModalItem && <SplitViewModal />}
       {benchmarkReportModalOpen && benchmarkReportData && <BenchmarkReportModal />}
       {selectedModalItem && <HistoryDetailModal />}
+      {exportModalState?.isOpen && (
+        <ExportCSVModal
+          isOpen={exportModalState.isOpen}
+          onClose={closeExportModal}
+          title={exportModalState.title}
+          filename={exportModalState.filename}
+          headers={exportModalState.headers}
+          rows={exportModalState.rows}
+          csvContent={exportModalState.csvContent}
+          apiBase={apiBase}
+        />
+      )}
     </div>
   );
 }

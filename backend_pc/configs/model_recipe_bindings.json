@@ -1,4 +1,20 @@
 {
-  "test": 123,
-  "active_recipe": "tmp_test_recipe.json"
+  "active_model": "unet_pytorch_new.tflite",
+  "active_recipe": "Product_Setting_ForTest.txt",
+  "active_machine_config": "Machine_Setting_WP269.txt",
+  "bindings": {
+    "unet.tflite": {
+      "recipe": "Product_Setting.txt",
+      "machine_config": "Machine_Setting_Test.txt"
+    },
+    "unet_pytorch_new.tflite": {
+      "recipe": "Product_Setting_ForTest.txt",
+      "machine_config": "Machine_Setting_WP269.txt"
+    },
+    "best_converted.tflite": {
+      "recipe": "Product_Setting_ForTest.txt",
+      "machine_config": "Machine_Setting_WP269.txt"
+    }
+  },
+  "test": 123
 }

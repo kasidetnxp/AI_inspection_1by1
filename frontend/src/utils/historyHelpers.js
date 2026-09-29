@@ -19,13 +19,13 @@ export const isDateRangeInvalid = (startDate, endDate) => {
 };
 
 /**
- * Standardized CSV Export Filename Generator
- * Format: [YYYYMMDD_HHMMSS]_[Machine]_[Batch].csv
- * Example: 20260901_145025_PROBER01_B2940.csv
+ * Standardized CSV Export Filename Generator for Inspection History
+ * Format: Wafer_Inspection_History_[Machine]_[Batch]_[YYYYMMDD_HHMMSS].csv
+ * Cleanly omits ALL/empty filters.
  */
 export const generateExportFilename = ({ machine, batch, now = new Date() }) => {
   const d = now instanceof Date && !isNaN(now.getTime()) ? now : new Date();
-  
+
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, "0");
   const day = String(d.getDate()).padStart(2, "0");
@@ -36,14 +36,111 @@ export const generateExportFilename = ({ machine, batch, now = new Date() }) => 
 
   const cleanMachine = (machine && machine !== "ALL" && machine !== "-")
     ? String(machine).trim().replace(/[^a-zA-Z0-9_-]/g, "_")
-    : "ALL";
+    : "";
 
   const cleanBatch = (batch && batch !== "ALL" && batch !== "-")
     ? String(batch).trim().replace(/[^a-zA-Z0-9_-]/g, "_")
-    : "ALL";
+    : "";
 
-  return `${timestampStr}_${cleanMachine}_${cleanBatch}.csv`;
+  const parts = ["Wafer_Inspection_History"];
+  if (cleanMachine) parts.push(cleanMachine);
+  if (cleanBatch) parts.push(cleanBatch);
+  parts.push(timestampStr);
+
+  return `${parts.join("_")}.csv`;
 };
+
+/**
+ * Standardized CSV Export Filename Generator for AI Benchmark Validation
+ * Format: Wafer_Benchmark_[Model]_[SessionID or YYYYMMDD_HHMMSS].csv
+ */
+export const generateBenchmarkExportFilename = ({ modelName, sessionId, now = new Date() }) => {
+  const cleanModel = (modelName && modelName.trim())
+    ? String(modelName).trim().replace(/\.(tflite|pth|pt|onnx)$/i, "").replace(/[^a-zA-Z0-9_-]/g, "_")
+    : "model";
+
+  if (sessionId && String(sessionId).trim()) {
+    const cleanSession = String(sessionId).trim().replace(/[^a-zA-Z0-9_-]/g, "_");
+    return `Wafer_Benchmark_${cleanModel}_${cleanSession}.csv`;
+  }
+
+  const d = now instanceof Date && !isNaN(now.getTime()) ? now : new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  const hh = String(d.getHours()).padStart(2, "0");
+  const mm = String(d.getMinutes()).padStart(2, "0");
+  const ss = String(d.getSeconds()).padStart(2, "0");
+  const timestampStr = `${y}${m}${day}_${hh}${mm}${ss}`;
+
+  return `Wafer_Benchmark_${cleanModel}_${timestampStr}.csv`;
+};
+
+/**
+ * Universal, reliable CSV downloader with UTF-8 BOM for Microsoft Excel compatibility.
+ * Supports File System Access API (showSaveFilePicker) to let user choose location
+ * and guarantee exact filename on disk without CDP interference.
+ */
+export const downloadCSVBlob = async (filename, csvString) => {
+  if (typeof window === "undefined" || typeof document === "undefined") return false;
+
+  const contentWithBOM = "\uFEFF" + csvString;
+
+  // Try modern File System Access API (preserves exact name, ignores CDP download interception)
+  if (typeof window.showSaveFilePicker === "function") {
+    try {
+      const handle = await window.showSaveFilePicker({
+        suggestedName: filename,
+        types: [{
+          description: "CSV Spreadsheet (*.csv)",
+          accept: { "text/csv": [".csv"] }
+        }]
+      });
+      const writable = await handle.createWritable();
+      await writable.write(contentWithBOM);
+      await writable.close();
+      return true;
+    } catch (err) {
+      if (err.name === "AbortError") {
+        return false; // User closed or canceled dialog
+      }
+      console.warn("showSaveFilePicker error, falling back to standard anchor:", err);
+    }
+  }
+
+  // Fallback to standard Blob URL download
+  const blob = new Blob([contentWithBOM], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.setAttribute("href", url);
+  link.setAttribute("download", filename);
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  return true;
+};
+
+/**
+ * Saves exported CSV directly to backend server's ~/Downloads directory
+ */
+export const saveCSVToDownloadsServer = async (apiBase, filename, csvString) => {
+  try {
+    const res = await fetch(`${apiBase}/api/export/save-to-downloads`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ filename, content: csvString })
+    });
+    if (res.ok) {
+      const data = await res.json();
+      return { success: true, data };
+    }
+    return { success: false, error: `HTTP ${res.status}` };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+};
+
 
 /**
  * Gets display date/time directly from record timestamp

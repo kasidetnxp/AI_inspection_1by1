@@ -27,6 +27,7 @@ export default function ModelsPage() {
     convertingModelName,
     currentInspection,
     effectiveBenchmarkPage,
+    fetchBenchmarkResults,
     fileInputRef,
     filteredBenchmarkResults,
     handleActivateModel,
@@ -152,6 +153,12 @@ export default function ModelsPage() {
       setBenchmarkActiveSubTab(tabParam);
     }
   }, [tabParam, setBenchmarkActiveSubTab]);
+
+  useEffect(() => {
+    if (benchmarkResults.length === 0 && fetchBenchmarkResults) {
+      fetchBenchmarkResults();
+    }
+  }, [benchmarkResults.length, fetchBenchmarkResults]);
 
   const switchSubTab = (tab) => {
     setBenchmarkActiveSubTab(tab);
@@ -374,14 +381,27 @@ export default function ModelsPage() {
                           <div className="priority-queue-card" style={{ padding: "14px 16px" }}>
                             <div className="priority-header" style={{ fontSize: "14px" }}>
                               <span>TASK STATUS</span>
-                              <span style={{ fontSize: "13px", fontWeight: "700", color: benchmarkProgress.status === "RUNNING" ? "#38bdf8" : "var(--text-muted)" }}>
+                              <span style={{
+                                fontSize: "13px",
+                                fontWeight: "700",
+                                color:
+                                  benchmarkProgress.status === "RUNNING" ? "#38bdf8" :
+                                  benchmarkProgress.status === "PAUSED" ? "#f59e0b" :
+                                  benchmarkProgress.status === "STOPPED" ? "#ef4444" :
+                                  benchmarkProgress.status === "COMPLETED" ? "#10b981" :
+                                  "var(--text-muted)"
+                              }}>
                                 {isBenchmarkStarting ? "UPLOADING..." : benchmarkProgress.status}
                               </span>
                             </div>
 
                             {benchmarkProgress.p0_pending > 0 && benchmarkProgress.status === "RUNNING" && (
-                              <div className="priority-warning-banner" style={{ fontSize: "13px", padding: "8px 12px" }}>
-                                ⏳ กำลังรอ — เครื่อง Prober กำลังประมวลผลภาพอยู่ การ Validation จะทำต่อโดยอัตโนมัติ
+                              <div className="priority-warning-banner" style={{ fontSize: "12.5px", padding: "8px 12px", display: "flex", alignItems: "center", justifyContent: "center", gap: "8px" }}>
+                                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+                                  <circle cx="12" cy="12" r="10"></circle>
+                                  <polyline points="12 6 12 12 16 14"></polyline>
+                                </svg>
+                                <span>Waiting for Prober — Live inspection in progress. Validation will resume automatically.</span>
                               </div>
                             )}
 
@@ -391,13 +411,19 @@ export default function ModelsPage() {
                                 style={{
                                   width: `${(benchmarkProgress.p1_total || benchmarkProgress.total || 0) > 0 
                                     ? Math.min(100, Math.round(((benchmarkProgress.p1_processed || benchmarkProgress.processed || 0) / (benchmarkProgress.p1_total || benchmarkProgress.total || 1)) * 100)) 
-                                    : 0}%`
+                                    : 0}%`,
+                                  background: benchmarkProgress.status === "STOPPED"
+                                    ? "linear-gradient(90deg, #ef4444, #f97316)"
+                                    : benchmarkProgress.status === "PAUSED"
+                                    ? "linear-gradient(90deg, #f59e0b, #fbbf24)"
+                                    : undefined
                                 }}
                               ></div>
                             </div>
                             <div style={{ display: "flex", justifyContent: "space-between", fontSize: "13px", color: "var(--text-muted)", marginTop: "6px" }}>
                               <span>
-                                Progress: {benchmarkProgress.p1_processed || benchmarkProgress.processed || 0} / {benchmarkProgress.p1_total || benchmarkProgress.total || 0} Images ({
+                                {benchmarkProgress.status === "STOPPED" ? "Stopped at: " : "Progress: "}
+                                {benchmarkProgress.p1_processed || benchmarkProgress.processed || 0} / {benchmarkProgress.p1_total || benchmarkProgress.total || 0} Images ({
                                   (benchmarkProgress.p1_total || benchmarkProgress.total || 0) > 0 
                                     ? Math.min(100, Math.round(((benchmarkProgress.p1_processed || benchmarkProgress.processed || 0) / (benchmarkProgress.p1_total || benchmarkProgress.total || 1)) * 100)) 
                                     : 0
@@ -413,19 +439,25 @@ export default function ModelsPage() {
                                 <button
                                   type="button"
                                   className="btn-resume-benchmark"
-                                  style={{ flex: 1, padding: "12px 16px", fontSize: "14px", whiteSpace: "nowrap" }}
+                                  style={{ flex: 1, padding: "12px 16px", fontSize: "14px", whiteSpace: "nowrap", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: "6px" }}
                                   onClick={handleResumeBenchmark}
                                 >
-                                  ▶ RESUME BENCHMARK
+                                  <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                                    <polygon points="5 3 19 12 5 21 5 3"></polygon>
+                                  </svg>
+                                  <span>RESUME BENCHMARK</span>
                                 </button>
                                 <button
                                   type="button"
                                   className="btn-stop-benchmark"
-                                  style={{ padding: "12px 16px", fontSize: "14px", flexShrink: 0, whiteSpace: "nowrap" }}
+                                  style={{ padding: "12px 16px", fontSize: "14px", flexShrink: 0, whiteSpace: "nowrap", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: "6px" }}
                                   onClick={handleStopBenchmark}
                                   title="Stop and clear remaining images"
                                 >
-                                  ⏹ STOP
+                                  <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
+                                    <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+                                  </svg>
+                                  <span>STOP</span>
                                 </button>
                               </>
                             ) : (
@@ -441,28 +473,37 @@ export default function ModelsPage() {
                                     ? "UPLOADING DATASET..."
                                     : benchmarkProgress.status === "RUNNING"
                                     ? "BENCHMARK RUNNING..."
+                                    : benchmarkProgress.status === "STOPPED"
+                                    ? "START NEW BENCHMARK"
                                     : "START BENCHMARK ON i.MX8"}
                                 </button>
                                 {benchmarkProgress.status === "RUNNING" && (
                                   <button
                                     type="button"
                                     className="btn-pause-benchmark"
-                                    style={{ padding: "12px 14px", fontSize: "14px", flexShrink: 0, whiteSpace: "nowrap" }}
+                                    style={{ padding: "12px 14px", fontSize: "14px", flexShrink: 0, whiteSpace: "nowrap", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: "6px" }}
                                     onClick={handlePauseBenchmark}
                                     title="Pause execution temporarily"
                                   >
-                                    ⏸ PAUSE
+                                    <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor">
+                                      <rect x="6" y="4" width="4" height="16"></rect>
+                                      <rect x="14" y="4" width="4" height="16"></rect>
+                                    </svg>
+                                    <span>PAUSE</span>
                                   </button>
                                 )}
                                 {(benchmarkProgress.status === "RUNNING" || isBenchmarkStarting) && (
                                   <button
                                     type="button"
                                     className="btn-stop-benchmark"
-                                    style={{ padding: "12px 14px", fontSize: "14px", flexShrink: 0, whiteSpace: "nowrap" }}
+                                    style={{ padding: "12px 14px", fontSize: "14px", flexShrink: 0, whiteSpace: "nowrap", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: "6px" }}
                                     onClick={handleStopBenchmark}
                                     title="Stop and cancel benchmark"
                                   >
-                                    ⏹ STOP
+                                    <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
+                                      <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+                                    </svg>
+                                    <span>STOP</span>
                                   </button>
                                 )}
                               </>

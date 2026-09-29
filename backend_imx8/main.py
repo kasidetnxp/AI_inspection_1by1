@@ -3502,6 +3502,115 @@ async def bind_model_config(payload: dict = Body(...)):
     print(f"[CONFIG] Bound model '{model_name}' to recipe '{recipe}'")
     log_audit("MODEL", "BIND_MODEL_CONFIG", f"Bound model '{model_name}' to recipe '{recipe or ''}'")
     return {"status": "success", "message": f"Bound model '{model_name}' to recipe '{recipe}'", "bindings": reg["bindings"]}
+@app.get("/api/config/{config_type}/{filename:path}")
+async def get_config_file(config_type: str, filename: str):
+    if config_type not in ("product", "machine"):
+        raise HTTPException(status_code=400, detail="Invalid config type. Must be 'product' or 'machine'")
+
+    clean_name = sanitize_safe_filename(filename, allowed_extensions=[".txt", ".json"])
+    base_dir = RECIPES_DIR if config_type == "product" else MACHINES_DIR
+    target = os.path.join(base_dir, clean_name)
+    if not is_safe_target_path(base_dir, target):
+        raise HTTPException(status_code=400, detail="Invalid target path")
+
+    if not os.path.exists(target):
+        raise HTTPException(status_code=404, detail=f"File '{clean_name}' not found")
+
+    try:
+        with open(target, "r", encoding="utf-8") as f:
+            raw_content = f.read()
+        parsed = None
+        try:
+            parsed = json.loads(raw_content)
+        except Exception:
+            pass
+
+        return {
+            "status": "success",
+            "config_type": config_type,
+            "filename": clean_name,
+            "content": raw_content,
+            "parsed": parsed
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/config/{config_type}/save")
+async def save_config_file(config_type: str, payload: dict = Body(...)):
+    global ACTIVE_PRODUCT_SETTING, ACTIVE_MACHINE_SETTING
+    if config_type not in ("product", "machine"):
+        raise HTTPException(status_code=400, detail="Invalid config type. Must be 'product' or 'machine'")
+
+    raw_filename = payload.get("filename")
+    if not raw_filename or not str(raw_filename).strip():
+        raise HTTPException(status_code=400, detail="Filename is required")
+
+    filename = str(raw_filename).strip()
+    if not filename.endswith((".txt", ".json")):
+        filename += ".txt"
+    clean_name = sanitize_safe_filename(filename, allowed_extensions=[".txt", ".json"])
+
+    raw_content = payload.get("content")
+    if raw_content is None:
+        raise HTTPException(status_code=400, detail="Config content is required")
+
+    if isinstance(raw_content, str):
+        try:
+            parsed = json.loads(raw_content)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Invalid JSON format: {str(e)}")
+    elif isinstance(raw_content, dict):
+        parsed = raw_content
+    else:
+        raise HTTPException(status_code=400, detail="Content must be a JSON string or object")
+
+    if not isinstance(parsed, dict):
+        raise HTTPException(status_code=400, detail="Config content must be a JSON object")
+
+    base_dir = RECIPES_DIR if config_type == "product" else MACHINES_DIR
+    os.makedirs(base_dir, exist_ok=True)
+    target = os.path.join(base_dir, clean_name)
+    if not is_safe_target_path(base_dir, target):
+        raise HTTPException(status_code=400, detail="Invalid target path")
+
+    try:
+        with open(target, "w", encoding="utf-8") as f:
+            json.dump(parsed, f, indent=2)
+
+        reg = load_config_registry()
+        is_currently_active = (
+            (config_type == "product" and reg.get("active_recipe") == clean_name) or
+            (config_type == "machine" and reg.get("active_machine_config") == clean_name)
+        )
+        should_activate = bool(payload.get("activate", False)) or is_currently_active
+
+        if should_activate:
+            if config_type == "product":
+                ACTIVE_PRODUCT_SETTING.clear()
+                ACTIVE_PRODUCT_SETTING.update(parsed)
+                save_active_product_setting(ACTIVE_PRODUCT_SETTING)
+                reg["active_recipe"] = clean_name
+                save_config_registry(reg)
+                log_audit("RECIPE", "SAVE_RECIPE", f"Saved and activated recipe '{clean_name}'")
+            else:
+                ACTIVE_MACHINE_SETTING.clear()
+                ACTIVE_MACHINE_SETTING.update(parsed)
+                save_active_machine_setting(ACTIVE_MACHINE_SETTING)
+                reg["active_machine_config"] = clean_name
+                save_config_registry(reg)
+                log_audit("MACHINE", "SAVE_MACHINE_CONFIG", f"Saved and activated machine setting '{clean_name}'")
+        else:
+            log_audit(config_type.upper(), f"SAVE_{config_type.upper()}_CONFIG", f"Saved {config_type} config '{clean_name}'")
+
+        return {
+            "status": "success",
+            "message": f"Successfully saved {config_type} config '{clean_name}'" + (" and activated" if should_activate else ""),
+            "filename": clean_name,
+            "activated": should_activate,
+            "parsed": parsed
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.delete("/api/config/{config_type}/{filename:path}")
 async def delete_config_file(config_type: str, filename: str):

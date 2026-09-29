@@ -21,6 +21,8 @@ import {
   sortRecords,
   getRecordDisplayDateTime,
   generateExportFilename,
+  generateBenchmarkExportFilename,
+  downloadCSVBlob,
   isDateRangeInvalid,
   splitBatchAndWafer
 } from "../utils/historyHelpers";
@@ -65,6 +67,8 @@ export function InspectionProvider({ children }) {
 
   const [edgeIp, setEdgeIp] = useState(getDefaultEdgeIp);
   const apiBase = `http://${edgeIp}:8001`;
+  const pcHost = typeof window !== "undefined" ? (window.location.hostname || "localhost") : "localhost";
+  const pcApiBase = `http://${pcHost === "0.0.0.0" || pcHost === "::" ? "localhost" : pcHost}:3000`;
 
   const resolveImageUrl = (url, machine) => {
     if (!url) return null;
@@ -210,7 +214,7 @@ export function InspectionProvider({ children }) {
 
   // Filter logs logic for History Tab with sorting & date range
   const historyList = Array.isArray(history) ? history : [];
-  
+
   const todayStr = (() => {
     const now = new Date();
     const y = now.getFullYear();
@@ -225,7 +229,7 @@ export function InspectionProvider({ children }) {
       if (analyticsFilter === "FAIL" && record.decision === "PASS") return false;
       if (analyticsBatchFilter !== "ALL" && record.batch !== analyticsBatchFilter) return false;
       if (analyticsMachineFilter !== "ALL" && (record.machineNo || "PROBER01") !== analyticsMachineFilter) return false;
-      
+
       // Date Filtering
       const recDate = normalizeRecordDate(record);
       const recMs = getRecordTimestampMs(record);
@@ -503,6 +507,20 @@ export function InspectionProvider({ children }) {
   const [benchmarkReportData, setBenchmarkReportData] = useState(null);
   const [isBenchmarkStarting, setIsBenchmarkStarting] = useState(false);
 
+  // Global CSV Export Preview Modal State
+  const [exportModalState, setExportModalState] = useState({
+    isOpen: false,
+    title: "",
+    filename: "",
+    headers: [],
+    rows: [],
+    csvContent: ""
+  });
+
+  const closeExportModal = useCallback(() => {
+    setExportModalState(prev => ({ ...prev, isOpen: false }));
+  }, []);
+
   useEffect(() => {
     if (benchmarkSplitModalItem) {
       setBenchmarkModalComment(benchmarkSplitModalItem.notes || "");
@@ -577,7 +595,7 @@ export function InspectionProvider({ children }) {
 
   const fetchActiveConfig = useCallback(async () => {
     try {
-      const res = await fetch(`${apiBase}/api/config/active`);
+      const res = await fetch(`${apiBase}/api/config/active?t=${Date.now()}`);
       if (res.ok) {
         const data = await res.json();
         setActiveConfig(data);
@@ -633,8 +651,9 @@ export function InspectionProvider({ children }) {
     setConfigUploadStatus("Uploading Product Recipe...");
     const formData = new FormData();
     formData.append("file", file);
+    formData.append("edge_ip", edgeIp);
     try {
-      const res = await fetch(`${apiBase}/api/config/upload-product`, {
+      const res = await fetch(`${pcApiBase}/api/v1/configs/product/upload`, {
         method: "POST",
         body: formData
       });
@@ -660,8 +679,9 @@ export function InspectionProvider({ children }) {
     setConfigUploadStatus("Uploading Machine Setting...");
     const formData = new FormData();
     formData.append("file", file);
+    formData.append("edge_ip", edgeIp);
     try {
-      const res = await fetch(`${apiBase}/api/config/upload-machine`, {
+      const res = await fetch(`${pcApiBase}/api/v1/configs/machine/upload`, {
         method: "POST",
         body: formData
       });
@@ -713,7 +733,7 @@ export function InspectionProvider({ children }) {
 
   const fetchConfigLibrary = useCallback(async () => {
     try {
-      const res = await fetch(`${apiBase}/api/configs`);
+      const res = await fetch(`${pcApiBase}/api/v1/configs?t=${Date.now()}`);
       if (res.ok) {
         const data = await res.json();
         setConfigLibrary(data);
@@ -727,10 +747,10 @@ export function InspectionProvider({ children }) {
 
   const handleActivateRecipe = async (name) => {
     try {
-      const res = await fetch(`${apiBase}/api/config/activate-recipe`, {
+      const res = await fetch(`${pcApiBase}/api/v1/configs/activate-recipe`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name })
+        body: JSON.stringify({ name, edge_ip: edgeIp })
       });
       const data = await res.json();
       if (res.ok) {
@@ -747,10 +767,10 @@ export function InspectionProvider({ children }) {
 
   const handleActivateMachine = async (name) => {
     try {
-      const res = await fetch(`${apiBase}/api/config/activate-machine`, {
+      const res = await fetch(`${pcApiBase}/api/v1/configs/activate-machine`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name })
+        body: JSON.stringify({ name, edge_ip: edgeIp })
       });
       const data = await res.json();
       if (res.ok) {
@@ -792,7 +812,7 @@ export function InspectionProvider({ children }) {
       if (!window.confirm(`Delete ${configType} config '${filename}'?`)) return;
     }
     try {
-      const res = await fetch(`${apiBase}/api/config/${configType}/${encodeURIComponent(filename)}`, {
+      const res = await fetch(`${pcApiBase}/api/v1/configs/${configType}/${encodeURIComponent(filename)}`, {
         method: "DELETE"
       });
       const data = await res.json();
@@ -804,6 +824,46 @@ export function InspectionProvider({ children }) {
       }
     } catch (err) {
       alert(`Error: ${err.message}`);
+    }
+  };
+
+  const fetchConfigFile = async (configType, filename) => {
+    try {
+      const res = await fetch(`${pcApiBase}/api/v1/configs/${configType}/file/${encodeURIComponent(filename)}`);
+      if (res.ok) {
+        return await res.json();
+      }
+      const err = await res.json();
+      throw new Error(err.detail || err.message || "Failed to load config file");
+    } catch (e) {
+      console.error("fetchConfigFile error:", e);
+      throw e;
+    }
+  };
+
+  const saveConfigFile = async (configType, filename, content, activate = false) => {
+    try {
+      const res = await fetch(`${pcApiBase}/api/v1/configs/${configType}/save`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          filename,
+          content,
+          activate,
+          edge_ip: edgeIp
+        })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setConfigUploadStatus(data.message || `Saved ${filename}`);
+        await fetchConfigLibrary();
+        await fetchActiveConfig();
+        return { success: true, data };
+      }
+      return { success: false, error: data.detail || data.message || "Save failed" };
+    } catch (e) {
+      console.error("saveConfigFile error:", e);
+      return { success: false, error: e.message };
     }
   };
 
@@ -863,8 +923,6 @@ export function InspectionProvider({ children }) {
   // ==========================================
   // PC MODEL TRAINING MODULE (backend_pc)
   // ==========================================
-  const pcHost = typeof window !== "undefined" ? (window.location.hostname || "localhost") : "localhost";
-  const pcApiBase = `http://${pcHost === "0.0.0.0" || pcHost === "::" ? "localhost" : pcHost}:3000`;
 
   const [trainingStatus, setTrainingStatus] = useState({
     state: "idle",
@@ -1271,20 +1329,40 @@ export function InspectionProvider({ children }) {
       .catch(err => console.error("Error fetching report:", err));
   };
 
-  const handleExportBenchmarkCSV = () => {
-    if (benchmarkResults.length === 0) {
-      alert("No benchmark data to export.");
+  const handleExportBenchmarkCSV = async () => {
+    let resultsToExport = benchmarkResults;
+
+    if (!resultsToExport || resultsToExport.length === 0) {
+      const sessId = benchmarkProgress.active_session_id;
+      const query = sessId ? `?session_id=${encodeURIComponent(sessId)}` : "";
+      try {
+        const res = await fetch(`${apiBase}/api/model/benchmark/results${query}`);
+        if (res.ok) {
+          const data = await res.json();
+          if (data && Array.isArray(data.results) && data.results.length > 0) {
+            resultsToExport = data.results;
+            setBenchmarkResults(data.results);
+          }
+        }
+      } catch (e) {
+        console.error("Error fetching benchmark results for export:", e);
+      }
+    }
+
+    if (!resultsToExport || resultsToExport.length === 0) {
+      alert("No benchmark records available to export. Please run or select a benchmark validation session first.");
       return;
     }
+
     const headers = [
       "Image Name", "AI Decision", "Human Review", "Agreement",
       "Confidence (%)", "Inference Time (ms)", "Rule Time (ms)",
       "Min Edge Distance (um)", "Mark Area Ratio (%)", "Pads Count", "Marks Count", "AI Reason"
     ];
-    const rows = benchmarkResults.map(r => {
+    const dataRows = resultsToExport.map(r => {
       const isAgree = r.human_decision === "UNREVIEWED" ? "PENDING" : (r.ai_decision === r.human_decision ? "AGREE" : "DISAGREE");
       return [
-        `"${r.image_name}"`,
+        r.image_name,
         r.ai_decision,
         r.human_decision,
         isAgree,
@@ -1295,24 +1373,36 @@ export function InspectionProvider({ children }) {
         r.mark_area_ratio_pct,
         r.pads_count,
         r.marks_count,
-        `"${(r.ai_reason || '-').replace(/"/g, '""')}"`
-      ].join(",");
+        r.ai_reason || '-'
+      ];
     });
-    const csvContent = "data:text/csv;charset=utf-8," + [headers.join(","), ...rows].join("\n");
-    const encodedUri = encodeURI(csvContent);
-    const link = document.createElement("a");
-    link.setAttribute("href", encodedUri);
-    link.setAttribute("download", `Wafer_Model_Benchmark_${benchmarkModel}_${new Date().toISOString().slice(0, 10)}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+    const csvContent = [
+      headers.join(","),
+      ...dataRows.map(row => row.map(cell => `"${String(cell ?? "").replace(/"/g, '""')}"`).join(","))
+    ].join("\n");
+
+    const sessId = benchmarkProgress.active_session_id || (resultsToExport[0] && resultsToExport[0].session_id) || "";
+    const downloadFilename = generateBenchmarkExportFilename({
+      modelName: benchmarkModel,
+      sessionId: sessId,
+      now: new Date()
+    });
+
+    setExportModalState({
+      isOpen: true,
+      title: "AI Benchmark Validation Export",
+      filename: downloadFilename,
+      headers,
+      rows: dataRows,
+      csvContent
+    });
   };
 
   const handleUploadFile = async (file) => {
     if (!file) return;
     const isPth = file.name.toLowerCase().endsWith(".pth") || file.name.toLowerCase().endsWith(".pt");
     const isTflite = file.name.toLowerCase().endsWith(".tflite");
-    
+
     if (!isPth && !isTflite) {
       alert("รองรับเฉพาะไฟล์โมเดล .pth หรือ .tflite เท่านั้น");
       return;
@@ -2370,29 +2460,29 @@ export function InspectionProvider({ children }) {
       alert("No inspection records available to export.");
       return;
     }
-    const csvRows = [
-      ["Timestamp", "Machine no", "Batch", "Wafer no", "Pad", "Site", "XY Coordinate", "Temp", "Result", "Failure Reason", "Latency (ms)"]
+    const headers = [
+      "Timestamp", "Machine no", "Batch", "Wafer no", "Pad", "Site", "XY Coordinate", "Temp", "Result", "Failure Reason", "Latency (ms)"
     ];
-    exportList.forEach(rec => {
+    const dataRows = exportList.map(rec => {
       const bw = splitBatchAndWafer ? splitBatchAndWafer(rec) : { batch: rec.batch || "-", waferNo: rec.waferNo || "-" };
-      csvRows.push([
-        `"${getRecordDisplayDateTime(rec)}"`,
-        `"${rec.machineNo || "WP288"}"`,
-        `"${bw.batch}"`,
-        `"${bw.waferNo}"`,
-        `"${rec.pad || "-"}"`,
-        `"${rec.site || "-"}"`,
-        `"${rec.xyCoord || "-"}"`,
-        `"${rec.temp || "-"}"`,
-        `"${rec.decision}"`,
-        `"${rec.reason || "-"}"`,
+      return [
+        getRecordDisplayDateTime(rec),
+        rec.machineNo || "WP288",
+        bw.batch,
+        bw.waferNo,
+        rec.pad || "-",
+        rec.site || "-",
+        rec.xyCoord || "-",
+        rec.temp || "-",
+        rec.decision,
+        rec.reason || "-",
         rec.inferenceTime ?? 0
-      ]);
+      ];
     });
-    const csvContent = "data:text/csv;charset=utf-8," + csvRows.map(e => e.join(",")).join("\n");
-    const encodedUri = encodeURI(csvContent);
-    const link = document.createElement("a");
-    link.setAttribute("href", encodedUri);
+    const csvContent = [
+      headers.join(","),
+      ...dataRows.map(row => row.map(cell => `"${String(cell ?? "").replace(/"/g, '""')}"`).join(","))
+    ].join("\n");
 
     const downloadFilename = generateExportFilename({
       machine: analyticsMachineFilter,
@@ -2400,10 +2490,14 @@ export function InspectionProvider({ children }) {
       now: new Date()
     });
 
-    link.setAttribute("download", downloadFilename);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+    setExportModalState({
+      isOpen: true,
+      title: "Inspection History Export",
+      filename: downloadFilename,
+      headers,
+      rows: dataRows,
+      csvContent
+    });
   };
 
   // Filter logs logic for Analytics Tab & local yields (memoized for high record volumes)
@@ -2490,6 +2584,9 @@ export function InspectionProvider({ children }) {
     effectiveBenchmarkPage,
     effectiveHistoryPage,
     exportToCSV,
+    exportModalState,
+    closeExportModal,
+    setExportModalState,
     failCount,
     failCountChart,
     fetchActiveConfig,
@@ -2497,6 +2594,8 @@ export function InspectionProvider({ children }) {
     fetchBenchmarkProgress,
     fetchBenchmarkResults,
     fetchConfigLibrary,
+    fetchConfigFile,
+    saveConfigFile,
     fetchModels,
     fileInputRef,
     filterSearch,

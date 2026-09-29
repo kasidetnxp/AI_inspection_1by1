@@ -8,31 +8,51 @@ import {
   sortRecords,
   getRecordDisplayDateTime,
   generateExportFilename,
+  generateBenchmarkExportFilename,
   isDateRangeInvalid,
   splitBatchAndWafer
 } from "./historyHelpers.js";
 
-test("generateExportFilename generates [YYYYMMDD_HHMMSS]_[Machine]_[Batch].csv format", () => {
+test("generateExportFilename generates clean formatted filename with Wafer_Inspection_History prefix", () => {
   const mockDate = new Date(2026, 8, 1, 14, 50, 25); // 2026-09-01 14:50:25
 
   assert.equal(
     generateExportFilename({ machine: "PROBER01", batch: "B2940", now: mockDate }),
-    "20260901_145025_PROBER01_B2940.csv"
+    "Wafer_Inspection_History_PROBER01_B2940_20260901_145025.csv"
   );
 
   assert.equal(
     generateExportFilename({ machine: "ALL", batch: "ALL", now: mockDate }),
-    "20260901_145025_ALL_ALL.csv"
+    "Wafer_Inspection_History_20260901_145025.csv"
   );
 
   assert.equal(
     generateExportFilename({ machine: "", batch: "", now: mockDate }),
-    "20260901_145025_ALL_ALL.csv"
+    "Wafer_Inspection_History_20260901_145025.csv"
   );
 
   assert.equal(
     generateExportFilename({ machine: "WP 288 #1", batch: "LOT-99/A", now: mockDate }),
-    "20260901_145025_WP_288__1_LOT-99_A.csv"
+    "Wafer_Inspection_History_WP_288__1_LOT-99_A_20260901_145025.csv"
+  );
+});
+
+test("generateBenchmarkExportFilename formats model name and session/timestamp cleanly", () => {
+  const mockDate = new Date(2026, 8, 1, 14, 50, 25); // 2026-09-01 14:50:25
+
+  assert.equal(
+    generateBenchmarkExportFilename({ modelName: "unet_pytorch_new.tflite", sessionId: "BM-20260929-152034", now: mockDate }),
+    "Wafer_Benchmark_unet_pytorch_new_BM-20260929-152034.csv"
+  );
+
+  assert.equal(
+    generateBenchmarkExportFilename({ modelName: "best_converted.tflite", sessionId: "", now: mockDate }),
+    "Wafer_Benchmark_best_converted_20260901_145025.csv"
+  );
+
+  assert.equal(
+    generateBenchmarkExportFilename({ modelName: "", sessionId: null, now: mockDate }),
+    "Wafer_Benchmark_model_20260901_145025.csv"
   );
 });
 

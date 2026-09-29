@@ -14,12 +14,13 @@ const events_gateway_1 = require("./events/events.gateway");
 const hardware_monitor_service_1 = require("./events/hardware-monitor.service");
 const training_module_1 = require("./training/training.module");
 const models_module_1 = require("./models/models.module");
+const configs_module_1 = require("./configs/configs.module");
 let AppModule = class AppModule {
 };
 exports.AppModule = AppModule;
 exports.AppModule = AppModule = __decorate([
     (0, common_1.Module)({
-        imports: [training_module_1.TrainingModule, models_module_1.ModelsModule],
+        imports: [training_module_1.TrainingModule, models_module_1.ModelsModule, configs_module_1.ConfigsModule],
         controllers: [inspections_controller_1.InspectionsController],
         providers: [inspections_service_1.InspectionsService, events_gateway_1.EventsGateway, hardware_monitor_service_1.HardwareMonitorService],
     })
