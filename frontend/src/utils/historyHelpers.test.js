@@ -9,6 +9,7 @@ import {
   getRecordDisplayDateTime,
   generateExportFilename,
   generateBenchmarkExportFilename,
+  generateAuditLogExportFilename,
   isDateRangeInvalid,
   splitBatchAndWafer
 } from "./historyHelpers.js";
@@ -53,6 +54,30 @@ test("generateBenchmarkExportFilename formats model name and session/timestamp c
   assert.equal(
     generateBenchmarkExportFilename({ modelName: "", sessionId: null, now: mockDate }),
     "Wafer_Benchmark_model_20260901_145025.csv"
+  );
+});
+
+test("generateAuditLogExportFilename formats category and timestamp cleanly", () => {
+  const mockDate = new Date(2026, 8, 1, 14, 50, 25); // 2026-09-01 14:50:25
+
+  assert.equal(
+    generateAuditLogExportFilename({ category: "ALL", now: mockDate }),
+    "Wafer_Audit_Logs_ALL_20260901_145025.csv"
+  );
+
+  assert.equal(
+    generateAuditLogExportFilename({ category: "RECIPE", now: mockDate }),
+    "Wafer_Audit_Logs_RECIPE_20260901_145025.csv"
+  );
+
+  assert.equal(
+    generateAuditLogExportFilename({ category: "security settings", now: mockDate }),
+    "Wafer_Audit_Logs_SECURITY_SETTINGS_20260901_145025.csv"
+  );
+
+  assert.equal(
+    generateAuditLogExportFilename({ category: "", now: mockDate }),
+    "Wafer_Audit_Logs_ALL_20260901_145025.csv"
   );
 });
 

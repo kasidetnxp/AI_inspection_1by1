@@ -22,6 +22,7 @@ import {
   getRecordDisplayDateTime,
   generateExportFilename,
   generateBenchmarkExportFilename,
+  generateAuditLogExportFilename,
   downloadCSVBlob,
   isDateRangeInvalid,
   splitBatchAndWafer
@@ -914,11 +915,29 @@ export function InspectionProvider({ children }) {
     return [];
   }, [apiBase]);
 
-  const exportAuditCSV = (category = "", search = "") => {
-    const params = new URLSearchParams();
-    if (category && category !== "ALL") params.append("category", category);
-    if (search && search.trim() !== "") params.append("search", search.trim());
-    window.open(`${apiBase}/api/audit-logs/export-csv?${params.toString()}`, "_blank");
+  const exportAuditCSV = async (category = "", search = "") => {
+    try {
+      const params = new URLSearchParams();
+      if (category && category !== "ALL") params.append("category", category);
+      if (search && search.trim() !== "") params.append("search", search.trim());
+
+      const res = await fetch(`${apiBase}/api/audit-logs/export-csv?${params.toString()}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const csvText = await res.text();
+
+      const downloadFilename = generateAuditLogExportFilename({
+        category,
+        now: new Date()
+      });
+      await downloadCSVBlob(downloadFilename, csvText);
+    } catch (err) {
+      console.error("Direct export audit logs failed:", err);
+      // Fallback in case of fetch failure
+      const params = new URLSearchParams();
+      if (category && category !== "ALL") params.append("category", category);
+      if (search && search.trim() !== "") params.append("search", search.trim());
+      window.open(`${apiBase}/api/audit-logs/export-csv?${params.toString()}`, "_blank");
+    }
   };
 
   const logAuditEvent = async (category, action, details, author = "Operator") => {
@@ -1434,14 +1453,7 @@ export function InspectionProvider({ children }) {
       now: new Date()
     });
 
-    setExportModalState({
-      isOpen: true,
-      title: "AI Benchmark Validation Export",
-      filename: downloadFilename,
-      headers,
-      rows: dataRows,
-      csvContent
-    });
+    await downloadCSVBlob(downloadFilename, csvContent);
   };
 
   const handleUploadFile = async (file) => {
@@ -2564,20 +2576,28 @@ export function InspectionProvider({ children }) {
       ...dataRows.map(row => row.map(cell => `"${String(cell ?? "").replace(/"/g, '""')}"`).join(","))
     ].join("\n");
 
+    // Intelligently infer machine and batch if filter is ALL or empty
+    let machineName = analyticsMachineFilter;
+    let batchName = analyticsBatchFilter;
+    if (!machineName || machineName === "ALL") {
+      const machines = [...new Set(exportList.map(r => r.machineNo).filter(Boolean))];
+      if (machines.length === 1) machineName = machines[0];
+    }
+    if (!batchName || batchName === "ALL") {
+      const batches = [...new Set(exportList.map(r => {
+        const bw = splitBatchAndWafer ? splitBatchAndWafer(r) : { batch: r.batch };
+        return bw.batch;
+      }).filter(b => b && b !== "-" && b !== "UNKNOWN"))];
+      if (batches.length === 1) batchName = batches[0];
+    }
+
     const downloadFilename = generateExportFilename({
-      machine: analyticsMachineFilter,
-      batch: analyticsBatchFilter,
+      machine: machineName,
+      batch: batchName,
       now: new Date()
     });
 
-    setExportModalState({
-      isOpen: true,
-      title: "Inspection History Export",
-      filename: downloadFilename,
-      headers,
-      rows: dataRows,
-      csvContent
-    });
+    downloadCSVBlob(downloadFilename, csvContent);
   };
 
   // Filter logs logic for Analytics Tab & local yields (memoized for high record volumes)

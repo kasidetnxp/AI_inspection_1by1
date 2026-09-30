@@ -76,48 +76,42 @@ export const generateBenchmarkExportFilename = ({ modelName, sessionId, now = ne
   return `Wafer_Benchmark_${cleanModel}_${timestampStr}.csv`;
 };
 
+export const generateAuditLogExportFilename = ({ category, now = new Date() }) => {
+  const d = now instanceof Date && !isNaN(now.getTime()) ? now : new Date();
+
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  const hh = String(d.getHours()).padStart(2, "0");
+  const mm = String(d.getMinutes()).padStart(2, "0");
+  const ss = String(d.getSeconds()).padStart(2, "0");
+  const timestampStr = `${y}${m}${day}_${hh}${mm}${ss}`;
+
+  const cleanCategory = (category && category !== "ALL")
+    ? String(category).trim().toUpperCase().replace(/[^a-zA-Z0-9_-]/g, "_")
+    : "ALL";
+
+  return `Wafer_Audit_Logs_${cleanCategory}_${timestampStr}.csv`;
+};
+
 /**
- * Universal, reliable CSV downloader with UTF-8 BOM for Microsoft Excel compatibility.
- * Supports File System Access API (showSaveFilePicker) to let user choose location
- * and guarantee exact filename on disk without CDP interference.
+ * Universal 1-click CSV downloader with UTF-8 BOM for instant, direct downloads
+ * into the user's Downloads directory without OS save modals or page popups.
  */
 export const downloadCSVBlob = async (filename, csvString) => {
   if (typeof window === "undefined" || typeof document === "undefined") return false;
 
   const contentWithBOM = "\uFEFF" + csvString;
-
-  // Try modern File System Access API (preserves exact name, ignores CDP download interception)
-  if (typeof window.showSaveFilePicker === "function") {
-    try {
-      const handle = await window.showSaveFilePicker({
-        suggestedName: filename,
-        types: [{
-          description: "CSV Spreadsheet (*.csv)",
-          accept: { "text/csv": [".csv"] }
-        }]
-      });
-      const writable = await handle.createWritable();
-      await writable.write(contentWithBOM);
-      await writable.close();
-      return true;
-    } catch (err) {
-      if (err.name === "AbortError") {
-        return false; // User closed or canceled dialog
-      }
-      console.warn("showSaveFilePicker error, falling back to standard anchor:", err);
-    }
-  }
-
-  // Fallback to standard Blob URL download
   const blob = new Blob([contentWithBOM], { type: "text/csv;charset=utf-8;" });
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.setAttribute("href", url);
   link.setAttribute("download", filename);
+  link.style.display = "none";
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  setTimeout(() => URL.revokeObjectURL(url), 1500);
   return true;
 };
 

@@ -3849,16 +3849,23 @@ async def get_audit_logs(limit: int = 100, category: str = None, search: str = N
         return {"status": "success", "total": len(MEMORY_AUDIT_LOGS[:limit]), "logs": list(MEMORY_AUDIT_LOGS[:limit])}
 
 @app.get("/api/audit-logs/export-csv")
-async def export_audit_logs_csv(category: str = None):
+async def export_audit_logs_csv(category: str = None, search: str = None):
     """Exports audit logs as a downloadable CSV spreadsheet."""
     import io
     import csv
     from fastapi.responses import Response
+    clean_cat = category.strip().upper() if category and category.strip().upper() != "ALL" else "ALL"
+    timestamp_str = time.strftime('%Y%m%d_%H%M%S')
+    filename = f"Wafer_Audit_Logs_{clean_cat}_{timestamp_str}.csv"
+
     conn = get_pg_connection()
     if conn is None:
         filtered = list(MEMORY_AUDIT_LOGS)
-        if category and category.upper() != "ALL":
-            filtered = [l for l in filtered if l.get("category", "").upper() == category.upper()]
+        if clean_cat != "ALL":
+            filtered = [l for l in filtered if l.get("category", "").upper() == clean_cat]
+        if search and search.strip():
+            s_term = search.strip().lower()
+            filtered = [l for l in filtered if s_term in str(l.get("action", "")).lower() or s_term in str(l.get("details", "")).lower()]
         output = io.StringIO()
         writer = csv.writer(output)
         writer.writerow(["Timestamp", "Category", "Action", "Details", "Author"])
@@ -3866,15 +3873,20 @@ async def export_audit_logs_csv(category: str = None):
             writer.writerow([r.get("timestamp"), r.get("category"), r.get("action"), r.get("details"), r.get("author")])
         csv_content = output.getvalue()
         output.close()
-        filename = f"audit_logs_{time.strftime('%Y%m%d_%H%M%S')}.csv"
         return Response(content=csv_content, media_type="text/csv", headers={"Content-Disposition": f"attachment; filename={filename}"})
     try:
         cursor = conn.cursor()
         query = "SELECT timestamp, category, action, details, author FROM audit_logs"
         params = []
-        if category and category.upper() != "ALL":
-            query += " WHERE category = %s"
-            params.append(category.upper())
+        where_clauses = []
+        if clean_cat != "ALL":
+            where_clauses.append("category = %s")
+            params.append(clean_cat)
+        if search and search.strip():
+            where_clauses.append("(action ILIKE %s OR details ILIKE %s)")
+            params.extend([f"%{search.strip()}%", f"%{search.strip()}%"])
+        if where_clauses:
+            query += " WHERE " + " AND ".join(where_clauses)
         query += " ORDER BY id DESC"
         cursor.execute(query, tuple(params))
         rows = cursor.fetchall()
@@ -3888,7 +3900,6 @@ async def export_audit_logs_csv(category: str = None):
             writer.writerow([r[0], r[1], r[2], r[3], r[4]])
 
         csv_content = output.getvalue()
-        filename = f"audit_logs_{time.strftime('%Y%m%d_%H%M%S')}.csv"
         return Response(
             content=csv_content,
             media_type="text/csv",
