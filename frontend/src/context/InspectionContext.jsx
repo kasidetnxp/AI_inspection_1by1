@@ -351,8 +351,20 @@ export function InspectionProvider({ children }) {
   const [isModelConverting, setIsModelConverting] = useState(false);
   const [convertingModelName, setConvertingModelName] = useState("");
 
-  const [benchmarkActiveSubTab, setBenchmarkActiveSubTab] = useState("hub"); // "hub" | "validation" | "registry"
-  const [benchmarkModel, setBenchmarkModel] = useState("unet.tflite");
+  const [benchmarkModel, setBenchmarkModelState] = useState(() => {
+    try {
+      return localStorage.getItem("BENCHMARK_TARGET_MODEL") || "";
+    } catch (e) {
+      return "";
+    }
+  });
+
+  const setBenchmarkModel = (val) => {
+    setBenchmarkModelState(val);
+    try {
+      if (val) localStorage.setItem("BENCHMARK_TARGET_MODEL", val);
+    } catch (e) {}
+  };
   const [benchmarkZipFile, setBenchmarkZipFile] = useState(null);
   const [benchmarkDataset, setBenchmarkDataset] = useState("all_wafers");
   const [benchmarkDatasetsList, setBenchmarkDatasetsList] = useState([]);
@@ -1134,19 +1146,27 @@ export function InspectionProvider({ children }) {
       .catch(err => console.error("Error fetching datasets:", err));
   };
 
-  const fetchBenchmarkProgress = () => {
-    const sessId = benchmarkProgress.active_session_id || (benchmarkResults[0] && benchmarkResults[0].session_id);
+  const fetchBenchmarkProgress = (forcedSessionId) => {
+    const sessId = forcedSessionId || benchmarkProgress.active_session_id;
     const query = sessId ? `?session_id=${encodeURIComponent(sessId)}` : "";
     fetch(`${apiBase}/api/model/benchmark/progress${query}`)
       .then(res => res.ok ? res.json() : null)
       .then(data => {
         if (data) {
           setBenchmarkProgress(prev => {
+            const currentTotal = data.p1_total ?? data.total ?? prev.p1_total ?? 0;
+            const currentProcessed = data.p1_processed ?? data.processed ?? prev.p1_processed ?? 0;
+
+            // If benchmark is actively running, avoid polling race condition overriding newer count
+            if (prev.status === "RUNNING" && prev.active_session_id === data.active_session_id && prev.p1_processed > currentProcessed) {
+              return prev;
+            }
+
             const updated = {
               ...prev,
               ...data,
-              p1_total: data.p1_total ?? data.total ?? prev.p1_total ?? 0,
-              p1_processed: data.p1_processed ?? data.processed ?? prev.p1_processed ?? 0,
+              p1_total: currentTotal,
+              p1_processed: currentProcessed,
               status: data.status || prev.status
             };
             return JSON.stringify(prev) === JSON.stringify(updated) ? prev : updated;
@@ -1302,8 +1322,32 @@ export function InspectionProvider({ children }) {
       })
       .then(data => {
         setIsBenchmarkStarting(false);
-        setBenchmarkResults([]);
-        fetchBenchmarkProgress();
+        const newSessionId = data.session_id;
+        if (newSessionId) {
+          setBenchmarkProgress(prev => ({
+            ...prev,
+            status: "RUNNING",
+            active_session_id: newSessionId,
+            p1_processed: 0,
+            p1_total: data.total_images || prev.p1_total || 0,
+            p1_current_image: ""
+          }));
+          setBenchmarkKpis({
+            total_tested: 0, total_reviewed: 0, unreviewed_count: 0,
+            human_pass_count: 0, human_fail_count: 0, ai_pass_count: 0,
+            ai_fail_count: 0, overkill_count: 0, underkill_count: 0,
+            agreement_count: 0, overkill_rate: 0.0, underkill_rate: 0.0,
+            agreement_rate: 0.0, true_yield: 0.0, ai_yield: 0.0,
+            avg_inference_time_ms: 0.0
+          });
+          setBenchmarkResults([]);
+          setBenchmarkPage(1);
+          fetchBenchmarkProgress(newSessionId);
+        } else {
+          setBenchmarkResults([]);
+          setBenchmarkPage(1);
+          fetchBenchmarkProgress();
+        }
       })
       .catch(err => {
         setIsBenchmarkStarting(false);
@@ -1603,6 +1647,20 @@ export function InspectionProvider({ children }) {
     return () => clearInterval(interval);
   }, []);
 
+  const syncBenchmarkModel = (mList) => {
+    if (!Array.isArray(mList) || mList.length === 0) return;
+    const saved = localStorage.getItem("BENCHMARK_TARGET_MODEL");
+    const exists = saved && mList.some(m => m.name === saved || m.filename === saved);
+    if (exists) {
+      setBenchmarkModelState(saved);
+    } else {
+      const activeM = mList.find(m => m.active);
+      const chosen = activeM ? activeM.name : mList[0].name;
+      setBenchmarkModelState(chosen);
+      try { localStorage.setItem("BENCHMARK_TARGET_MODEL", chosen); } catch (e) {}
+    }
+  };
+
   const fetchModels = async () => {
     // 1. Try Central PC Server first
     try {
@@ -1611,6 +1669,7 @@ export function InspectionProvider({ children }) {
         const pcData = await pcRes.json();
         if (pcData && Array.isArray(pcData.models) && pcData.models.length > 0) {
           setModelsList(pcData.models);
+          syncBenchmarkModel(pcData.models);
           return pcData.models;
         }
       }
@@ -1623,8 +1682,9 @@ export function InspectionProvider({ children }) {
       const res = await fetch(`${apiBase}/api/models`);
       if (res.ok) {
         const data = await res.json();
-        if (Array.isArray(data)) {
+        if (Array.isArray(data) && data.length > 0) {
           setModelsList(data);
+          syncBenchmarkModel(data);
           return data;
         }
       }
@@ -1695,7 +1755,13 @@ export function InspectionProvider({ children }) {
             })
             .catch(e => console.error(e));
 
-          fetchBenchmarkProgress();
+          // Only poll benchmark progress when idle or completed, avoid interfering with live WS stream
+          setBenchmarkProgress(prev => {
+            if (prev.status !== "RUNNING") {
+              fetchBenchmarkProgress();
+            }
+            return prev;
+          });
         }, 2500);
       };
 
@@ -1734,6 +1800,12 @@ export function InspectionProvider({ children }) {
 
             return JSON.stringify(prev) === JSON.stringify(updated) ? prev : updated;
           });
+          // If a new benchmark run has started with 0 processed, clear previous run results & reset page
+          if (pData.p1_processed === 0 && pData.status === "RUNNING") {
+            setBenchmarkResults([]);
+            setBenchmarkPage(1);
+          }
+
           if (payload.data.kpis && payload.data.kpis.total_tested > 0) {
             setBenchmarkKpis(prev => {
               const next = JSON.stringify(payload.data.kpis);
@@ -1743,9 +1815,15 @@ export function InspectionProvider({ children }) {
           if (payload.data.latest_result) {
             setBenchmarkResults(prev => {
               const list = Array.isArray(prev) ? prev : [];
-              const exists = list.some(r => r.id === payload.data.latest_result.id);
-              if (exists) return list.map(r => r.id === payload.data.latest_result.id ? payload.data.latest_result : r);
-              return [...list, payload.data.latest_result];
+              const incomingSessId = payload.data.session_id || (payload.data.latest_result && payload.data.latest_result.session_id);
+              // If incoming result is from a newer session than what is in list, clear list
+              const cleanList = (incomingSessId && list.length > 0 && list[0].session_id && list[0].session_id !== incomingSessId)
+                ? []
+                : list;
+
+              const exists = cleanList.some(r => r.id === payload.data.latest_result.id);
+              if (exists) return cleanList.map(r => r.id === payload.data.latest_result.id ? payload.data.latest_result : r);
+              return [...cleanList, payload.data.latest_result];
             });
           }
         } else if (payload.event === "BENCHMARK_REVIEW_UPDATED" && payload.data) {

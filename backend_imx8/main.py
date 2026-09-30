@@ -4498,6 +4498,31 @@ async def start_benchmark(payload: dict):
 
     priority_dispatcher_state["p1_pending"] = P1_QUEUE.qsize()
 
+    # Immediately broadcast initial RUNNING progress event to all connected clients
+    if main_loop and main_loop.is_running():
+        asyncio.run_coroutine_threadsafe(manager.broadcast(json.dumps({
+            "event": "BENCHMARK_PROGRESS",
+            "data": {
+                "status": "RUNNING",
+                "session_id": session_id,
+                "model_name": model_name,
+                "p1_processed": 0,
+                "p1_total": len(image_paths),
+                "processed": 0,
+                "total": len(image_paths),
+                "current_image": "",
+                "latest_result": None,
+                "kpis": {
+                    "total_tested": 0, "total_reviewed": 0, "overkill_rate": 0.0,
+                    "underkill_rate": 0.0, "agreement_rate": 0.0, "true_yield": 0.0, "ai_yield": 0.0,
+                    "avg_inference_time_ms": 0.0, "confusion_matrix": {"tp": 0, "fp": 0, "tn": 0, "fn": 0}
+                },
+                "p0_pending": priority_dispatcher_state.get("p0_pending", 0),
+                "p1_pending": len(image_paths),
+                "active_priority": "P1_BENCHMARK"
+            }
+        })), main_loop)
+
     print(f"🚀 [BENCHMARK STARTED] Session '{session_id}' | {len(image_paths)} images enqueued to P1 Queue (Auto-yields to P0).")
 
     return {

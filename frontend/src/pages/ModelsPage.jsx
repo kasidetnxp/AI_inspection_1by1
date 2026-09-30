@@ -155,10 +155,10 @@ export default function ModelsPage() {
   }, [tabParam, setBenchmarkActiveSubTab]);
 
   useEffect(() => {
-    if (benchmarkResults.length === 0 && fetchBenchmarkResults) {
+    if (benchmarkResults.length === 0 && benchmarkProgress.status !== "RUNNING" && !isBenchmarkStarting && fetchBenchmarkResults) {
       fetchBenchmarkResults();
     }
-  }, [benchmarkResults.length, fetchBenchmarkResults]);
+  }, [benchmarkResults.length, benchmarkProgress.status, isBenchmarkStarting, fetchBenchmarkResults]);
 
   const switchSubTab = (tab) => {
     setBenchmarkActiveSubTab(tab);
