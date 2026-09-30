@@ -597,11 +597,52 @@ app.add_middleware(
 # ==============================================================================
 # Benchmark-Only Visuals Serving & Auto-Prune Policy
 # (Production inspection images, Drive M lots, and quality records are NEVER deleted)
+_IMAGE_FILE_CACHE = {}
+
+def find_fallback_image(sample_name: str) -> Optional[str]:
+    """Finds raw wafer image in drive_M, drive_N, or datasets repository with fast caching."""
+    global _IMAGE_FILE_CACHE
+    if not sample_name:
+        return None
+    if sample_name in _IMAGE_FILE_CACHE:
+        p = _IMAGE_FILE_CACHE[sample_name]
+        if os.path.exists(p):
+            return p
+
+    common_subdirs = [
+        os.path.join(_THIS_DIR, "simulation", "drive_M", "WP269", "PMI", "PROCESSED", "SUC720"),
+        os.path.join(_THIS_DIR, "simulation", "drive_M", "WP269", "PMI", "OUTPUT", "SUC720"),
+        os.path.join(PROJECT_ROOT, "datasets", "Pun_for_Accuracy_real", "Pun_for_Accuracy", "ALLTEST"),
+        os.path.join(PROJECT_ROOT, "datasets", "Pun_for_Accuracy_real", "Pun_for_Accuracy", "Good"),
+        os.path.join(PROJECT_ROOT, "datasets", "Pun_for_Accuracy_real", "Pun_for_Accuracy", "Bad"),
+    ]
+    for c_dir in common_subdirs:
+        cand = os.path.join(c_dir, sample_name)
+        if os.path.exists(cand):
+            _IMAGE_FILE_CACHE[sample_name] = cand
+            return cand
+
+    fallback_roots = [
+        os.path.join(_THIS_DIR, "simulation", "drive_M"),
+        os.path.join(_THIS_DIR, "simulation", "drive_N"),
+        os.path.join(PROJECT_ROOT, "datasets"),
+        os.path.join(_THIS_DIR, "simulation")
+    ]
+    for r_dir in fallback_roots:
+        if os.path.exists(r_dir):
+            for root, dirs, files in os.walk(r_dir):
+                if sample_name in files:
+                    full_p = os.path.join(root, sample_name)
+                    _IMAGE_FILE_CACHE[sample_name] = full_p
+                    return full_p
+    return None
+
 # ==============================================================================
-@app.get("/visuals/{filename}")
+@app.get("/visuals/{filename:path}")
 async def get_benchmark_visual_image(filename: str):
     """
-    Serves benchmark inspection visuals directly from benchmark_uploads/{session_id}/visuals/.
+    Serves benchmark inspection visuals directly from benchmark_uploads/{session_id}/visuals/
+    with seamless fallback to simulation drives and datasets if the session folder was pruned.
     """
     clean_name = sanitize_safe_filename(filename, allowed_extensions=[".bmp", ".jpg", ".png", ".jpeg"])
     base_dir = os.path.join(_THIS_DIR, "simulation", "benchmark_uploads")
@@ -615,6 +656,17 @@ async def get_benchmark_visual_image(filename: str):
                 fpath2 = os.path.join(sess_path, clean_name)
                 if is_safe_target_path(base_dir, fpath2) and os.path.exists(fpath2):
                     return FileResponse(fpath2, headers={"Cache-Control": "public, max-age=86400"})
+
+    # Fallback: extract underlying wafer sample name (e.g., ann_bm_BM-XXX_<wafer_name>)
+    sample_name = clean_name
+    m = re.search(r'(?:ann|raw|inspect)_bm_[^_]+_(.+)$', clean_name)
+    if m:
+        sample_name = m.group(1)
+
+    fallback_file = find_fallback_image(sample_name)
+    if fallback_file and os.path.exists(fallback_file):
+        return FileResponse(fallback_file, headers={"Cache-Control": "public, max-age=86400"})
+
     raise HTTPException(status_code=404, detail="Benchmark visual image not found")
 
 def prune_benchmark_visuals(max_files: int = 200):
@@ -4541,7 +4593,7 @@ async def get_benchmark_progress(session_id: Optional[str] = None):
         try:
             conn = get_pg_connection()
             cursor = conn.cursor()
-            cursor.execute("SELECT id FROM benchmark_sessions ORDER BY created_at DESC LIMIT 1;")
+            cursor.execute("SELECT id FROM benchmark_sessions ORDER BY id DESC LIMIT 1;")
             r = cursor.fetchone()
             if r:
                 sess_id = r[0]
@@ -4577,7 +4629,7 @@ async def get_benchmark_results(
         try:
             conn = get_pg_connection()
             cursor = conn.cursor()
-            cursor.execute("SELECT id FROM benchmark_sessions ORDER BY created_at DESC LIMIT 1;")
+            cursor.execute("SELECT id FROM benchmark_sessions ORDER BY id DESC LIMIT 1;")
             r = cursor.fetchone()
             if r: target_session = r[0]
             cursor.close()
