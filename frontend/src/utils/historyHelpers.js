@@ -95,13 +95,40 @@ export const generateAuditLogExportFilename = ({ category, now = new Date() }) =
 };
 
 /**
- * Universal 1-click CSV downloader with UTF-8 BOM for instant, direct downloads
- * into the user's Downloads directory without OS save modals or page popups.
+ * Universal CSV downloader with UTF-8 BOM.
+ * Opens native OS 'Save As...' file picker with prefilled standardized filename,
+ * allowing user to choose destination folder (Desktop, USB drive, Network folder, etc.)
+ * Fallbacks cleanly to HTML5 anchor download if File System Access API is not supported.
  */
 export const downloadCSVBlob = async (filename, csvString) => {
   if (typeof window === "undefined" || typeof document === "undefined") return false;
 
   const contentWithBOM = "\uFEFF" + csvString;
+
+  // 1. Native OS File Picker: lets user choose destination folder & confirms filename
+  if (typeof window.showSaveFilePicker === "function") {
+    try {
+      const handle = await window.showSaveFilePicker({
+        suggestedName: filename,
+        types: [{
+          description: "CSV Spreadsheet (*.csv)",
+          accept: { "text/csv": [".csv"] }
+        }]
+      });
+      const writable = await handle.createWritable();
+      await writable.write(contentWithBOM);
+      await writable.close();
+      return true;
+    } catch (err) {
+      // If user deliberately canceled or closed the OS Save dialog, exit cleanly without fallback
+      if (err.name === "AbortError") {
+        return false;
+      }
+      console.warn("showSaveFilePicker error, falling back to standard anchor:", err);
+    }
+  }
+
+  // 2. Fallback to standard anchor download for unsupported browsers
   const blob = new Blob([contentWithBOM], { type: "text/csv;charset=utf-8;" });
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");

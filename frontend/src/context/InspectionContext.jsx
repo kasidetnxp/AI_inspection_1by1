@@ -2546,7 +2546,7 @@ export function InspectionProvider({ children }) {
   // ==========================================
   // REPORT DATA EXPORT (CSV SPREADSHEET)
   // ==========================================
-  const exportToCSV = () => {
+  const exportToCSV = async () => {
     const exportList = filteredHistory.length > 0 ? filteredHistory : historyList;
     if (exportList.length === 0) {
       alert("No inspection records available to export.");
@@ -2597,7 +2597,7 @@ export function InspectionProvider({ children }) {
       now: new Date()
     });
 
-    downloadCSVBlob(downloadFilename, csvContent);
+    await downloadCSVBlob(downloadFilename, csvContent);
   };
 
   // Filter logs logic for Analytics Tab & local yields (memoized for high record volumes)
