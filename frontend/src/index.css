@@ -3855,6 +3855,234 @@ body.light-theme .eval-status.warn {
 }
 
 /* ==============================================================================
+   RESPONSIVE HEADER & COMMON ADAPTIVE STYLES
+   ============================================================================== */
+@media (max-width: 900px) {
+  .app-header {
+    padding: 0 12px;
+  }
+
+  .header-nav {
+    margin-left: 12px;
+    gap: 4px;
+    padding: 3px 4px;
+  }
+
+  .nav-tab {
+    padding: 6px 10px;
+    font-size: 13px;
+  }
+
+  .datetime-display {
+    display: none;
+  }
+}
+
+/* ==============================================================================
+   SETTINGS PAGE RESPONSIVE & DYNAMIC LAYOUT SYSTEM
+   Prevents overlapping, clipping, and squished tables at all screen sizes
+   ============================================================================== */
+
+.settings-container {
+  padding: 24px 28px 80px 28px;
+  max-width: 1500px;
+  margin: 0 auto;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  box-sizing: border-box;
+}
+
+/* TOP EDGE & SYSTEM GRID */
+.settings-edge-grid {
+  display: grid;
+  grid-template-columns: minmax(320px, 1.25fr) minmax(260px, 1fr) minmax(300px, 1.25fr);
+  gap: 18px;
+  align-items: stretch;
+}
+
+.settings-edge-col {
+  min-width: 0; /* Critical: prevents grid cell blowout and overlapping */
+  display: flex;
+  flex-direction: column;
+}
+
+.settings-ip-input-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.settings-ip-input-row input {
+  min-width: 0 !important;
+  flex: 1 1 auto;
+}
+
+.settings-ip-btn {
+  flex-shrink: 0;
+  white-space: nowrap;
+  padding: 9px 16px;
+  font-size: 14px;
+  font-weight: 700;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+/* ACTIVE THRESHOLDS RUNTIME SUMMARY */
+.settings-thresholds-bar {
+  background: linear-gradient(135deg, rgba(14, 165, 233, 0.08) 0%, rgba(99, 102, 241, 0.05) 50%, rgba(16, 185, 129, 0.05) 100%);
+  border: 1px solid rgba(14, 165, 233, 0.22);
+  border-radius: 10px;
+  padding: 12px 18px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px 20px;
+  align-items: center;
+  justify-content: space-between;
+  box-shadow: 0 2px 10px rgba(14, 165, 233, 0.04);
+}
+
+.settings-thresholds-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 16px;
+  align-items: center;
+}
+
+.settings-threshold-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 14px;
+  white-space: nowrap;
+}
+
+/* RECIPE & MACHINE DUAL CARDS GRID */
+.settings-recipes-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+  min-width: 0;
+}
+
+.settings-recipe-card {
+  min-width: 0;
+  background: var(--bg-card);
+  border-radius: 10px;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.03);
+  overflow: hidden;
+}
+
+/* TABLE SCROLL CONTAINER (Guarantees no button is ever clipped) */
+.settings-table-wrapper {
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  overflow-x: auto !important;
+  overflow-y: hidden;
+  width: 100%;
+  max-width: 100%;
+  background: rgba(0, 0, 0, 0.08);
+  scrollbar-width: thin;
+  scrollbar-color: rgba(14, 165, 233, 0.3) transparent;
+}
+
+body.light-theme .settings-table-wrapper {
+  background: rgba(255, 255, 255, 0.5);
+}
+
+.settings-table-wrapper::-webkit-scrollbar {
+  height: 6px;
+}
+
+.settings-table-wrapper::-webkit-scrollbar-thumb {
+  background: rgba(14, 165, 233, 0.3);
+  border-radius: 3px;
+}
+
+.settings-table-wrapper::-webkit-scrollbar-thumb:hover {
+  background: rgba(14, 165, 233, 0.5);
+}
+
+.settings-table {
+  width: 100%;
+  min-width: 530px; /* Ensures all columns fit comfortably without truncation */
+  border-collapse: collapse;
+  font-size: 14.5px;
+}
+
+.settings-table th,
+.settings-table td {
+  padding: 10px 14px;
+  vertical-align: middle;
+}
+
+.settings-table th {
+  font-size: 14.5px;
+  font-weight: 700;
+  color: var(--text-muted);
+  border-bottom: 1px solid var(--border-color);
+  background: var(--bg-card);
+  white-space: nowrap;
+}
+
+.settings-table td {
+  border-bottom: 1px solid var(--border-color);
+}
+
+/* RESPONSIVE BREAKPOINT: Large Laptops / Medium Desktops (<= 1260px) */
+@media (max-width: 1260px) {
+  /* Stack the dual recipe/machine cards so tables get full 100% width and never compress */
+  .settings-recipes-grid {
+    grid-template-columns: 1fr;
+    gap: 20px;
+  }
+
+  .settings-edge-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .settings-edge-drives-col {
+    grid-column: span 2;
+  }
+}
+
+/* RESPONSIVE BREAKPOINT: Tablets / Resized Windows (<= 860px) */
+@media (max-width: 860px) {
+  .settings-container {
+    padding: 16px 14px 60px 14px;
+    gap: 16px;
+  }
+
+  .settings-edge-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .settings-edge-drives-col {
+    grid-column: span 1;
+  }
+
+  .settings-ip-input-row {
+    flex-wrap: wrap;
+  }
+
+  .settings-ip-input-row input {
+    width: 100%;
+    flex: 1 1 100%;
+  }
+
+  .settings-ip-btn {
+    flex: 1 1 auto;
+    text-align: center;
+  }
+}
+
+/* ==============================================================================
    PRINT & PDF EXPORT STYLESHEET
    ============================================================================== */
 @media print {

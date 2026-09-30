@@ -86,18 +86,7 @@ export default function SettingsPage() {
         boxSizing: "border-box"
       }}
     >
-      <div
-        style={{
-          padding: "24px 28px 80px 28px",
-          maxWidth: "1500px",
-          margin: "0 auto",
-          width: "100%",
-          display: "flex",
-          flexDirection: "column",
-          gap: "24px",
-          boxSizing: "border-box"
-        }}
-      >
+      <div className="settings-container">
         {/* TOP BAR: HEADER & AUDIT LOG ACCESS */}
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "12px", paddingBottom: "4px" }}>
           <div>
@@ -113,12 +102,11 @@ export default function SettingsPage() {
               display: "flex",
               alignItems: "center",
               gap: "6px",
-              padding: "8px 16px",
+              padding: "9px 18px",
               fontSize: "14px",
               fontWeight: "700",
               borderRadius: "6px",
-              cursor: "pointer",
-              padding: "9px 18px"
+              cursor: "pointer"
             }}
           >
             AUDIT LOG
@@ -128,7 +116,7 @@ export default function SettingsPage() {
         {/* ROW 1: EDGE NODE & SYSTEM CONNECTIVITY (EXPANDED FULL-WIDTH) */}
         <div className="hmi-card" style={{ padding: "24px", display: "flex", flexDirection: "column", gap: "18px" }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "1px solid var(--border-color)", paddingBottom: "14px", flexWrap: "wrap", gap: "10px" }}>
-            <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: "12px", flexWrap: "wrap" }}>
               <h3 style={{ margin: 0, fontSize: "20px", fontWeight: "800", letterSpacing: "0.5px" }}>EDGE NODE & SYSTEM</h3>
               <span style={{ fontSize: "14px", color: "var(--text-muted)" }}>i.MX8 Machine Gateway & Factory Network Connectivity</span>
             </div>
@@ -148,11 +136,11 @@ export default function SettingsPage() {
             </span>
           </div>
 
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: "18px", alignItems: "start" }}>
+          <div className="settings-edge-grid">
             {/* IP & PING CONTROL */}
-            <form onSubmit={handleSaveIp} style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+            <form onSubmit={handleSaveIp} className="settings-edge-col" style={{ gap: "10px" }}>
               <label style={{ fontSize: "15px", color: "var(--text-muted)", fontWeight: "700" }}>i.MX8 Hostname / IP Address</label>
-              <div style={{ display: "flex", gap: "8px" }}>
+              <div className="settings-ip-input-row">
                 <input
                   type="text"
                   value={tempIp}
@@ -162,28 +150,25 @@ export default function SettingsPage() {
                   }}
                   placeholder="localhost or 10.42.0.95"
                   style={{
-                    flex: 1,
-                    padding: "9px 12px",
+                    padding: "10px 14px",
                     borderRadius: "8px",
                     background: "var(--bg-input)",
                     border: "1px solid var(--border-color)",
                     color: "var(--text-main)",
                     fontFamily: "var(--font-mono)",
-                    fontSize: "15.5px",
-                    padding: "10px 14px"
+                    fontSize: "15px"
                   }}
                 />
                 <button
                   type="submit"
-                  className="select-file-btn"
-                  style={{ padding: "9px 18px", fontSize: "14.5px", fontWeight: "700", borderRadius: "8px" }}
+                  className="select-file-btn settings-ip-btn"
                 >
                   Apply IP
                 </button>
                 <button
                   type="button"
-                  className="select-file-btn"
-                  style={{ padding: "9px 18px", fontSize: "14.5px", fontWeight: "700", borderRadius: "8px", background: "rgba(14, 165, 233, 0.12)", color: "var(--color-info)", border: "1px solid rgba(14, 165, 233, 0.35)" }}
+                  className="select-file-btn settings-ip-btn"
+                  style={{ background: "rgba(14, 165, 233, 0.12)", color: "var(--color-info)", border: "1px solid rgba(14, 165, 233, 0.35)" }}
                   onClick={() => handleTestPing(tempIp)}
                   disabled={isPinging}
                 >
@@ -218,24 +203,24 @@ export default function SettingsPage() {
             </form>
 
             {/* DB & API TILES */}
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
-              <div style={{ background: "rgba(255,255,255,0.02)", padding: "12px 14px", borderRadius: "8px", border: "1px solid var(--border-color)" }}>
+            <div className="settings-edge-col" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
+              <div style={{ background: "rgba(255,255,255,0.02)", padding: "12px 14px", borderRadius: "8px", border: "1px solid var(--border-color)", minWidth: 0 }}>
                 <div style={{ color: "var(--text-muted)", fontSize: "13px", fontWeight: "700", letterSpacing: "0.5px" }}>DATABASE</div>
                 <div className="font-mono" style={{ color: "var(--color-pass)", fontWeight: "700", fontSize: "17px", marginTop: "4px" }}>{dbType}</div>
               </div>
-              <div style={{ background: "rgba(255,255,255,0.02)", padding: "12px 14px", borderRadius: "8px", border: "1px solid var(--border-color)" }}>
+              <div style={{ background: "rgba(255,255,255,0.02)", padding: "12px 14px", borderRadius: "8px", border: "1px solid var(--border-color)", minWidth: 0, overflow: "hidden" }}>
                 <div style={{ color: "var(--text-muted)", fontSize: "13px", fontWeight: "700", letterSpacing: "0.5px" }}>API ENDPOINT</div>
-                <div className="font-mono" style={{ color: "var(--color-info)", fontWeight: "600", fontSize: "16px", marginTop: "4px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={apiBase}>{apiBase}</div>
+                <div className="font-mono" style={{ color: "var(--color-info)", fontWeight: "600", fontSize: "15px", marginTop: "4px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={apiBase}>{apiBase}</div>
               </div>
             </div>
 
             {/* MOUNTED DRIVES TILE */}
-            <div style={{ background: "rgba(255,255,255,0.02)", padding: "12px 14px", borderRadius: "8px", border: "1px solid var(--border-color)", display: "flex", flexDirection: "column", gap: "6px" }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div className="settings-edge-col settings-edge-drives-col" style={{ background: "rgba(255,255,255,0.02)", padding: "12px 14px", borderRadius: "8px", border: "1px solid var(--border-color)", display: "flex", flexDirection: "column", gap: "6px", minWidth: 0 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "6px" }}>
                 <span style={{ color: "var(--text-muted)", fontSize: "13px", fontWeight: "700", letterSpacing: "0.5px" }}>FACTORY DRIVES (N: / M:)</span>
                 <span
                   style={{
-                    fontSize: "12.5px",
+                    fontSize: "12px",
                     fontWeight: "700",
                     padding: "3px 9px",
                     borderRadius: "10px",
@@ -266,7 +251,7 @@ export default function SettingsPage() {
           </div>
         </div>
 
-        {/* ROW 2: RECIPE & MACHINE CONFIGURATION (UPGRADED WITH WORKFLOW & ACTIVE SUMMARY) */}
+        {/* ROW 2: RECIPE & MACHINE CONFIGURATION */}
         <div className="hmi-card" style={{ padding: "26px", display: "flex", flexDirection: "column", gap: "20px" }}>
 
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "1px solid var(--border-color)", paddingBottom: "14px" }}>
@@ -274,20 +259,7 @@ export default function SettingsPage() {
           </div>
 
           {/* ACTIVE PARAMETERS & THRESHOLDS SUMMARY BAR */}
-          <div
-            style={{
-              background: "linear-gradient(135deg, rgba(14, 165, 233, 0.08) 0%, rgba(99, 102, 241, 0.05) 50%, rgba(16, 185, 129, 0.05) 100%)",
-              border: "1px solid rgba(14, 165, 233, 0.22)",
-              borderRadius: "10px",
-              padding: "12px 18px",
-              display: "flex",
-              flexWrap: "wrap",
-              gap: "18px",
-              alignItems: "center",
-              justifyContent: "space-between",
-              boxShadow: "0 2px 10px rgba(14, 165, 233, 0.04)"
-            }}
-          >
+          <div className="settings-thresholds-bar">
             <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
               <span style={{ width: "8px", height: "8px", borderRadius: "50%", background: "var(--color-info)", boxShadow: "0 0 8px var(--color-info)", display: "inline-block" }}></span>
               <span style={{ fontSize: "14px", fontWeight: "800", color: "var(--color-info)", letterSpacing: "0.5px" }}>
@@ -295,29 +267,29 @@ export default function SettingsPage() {
               </span>
             </div>
 
-            <div style={{ display: "flex", flexWrap: "wrap", gap: "16px", alignItems: "center" }}>
-              <div style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "14px" }}>
+            <div className="settings-thresholds-list">
+              <div className="settings-threshold-chip">
                 <span style={{ color: "var(--text-muted)" }}>Fail Distance (Edge):</span>
                 <span className="font-mono" style={{ fontWeight: "700", color: "var(--color-fail)", background: "rgba(239, 68, 68, 0.12)", padding: "4px 10px", borderRadius: "6px", border: "1px solid rgba(239, 68, 68, 0.25)", fontSize: "15px" }}>
                   {Number(activeConfig?.computed?.failDistanceUm ?? 8.0).toFixed(1)} µm
                 </span>
               </div>
 
-              <div style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "14px" }}>
+              <div className="settings-threshold-chip">
                 <span style={{ color: "var(--text-muted)" }}>Max Probe Mark Area:</span>
                 <span className="font-mono" style={{ fontWeight: "700", color: "var(--color-warn)", background: "rgba(245, 158, 11, 0.12)", padding: "4px 10px", borderRadius: "6px", border: "1px solid rgba(245, 158, 11, 0.25)", fontSize: "15px" }}>
                   {Number(activeConfig?.computed?.maxAreaRatioPct ?? 25).toFixed(0)}%
                 </span>
               </div>
 
-              <div style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "14px" }}>
+              <div className="settings-threshold-chip">
                 <span style={{ color: "var(--text-muted)" }}>Target Die Size:</span>
                 <span className="font-mono" style={{ fontWeight: "600", color: "var(--text-main)", background: "var(--bg-card)", padding: "4px 10px", borderRadius: "6px", border: "1px solid var(--border-color)", boxShadow: "0 1px 2px rgba(0,0,0,0.05)", fontSize: "15px" }}>
                   {activeConfig?.computed?.targetWidth ?? 160} × {activeConfig?.computed?.targetHeight ?? 160} px
                 </span>
               </div>
 
-              <div style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "14px" }}>
+              <div className="settings-threshold-chip">
                 <span style={{ color: "var(--text-muted)" }}>ROI (H / V):</span>
                 <span className="font-mono" style={{ fontWeight: "600", color: "var(--color-info)", background: "rgba(14, 165, 233, 0.12)", padding: "4px 10px", borderRadius: "6px", border: "1px solid rgba(14, 165, 233, 0.25)", fontSize: "15px" }}>
                   {Math.round((activeConfig?.computed?.hRoi ?? 0.7) * 100)}% / {Math.round((activeConfig?.computed?.vRoi ?? 0.7) * 100)}%
@@ -326,11 +298,10 @@ export default function SettingsPage() {
             </div>
           </div>
 
-
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(480px, 1fr))", gap: "20px" }}>
+          <div className="settings-recipes-grid">
             
             {/* PRODUCT RECIPE BOX */}
-            <div className="hmi-card" style={{ background: "var(--bg-card)", border: "1px solid rgba(14, 165, 233, 0.25)", borderRadius: "10px", padding: "20px", display: "flex", flexDirection: "column", gap: "16px", boxShadow: "0 2px 8px rgba(0, 0, 0, 0.03)" }}>
+            <div className="settings-recipe-card" style={{ border: "1px solid rgba(14, 165, 233, 0.25)" }}>
               <div>
                 <div style={{ display: "flex", gap: "14px", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap" }}>
                   <div style={{ display: "flex", gap: "12px", alignItems: "center" }}>
@@ -449,14 +420,14 @@ export default function SettingsPage() {
                   </span>
                 </div>
 
-                <div className="table-container" style={{ border: "1px solid var(--border-color)", borderRadius: "8px", overflow: "hidden" }}>
-                  <table className="history-table models-table" style={{ width: "100%", borderCollapse: "collapse", fontSize: "15px" }}>
+                <div className="settings-table-wrapper">
+                  <table className="settings-table models-table">
                     <thead>
                       <tr>
-                        <th style={{ fontSize: "15px", padding: "10px 14px" }}>Config File</th>
-                        <th style={{ minWidth: "150px", fontSize: "15px", padding: "10px 14px" }}>Bound AI Model</th>
-                        <th style={{ width: "70px", fontSize: "15px", padding: "10px 14px" }}>Size</th>
-                        <th style={{ width: "120px", textAlign: "center", fontSize: "15px", padding: "10px 14px" }}>Action</th>
+                        <th style={{ minWidth: "150px" }}>Config File</th>
+                        <th style={{ minWidth: "160px" }}>Bound AI Model</th>
+                        <th style={{ width: "65px", textAlign: "center" }}>Size</th>
+                        <th style={{ width: "120px", minWidth: "120px", textAlign: "center" }}>Action</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -484,7 +455,7 @@ export default function SettingsPage() {
                                   gap: "6px",
                                   fontFamily: "var(--font-mono)",
                                   fontWeight: "700",
-                                  fontSize: "15px",
+                                  fontSize: "14.5px",
                                   color: isRecipeActive ? "var(--color-pass)" : "var(--color-info)",
                                   cursor: "pointer",
                                   textAlign: "left"
@@ -500,7 +471,7 @@ export default function SettingsPage() {
                             <td>
                               <select
                                 className="lab-select"
-                                style={{ width: "100%", padding: "4px 8px", fontSize: "14px", padding: "6px 10px", borderRadius: "6px", background: "rgba(255,255,255,0.04)", border: "1px solid var(--border-color)", color: "var(--text-main)" }}
+                                style={{ width: "100%", maxWidth: "220px", padding: "6px 10px", fontSize: "13.5px", borderRadius: "6px", background: "rgba(255,255,255,0.04)", border: "1px solid var(--border-color)", color: "var(--text-main)", textOverflow: "ellipsis" }}
                                 value={boundModelName}
                                 onChange={(e) => {
                                   if (e.target.value) {
@@ -516,18 +487,18 @@ export default function SettingsPage() {
                                 ))}
                               </select>
                             </td>
-                            <td className="font-mono" style={{ fontSize: "14px", color: "var(--text-muted)" }}>{rec.size || "-"}</td>
-                            <td style={{ textAlign: "center" }}>
-                              <div style={{ display: "flex", gap: "5px", justifyContent: "center", alignItems: "center" }}>
+                            <td className="font-mono" style={{ fontSize: "14px", color: "var(--text-muted)", textAlign: "center" }}>{rec.size || "-"}</td>
+                            <td style={{ textAlign: "center", whiteSpace: "nowrap" }}>
+                              <div style={{ display: "flex", gap: "5px", justifyContent: "center", alignItems: "center", flexWrap: "nowrap" }}>
                                 {isRecipeActive ? (
-                                  <span className="badge-result pass" style={{ fontSize: "12.5px", padding: "4px 10px", fontWeight: "800" }}>
+                                  <span className="badge-result pass" style={{ fontSize: "12px", padding: "4px 10px", fontWeight: "800", whiteSpace: "nowrap" }}>
                                     CURRENT
                                   </span>
                                 ) : (
                                   <button
                                     type="button"
                                     className="action-btn-sm"
-                                    style={{ fontSize: "13px", padding: "5px 12px", fontWeight: "700", background: "rgba(16, 185, 129, 0.15)", color: "var(--color-pass)", borderColor: "rgba(16, 185, 129, 0.3)" }}
+                                    style={{ fontSize: "12.5px", padding: "5px 12px", fontWeight: "700", background: "rgba(16, 185, 129, 0.15)", color: "var(--color-pass)", borderColor: "rgba(16, 185, 129, 0.3)", whiteSpace: "nowrap" }}
                                     onClick={() => handleActivateRecipe(rec.name)}
                                     title={`Apply ${rec.name}`}
                                   >
@@ -541,7 +512,7 @@ export default function SettingsPage() {
                                       <button
                                         type="button"
                                         className="action-btn-sm delete-red"
-                                        style={{ fontSize: "12.5px", padding: "4px 8px", background: "#dc2626", color: "#fff", fontWeight: "700" }}
+                                        style={{ fontSize: "12px", padding: "4px 8px", background: "#dc2626", color: "#fff", fontWeight: "700", whiteSpace: "nowrap" }}
                                         onClick={async () => {
                                           await handleDeleteConfigFile("product", rec.name, true);
                                           setDeletingConfigKey(null);
@@ -567,7 +538,7 @@ export default function SettingsPage() {
                                     <button
                                       type="button"
                                       className="action-btn-sm delete-red"
-                                      style={{ fontSize: "10.5px", padding: "3px 6px" }}
+                                      style={{ fontSize: "10.5px", padding: "3px 6px", whiteSpace: "nowrap" }}
                                       onClick={() => setDeletingConfigKey(`product-${rec.name}`)}
                                       title={`Delete ${rec.name}`}
                                     >
@@ -594,7 +565,7 @@ export default function SettingsPage() {
             </div>
 
             {/* MACHINE SETTING BOX */}
-            <div className="hmi-card" style={{ background: "var(--bg-card)", border: "1px solid rgba(245, 158, 11, 0.25)", borderRadius: "10px", padding: "20px", display: "flex", flexDirection: "column", gap: "16px", boxShadow: "0 2px 8px rgba(0, 0, 0, 0.03)" }}>
+            <div className="settings-recipe-card" style={{ border: "1px solid rgba(245, 158, 11, 0.25)" }}>
               <div>
                 <div style={{ display: "flex", gap: "14px", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap" }}>
                   <div style={{ display: "flex", gap: "12px", alignItems: "center" }}>
@@ -622,7 +593,11 @@ export default function SettingsPage() {
                       fontWeight: "700",
                       display: "inline-flex",
                       alignItems: "center",
-                      gap: "6px"
+                      gap: "6px",
+                      maxWidth: "100%",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap"
                     }}
                     title={`Click to edit active file: ${configLibrary.active_machine || "Machine_Setting_ForTest.txt"}`}
                   >
@@ -710,14 +685,14 @@ export default function SettingsPage() {
                   </span>
                 </div>
 
-                <div className="table-container" style={{ border: "1px solid var(--border-color)", borderRadius: "8px", overflow: "hidden" }}>
-                  <table className="history-table models-table" style={{ width: "100%", borderCollapse: "collapse", fontSize: "15px" }}>
+                <div className="settings-table-wrapper">
+                  <table className="settings-table models-table">
                     <thead>
                       <tr>
-                        <th style={{ fontSize: "15px", padding: "10px 14px" }}>Config File</th>
-                        <th style={{ width: "70px", fontSize: "15px", padding: "10px 14px" }}>Size</th>
-                        <th style={{ width: "140px", fontSize: "15px", padding: "10px 14px" }}>Last Modified</th>
-                        <th style={{ width: "120px", textAlign: "center", fontSize: "15px", padding: "10px 14px" }}>Action</th>
+                        <th style={{ minWidth: "160px" }}>Config File</th>
+                        <th style={{ width: "65px", textAlign: "center" }}>Size</th>
+                        <th style={{ minWidth: "130px" }}>Last Modified</th>
+                        <th style={{ width: "120px", minWidth: "120px", textAlign: "center" }}>Action</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -741,7 +716,7 @@ export default function SettingsPage() {
                                   gap: "6px",
                                   fontFamily: "var(--font-mono)",
                                   fontWeight: "700",
-                                  fontSize: "15px",
+                                  fontSize: "14.5px",
                                   color: isMachineActive ? "var(--color-pass)" : "var(--color-warn)",
                                   cursor: "pointer",
                                   textAlign: "left"
@@ -754,19 +729,19 @@ export default function SettingsPage() {
                                 </svg>
                               </button>
                             </td>
-                            <td className="font-mono" style={{ fontSize: "14px", color: "var(--text-muted)" }}>{mach.size || "-"}</td>
+                            <td className="font-mono" style={{ fontSize: "14px", color: "var(--text-muted)", textAlign: "center" }}>{mach.size || "-"}</td>
                             <td className="font-mono" style={{ fontSize: "14px", color: "var(--text-muted)" }}>{mach.updatedAt || "-"}</td>
-                            <td style={{ textAlign: "center" }}>
-                              <div style={{ display: "flex", gap: "5px", justifyContent: "center", alignItems: "center" }}>
+                            <td style={{ textAlign: "center", whiteSpace: "nowrap" }}>
+                              <div style={{ display: "flex", gap: "5px", justifyContent: "center", alignItems: "center", flexWrap: "nowrap" }}>
                                 {isMachineActive ? (
-                                  <span className="badge-result pass" style={{ fontSize: "12.5px", padding: "4px 10px", fontWeight: "800" }}>
+                                  <span className="badge-result pass" style={{ fontSize: "12px", padding: "4px 10px", fontWeight: "800", whiteSpace: "nowrap" }}>
                                     CURRENT
                                   </span>
                                 ) : (
                                   <button
                                     type="button"
                                     className="action-btn-sm"
-                                    style={{ fontSize: "13px", padding: "5px 12px", fontWeight: "700", background: "rgba(245, 158, 11, 0.15)", color: "var(--color-warn)", borderColor: "rgba(245, 158, 11, 0.3)" }}
+                                    style={{ fontSize: "12.5px", padding: "5px 12px", fontWeight: "700", background: "rgba(245, 158, 11, 0.15)", color: "var(--color-warn)", borderColor: "rgba(245, 158, 11, 0.3)", whiteSpace: "nowrap" }}
                                     onClick={() => handleActivateMachine(mach.name)}
                                     title={`Apply ${mach.name}`}
                                   >
