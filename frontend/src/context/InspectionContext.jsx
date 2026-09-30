@@ -351,6 +351,7 @@ export function InspectionProvider({ children }) {
   const [isModelConverting, setIsModelConverting] = useState(false);
   const [convertingModelName, setConvertingModelName] = useState("");
 
+  const [benchmarkActiveSubTab, setBenchmarkActiveSubTab] = useState("hub"); // "hub" | "validation" | "registry"
   const [benchmarkModel, setBenchmarkModelState] = useState(() => {
     try {
       return localStorage.getItem("BENCHMARK_TARGET_MODEL") || "";
