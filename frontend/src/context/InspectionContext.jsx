@@ -827,7 +827,7 @@ export function InspectionProvider({ children }) {
     }
   };
 
-  const fetchConfigFile = async (configType, filename) => {
+  const fetchConfigFile = useCallback(async (configType, filename) => {
     try {
       const res = await fetch(`${pcApiBase}/api/v1/configs/${configType}/file/${encodeURIComponent(filename)}`);
       if (res.ok) {
@@ -839,9 +839,9 @@ export function InspectionProvider({ children }) {
       console.error("fetchConfigFile error:", e);
       throw e;
     }
-  };
+  }, [pcApiBase]);
 
-  const saveConfigFile = async (configType, filename, content, activate = false) => {
+  const saveConfigFile = useCallback(async (configType, filename, content, activate = false, oldFilename = null) => {
     try {
       const res = await fetch(`${pcApiBase}/api/v1/configs/${configType}/save`, {
         method: "POST",
@@ -850,7 +850,8 @@ export function InspectionProvider({ children }) {
           filename,
           content,
           activate,
-          edge_ip: edgeIp
+          edge_ip: edgeIp,
+          old_filename: oldFilename
         })
       });
       const data = await res.json();
@@ -865,7 +866,7 @@ export function InspectionProvider({ children }) {
       console.error("saveConfigFile error:", e);
       return { success: false, error: e.message };
     }
-  };
+  }, [pcApiBase, edgeIp, fetchConfigLibrary, fetchActiveConfig]);
 
   // ==========================================
   // SYSTEM AUDIT LOGS (backend_imx8 / PostgreSQL)

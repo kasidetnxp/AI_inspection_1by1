@@ -267,65 +267,57 @@ export default function SettingsPage() {
         {/* ROW 2: RECIPE & MACHINE CONFIGURATION (UPGRADED WITH WORKFLOW & ACTIVE SUMMARY) */}
         <div className="hmi-card" style={{ padding: "26px", display: "flex", flexDirection: "column", gap: "20px" }}>
 
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "1px solid var(--border-color)", paddingBottom: "14px", flexWrap: "wrap", gap: "10px" }}>
-            <div>
-              <h3 style={{ margin: 0, fontSize: "18px", fontWeight: "700", letterSpacing: "0.5px" }}>RECIPE & MACHINE CONFIGURATION</h3>
-              <div style={{ fontSize: "13px", color: "var(--text-muted)", marginTop: "4px" }}>
-                Manage, create, edit, and activate setup files for real-time synchronization with i.MX8 Edge inference pipeline
-              </div>
-            </div>
-            <div style={{ display: "flex", gap: "10px", alignItems: "center" }}>
-              <span style={{ fontSize: "12px", padding: "4px 10px", borderRadius: "6px", background: "rgba(14, 165, 233, 0.1)", color: "var(--color-info)", border: "1px solid rgba(14, 165, 233, 0.25)", fontWeight: "600" }}>
-                HOT RELOAD SUPPORTED
-              </span>
-            </div>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "1px solid var(--border-color)", paddingBottom: "14px" }}>
+            <h3 style={{ margin: 0, fontSize: "18px", fontWeight: "700", letterSpacing: "0.5px" }}>RECIPE & MACHINE CONFIGURATION</h3>
           </div>
 
           {/* ACTIVE PARAMETERS & THRESHOLDS SUMMARY BAR */}
           <div
             style={{
-              background: "rgba(0, 0, 0, 0.15)",
-              border: "1px solid var(--border-color)",
+              background: "linear-gradient(135deg, rgba(14, 165, 233, 0.08) 0%, rgba(99, 102, 241, 0.05) 50%, rgba(16, 185, 129, 0.05) 100%)",
+              border: "1px solid rgba(14, 165, 233, 0.22)",
               borderRadius: "10px",
-              padding: "14px 18px",
+              padding: "12px 18px",
               display: "flex",
               flexWrap: "wrap",
               gap: "18px",
               alignItems: "center",
-              justifyContent: "space-between"
+              justifyContent: "space-between",
+              boxShadow: "0 2px 10px rgba(14, 165, 233, 0.04)"
             }}
           >
             <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-              <span style={{ fontSize: "11.5px", fontWeight: "700", color: "var(--text-muted)", letterSpacing: "0.5px" }}>
+              <span style={{ width: "8px", height: "8px", borderRadius: "50%", background: "var(--color-info)", boxShadow: "0 0 8px var(--color-info)", display: "inline-block" }}></span>
+              <span style={{ fontSize: "12px", fontWeight: "700", color: "var(--color-info)", letterSpacing: "0.5px" }}>
                 ACTIVE THRESHOLDS & RUNTIME:
               </span>
             </div>
 
             <div style={{ display: "flex", flexWrap: "wrap", gap: "16px", alignItems: "center" }}>
-              <div style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "12.5px" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "12px" }}>
                 <span style={{ color: "var(--text-muted)" }}>Fail Distance (Edge):</span>
-                <span className="font-mono" style={{ fontWeight: "700", color: "var(--color-fail)", background: "rgba(239, 68, 68, 0.12)", padding: "2px 8px", borderRadius: "4px", border: "1px solid rgba(239, 68, 68, 0.25)" }}>
+                <span className="font-mono" style={{ fontWeight: "700", color: "var(--color-fail)", background: "rgba(239, 68, 68, 0.12)", padding: "3px 9px", borderRadius: "5px", border: "1px solid rgba(239, 68, 68, 0.25)" }}>
                   {Number(activeConfig?.computed?.failDistanceUm ?? 8.0).toFixed(1)} µm
                 </span>
               </div>
 
-              <div style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "12.5px" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "12px" }}>
                 <span style={{ color: "var(--text-muted)" }}>Max Probe Mark Area:</span>
-                <span className="font-mono" style={{ fontWeight: "700", color: "var(--color-warn)", background: "rgba(245, 158, 11, 0.12)", padding: "2px 8px", borderRadius: "4px", border: "1px solid rgba(245, 158, 11, 0.25)" }}>
+                <span className="font-mono" style={{ fontWeight: "700", color: "var(--color-warn)", background: "rgba(245, 158, 11, 0.12)", padding: "3px 9px", borderRadius: "5px", border: "1px solid rgba(245, 158, 11, 0.25)" }}>
                   {Number(activeConfig?.computed?.maxAreaRatioPct ?? 25).toFixed(0)}%
                 </span>
               </div>
 
-              <div style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "12.5px" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "12px" }}>
                 <span style={{ color: "var(--text-muted)" }}>Target Die Size:</span>
-                <span className="font-mono" style={{ fontWeight: "600", color: "var(--text-main)", background: "rgba(255, 255, 255, 0.05)", padding: "2px 8px", borderRadius: "4px" }}>
+                <span className="font-mono" style={{ fontWeight: "600", color: "var(--text-main)", background: "var(--bg-card)", padding: "3px 9px", borderRadius: "5px", border: "1px solid var(--border-color)", boxShadow: "0 1px 2px rgba(0,0,0,0.05)" }}>
                   {activeConfig?.computed?.targetWidth ?? 160} × {activeConfig?.computed?.targetHeight ?? 160} px
                 </span>
               </div>
 
-              <div style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "12.5px" }}>
-                <span style={{ color: "var(--text-muted)" }}>Horizontal / Vertical ROI:</span>
-                <span className="font-mono" style={{ fontWeight: "600", color: "var(--color-info)", background: "rgba(14, 165, 233, 0.1)", padding: "2px 8px", borderRadius: "4px" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "12px" }}>
+                <span style={{ color: "var(--text-muted)" }}>ROI (H / V):</span>
+                <span className="font-mono" style={{ fontWeight: "600", color: "var(--color-info)", background: "rgba(14, 165, 233, 0.12)", padding: "3px 9px", borderRadius: "5px", border: "1px solid rgba(14, 165, 233, 0.25)" }}>
                   {Math.round((activeConfig?.computed?.hRoi ?? 0.7) * 100)}% / {Math.round((activeConfig?.computed?.vRoi ?? 0.7) * 100)}%
                 </span>
               </div>

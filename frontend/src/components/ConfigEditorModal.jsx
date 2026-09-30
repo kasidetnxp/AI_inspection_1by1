@@ -29,9 +29,20 @@ export default function ConfigEditorModal({
     ((configType === "product" && configLibrary.active_recipe === initialFilename) ||
       (configType === "machine" && configLibrary.active_machine === initialFilename));
 
+  const fetchedKeyRef = useRef("");
+
   // Initialize or fetch file
   useEffect(() => {
-    if (!isOpen) return;
+    if (!isOpen) {
+      fetchedKeyRef.current = "";
+      return;
+    }
+
+    const currentKey = `${configType}:${initialFilename}:${isNew}`;
+    if (fetchedKeyRef.current === currentKey) {
+      return;
+    }
+    fetchedKeyRef.current = currentKey;
 
     setErrorMsg(null);
     setSaveSuccessMsg(null);
@@ -62,15 +73,26 @@ export default function ConfigEditorModal({
       fetchConfigFile(configType, initialFilename)
         .then((res) => {
           let text = "";
-          if (res.content) {
+          if (typeof res === "string") {
             try {
-              const parsed = JSON.parse(res.content);
-              text = JSON.stringify(parsed, null, 2);
+              text = JSON.stringify(JSON.parse(res), null, 2);
             } catch {
-              text = res.content;
+              text = res;
             }
-          } else if (res.parsed) {
-            text = JSON.stringify(res.parsed, null, 2);
+          } else if (res && typeof res === "object") {
+            if (res._raw) {
+              text = res._raw;
+            } else if (res.content) {
+              try {
+                text = JSON.stringify(JSON.parse(res.content), null, 2);
+              } catch {
+                text = String(res.content);
+              }
+            } else if (res.parsed) {
+              text = JSON.stringify(res.parsed, null, 2);
+            } else {
+              text = JSON.stringify(res, null, 2);
+            }
           }
           setContent(text);
           setInitialContent(text);
@@ -161,7 +183,8 @@ export default function ConfigEditorModal({
 
     setSaving(true);
     try {
-      const result = await saveConfigFile(configType, cleanFilename, content, shouldActivate);
+      const oldFilename = !isNew && initialFilename && cleanFilename !== initialFilename ? initialFilename : null;
+      const result = await saveConfigFile(configType, cleanFilename, content, shouldActivate, oldFilename);
       if (result.success) {
         setSaveSuccessMsg(
           shouldActivate
@@ -330,38 +353,38 @@ export default function ConfigEditorModal({
             <span style={{ fontSize: "12.5px", fontWeight: "700", color: "var(--text-muted)", whiteSpace: "nowrap" }}>
               File Name:
             </span>
-            {isNew ? (
-              <input
-                type="text"
-                value={filename}
-                onChange={(e) => setFilename(e.target.value)}
-                placeholder="e.g. Recipe_KMI710_Rev2.txt"
-                className="font-mono"
-                style={{
-                  flex: 1,
-                  maxWidth: "360px",
-                  padding: "6px 12px",
-                  fontSize: "13px",
-                  borderRadius: "6px",
-                  background: "var(--bg-input)",
-                  border: "1px solid var(--border-color)",
-                  color: "var(--text-main)"
-                }}
-              />
-            ) : (
+            <input
+              type="text"
+              value={filename}
+              onChange={(e) => setFilename(e.target.value)}
+              placeholder="e.g. Recipe_KMI710_Rev2.txt"
+              className="font-mono"
+              style={{
+                flex: 1,
+                maxWidth: "360px",
+                padding: "6px 12px",
+                fontSize: "13px",
+                borderRadius: "6px",
+                background: "var(--bg-input)",
+                border: "1px solid var(--border-color)",
+                color: "var(--text-main)",
+                fontWeight: "600"
+              }}
+              title={!isNew ? "Edit to rename file" : "Enter configuration filename"}
+            />
+            {!isNew && filename !== initialFilename && (
               <span
-                className="font-mono"
                 style={{
-                  fontSize: "13.5px",
-                  fontWeight: "700",
-                  padding: "4px 10px",
-                  borderRadius: "6px",
-                  background: "rgba(255, 255, 255, 0.05)",
-                  border: "1px solid var(--border-color)",
-                  color: "var(--text-main)"
+                  fontSize: "11px",
+                  color: "var(--color-warn)",
+                  padding: "2px 8px",
+                  borderRadius: "4px",
+                  background: "rgba(245, 158, 11, 0.12)",
+                  border: "1px solid rgba(245, 158, 11, 0.3)",
+                  whiteSpace: "nowrap"
                 }}
               >
-                {filename}
+                Renaming from {initialFilename}
               </span>
             )}
           </div>
@@ -480,8 +503,8 @@ export default function ConfigEditorModal({
                 border: "none",
                 outline: "none",
                 resize: "none",
-                background: "rgba(0, 0, 0, 0.25)",
-                color: "var(--text-main)",
+                background: "#090d16",
+                color: "#e2e8f0",
                 fontFamily: "var(--font-mono, 'Consolas', 'Courier New', monospace)",
                 fontSize: "13px",
                 lineHeight: "1.6",
