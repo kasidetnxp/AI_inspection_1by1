@@ -611,10 +611,10 @@ async def get_benchmark_visual_image(filename: str):
             if os.path.isdir(sess_path):
                 fpath = os.path.join(sess_path, "visuals", clean_name)
                 if is_safe_target_path(base_dir, fpath) and os.path.exists(fpath):
-                    return FileResponse(fpath)
+                    return FileResponse(fpath, headers={"Cache-Control": "public, max-age=86400"})
                 fpath2 = os.path.join(sess_path, clean_name)
                 if is_safe_target_path(base_dir, fpath2) and os.path.exists(fpath2):
-                    return FileResponse(fpath2)
+                    return FileResponse(fpath2, headers={"Cache-Control": "public, max-age=86400"})
     raise HTTPException(status_code=404, detail="Benchmark visual image not found")
 
 def prune_benchmark_visuals(max_files: int = 200):
@@ -2096,7 +2096,7 @@ def update_benchmark_session_progress(session_id: str, processed_count: int, kpi
         print("Error updating benchmark session progress:", e)
 
 
-def finalize_benchmark_session(session_id: str):
+def finalize_benchmark_session(session_id: str, status: str = "COMPLETED"):
     kpis = compute_session_kpis(session_id)
     metrics_str = json.dumps(kpis)
     now_str = time.strftime("%d-%b-%Y %H:%M:%S")
@@ -2105,9 +2105,9 @@ def finalize_benchmark_session(session_id: str):
         cursor = conn.cursor()
         cursor.execute("""
             UPDATE benchmark_sessions
-            SET status = 'COMPLETED', completed_at = %s, metrics = %s
+            SET status = %s, completed_at = %s, metrics = %s
             WHERE id = %s;
-        """, (now_str, metrics_str, session_id))
+        """, (status, now_str, metrics_str, session_id))
         conn.commit()
         cursor.close()
         conn.close()
@@ -2150,20 +2150,38 @@ def process_benchmark_image(task: dict):
     with inference_lock:
         req_model = task.get("model_name") or tflite_model_path or PATHS_CFG.get("model_path") or SYS_CONFIG.get("ai", {}).get("model_path") or "unet.tflite"
         
+        # Check active_model_info.json in case req_model matches original name of active_model.tflite
+        active_info = {}
+        active_info_path = os.path.join(MODELS_DIR, "active_model_info.json")
+        if os.path.exists(active_info_path):
+            try:
+                with open(active_info_path, "r", encoding="utf-8") as f:
+                    active_info = json.load(f)
+            except Exception:
+                pass
+
         # Resolve target model path
         model_path = None
-        for cand in [
-            req_model,
-            os.path.join(_THIS_DIR, req_model),
-            os.path.join(_THIS_DIR, "models", req_model),
-            os.path.join(PROJECT_ROOT, req_model),
-            os.path.join(PROJECT_ROOT, "models", req_model),
-            tflite_model_path,
-        ]:
-            if cand and os.path.exists(cand):
-                model_path = cand
-                break
-                
+        if active_info.get("model_name") and os.path.basename(req_model).lower() == os.path.basename(active_info.get("model_name")).lower():
+            act_path = os.path.join(MODELS_DIR, "active_model.tflite")
+            if os.path.exists(act_path):
+                model_path = act_path
+
+        if not model_path:
+            for cand in [
+                req_model,
+                os.path.join(_THIS_DIR, req_model),
+                os.path.join(_THIS_DIR, "models", req_model),
+                os.path.join(PROJECT_ROOT, req_model),
+                os.path.join(PROJECT_ROOT, "models", req_model),
+                os.path.join(PROJECT_ROOT, "datasets", "models", "master", req_model),
+                os.path.join(PROJECT_ROOT, "datasets", "models", req_model),
+                tflite_model_path,
+            ]:
+                if cand and os.path.exists(cand):
+                    model_path = cand
+                    break
+                    
         if not model_path:
             for p_dir in [".", os.path.join(CORE_DIR, "models"), "models", _THIS_DIR, PROJECT_ROOT]:
                 if os.path.exists(p_dir):
@@ -2175,6 +2193,8 @@ def process_benchmark_image(task: dict):
                                     break
                         if model_path: break
                 if model_path: break
+
+        print(f"🔬 [BENCHMARK RUNNER] Task: {filename} | Requested: '{req_model}' -> Model: '{model_path}'")
 
         is_tflite = model_path and model_path.lower().endswith((".tflite", ".onnx"))
         
@@ -2426,10 +2446,9 @@ def process_benchmark_image(task: dict):
         cv2.imwrite(ann_out_path, ann_part)
         cv2.imwrite(inspect_out_path, canvas)
     
-    t_query = f"?t={int(time.time() * 1000)}"
-    raw_url = f"/visuals/{raw_fname}{t_query}"
-    ann_url = f"/visuals/{ann_fname}{t_query}"
-    inspect_url = f"/visuals/{inspect_fname}{t_query}"
+    raw_url = f"/visuals/{raw_fname}"
+    ann_url = f"/visuals/{ann_fname}"
+    inspect_url = f"/visuals/{inspect_fname}"
     
     # Save to Database
     result_record = {
@@ -2439,6 +2458,7 @@ def process_benchmark_image(task: dict):
         "annotated_image_url": ann_url,
         "raw_image_url": raw_url,
         "comparison_image_url": inspect_url,
+        "model_name": req_model,
         "ai_decision": decision,
         "ai_confidence": confidence,
         "ai_reason": cat_reason,
@@ -2832,25 +2852,44 @@ def priority_dispatcher_thread():
                     priority_dispatcher_state["p1_processed"] += 1
                     
                     if P1_QUEUE.qsize() == 0:
-                        priority_dispatcher_state["status"] = "COMPLETED"
-                        priority_dispatcher_state["active_priority"] = "IDLE"
-                        priority_dispatcher_state["p1_current"] = ""
                         sess_id = priority_dispatcher_state.get("active_session_id")
-                        if sess_id:
-                            finalize_benchmark_session(sess_id)
-                        if main_loop and main_loop.is_running():
-                            asyncio.run_coroutine_threadsafe(manager.broadcast(json.dumps({
-                                "event": "BENCHMARK_PROGRESS",
-                                "data": {
-                                    "status": "COMPLETED",
-                                    "session_id": sess_id,
-                                    "p1_processed": priority_dispatcher_state["p1_processed"],
-                                    "p1_total": priority_dispatcher_state["p1_total"],
-                                    "p0_pending": 0,
-                                    "p1_pending": 0,
-                                    "active_priority": "IDLE"
-                                }
-                            })), main_loop)
+                        if priority_dispatcher_state.get("status") == "STOPPED":
+                            priority_dispatcher_state["active_priority"] = "IDLE"
+                            priority_dispatcher_state["p1_current"] = ""
+                            if sess_id:
+                                finalize_benchmark_session(sess_id, status="STOPPED")
+                            if main_loop and main_loop.is_running():
+                                asyncio.run_coroutine_threadsafe(manager.broadcast(json.dumps({
+                                    "event": "BENCHMARK_PROGRESS",
+                                    "data": {
+                                        "status": "STOPPED",
+                                        "session_id": sess_id,
+                                        "p1_processed": priority_dispatcher_state["p1_processed"],
+                                        "p1_total": priority_dispatcher_state["p1_total"],
+                                        "p0_pending": 0,
+                                        "p1_pending": 0,
+                                        "active_priority": "IDLE"
+                                    }
+                                })), main_loop)
+                        else:
+                            priority_dispatcher_state["status"] = "COMPLETED"
+                            priority_dispatcher_state["active_priority"] = "IDLE"
+                            priority_dispatcher_state["p1_current"] = ""
+                            if sess_id:
+                                finalize_benchmark_session(sess_id, status="COMPLETED")
+                            if main_loop and main_loop.is_running():
+                                asyncio.run_coroutine_threadsafe(manager.broadcast(json.dumps({
+                                    "event": "BENCHMARK_PROGRESS",
+                                    "data": {
+                                        "status": "COMPLETED",
+                                        "session_id": sess_id,
+                                        "p1_processed": priority_dispatcher_state["p1_processed"],
+                                        "p1_total": priority_dispatcher_state["p1_total"],
+                                        "p0_pending": 0,
+                                        "p1_pending": 0,
+                                        "active_priority": "IDLE"
+                                    }
+                                })), main_loop)
                 continue
             except queue.Empty:
                 if priority_dispatcher_state["active_priority"] == "P1_BENCHMARK":
@@ -4832,6 +4871,11 @@ async def stop_benchmark():
     """Stops the active benchmark validation job."""
     global priority_dispatcher_state, P1_QUEUE
     
+    priority_dispatcher_state["status"] = "STOPPED"
+    priority_dispatcher_state["active_priority"] = "IDLE"
+    priority_dispatcher_state["p1_pending"] = 0
+    priority_dispatcher_state["p1_current"] = ""
+
     drained = 0
     while not P1_QUEUE.empty():
         try:
@@ -4840,15 +4884,10 @@ async def stop_benchmark():
             drained += 1
         except queue.Empty:
             break
-            
-    priority_dispatcher_state["status"] = "STOPPED"
-    priority_dispatcher_state["active_priority"] = "IDLE"
-    priority_dispatcher_state["p1_pending"] = 0
-    priority_dispatcher_state["p1_current"] = ""
 
     sess_id = priority_dispatcher_state.get("active_session_id")
     if sess_id:
-        finalize_benchmark_session(sess_id)
+        finalize_benchmark_session(sess_id, status="STOPPED")
 
     if main_loop and main_loop.is_running():
         asyncio.run_coroutine_threadsafe(manager.broadcast(json.dumps({

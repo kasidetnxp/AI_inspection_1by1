@@ -197,7 +197,7 @@ export default function SplitViewModal() {
           };
 
           const splitMeta = parseSplitMeta(benchmarkSplitModalItem.image_name);
-          const activeModelName = (modelsList && modelsList.find((m) => m.is_active)?.name) || benchmarkModel || "unet_pytorch_new.pth";
+          const testedModelName = benchmarkSplitModalItem.model_name || benchmarkModel || (modelsList && modelsList.find((m) => m.active)?.name) || "unet.tflite";
 
 
   return (
@@ -581,7 +581,7 @@ export default function SplitViewModal() {
                       <div className="meta-row" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                         <span className="meta-lbl" style={{ flexShrink: 0 }}>Model:</span>
                         <span className="meta-val font-mono highlight-green" style={{ textAlign: "right" }}>
-                          {activeModelName}
+                          {testedModelName}
                         </span>
                       </div>
 

@@ -229,11 +229,21 @@ export default function ModelsPage() {
                       {benchmarkActiveSubTab === "registry" ? "UPLOAD" : benchmarkActiveSubTab === "training" ? "TRAIN" : "TEST"}
                     </span>
                   </div>
-                  <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                    <span style={{ fontSize: "11px", color: "var(--text-muted)", fontWeight: "600" }}>ACTIVE MODEL:</span>
-                    <span className="badge-result pass font-mono" style={{ fontSize: "11px", fontWeight: "700" }}>
-                      {modelsList.find(m => m.active)?.name || "unet.tflite"}
-                    </span>
+                  <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                      <span style={{ fontSize: "11px", color: "var(--text-muted)", fontWeight: "600" }}>PRODUCTION ACTIVE:</span>
+                      <span className="badge-result pass font-mono" style={{ fontSize: "11px", fontWeight: "700" }}>
+                        {modelsList.find(m => m.active)?.name || "unet.tflite"}
+                      </span>
+                    </div>
+                    {benchmarkActiveSubTab === "validation" && (
+                      <div style={{ display: "flex", alignItems: "center", gap: "6px", borderLeft: "1px solid var(--border-color)", paddingLeft: "12px" }}>
+                        <span style={{ fontSize: "11px", color: "var(--text-muted)", fontWeight: "600" }}>TEST TARGET:</span>
+                        <span className="badge-result font-mono" style={{ fontSize: "11px", fontWeight: "700", background: "rgba(56, 189, 248, 0.15)", color: "#38bdf8", border: "1px solid rgba(56, 189, 248, 0.3)" }}>
+                          {benchmarkModel || "unet.tflite"}
+                        </span>
+                      </div>
+                    )}
                   </div>
                 </div>
               )}
@@ -293,7 +303,12 @@ export default function ModelsPage() {
                           
                           {/* Model Selector */}
                           <div className="form-group-lab">
-                            <label style={{ fontSize: "14px", fontWeight: "700" }}>Target AI Model</label>
+                            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "4px" }}>
+                              <label style={{ fontSize: "14px", fontWeight: "700", margin: 0 }}>Target AI Model (Validation Test)</label>
+                              <span style={{ fontSize: "11px", color: "#38bdf8", background: "rgba(56, 189, 248, 0.1)", padding: "2px 8px", borderRadius: "4px", fontWeight: "600" }}>
+                                Selected for Testing
+                              </span>
+                            </div>
                             <select
                               className="lab-select"
                               value={benchmarkModel}
@@ -302,13 +317,16 @@ export default function ModelsPage() {
                             >
                               {modelsList.map((m, idx) => (
                                 <option key={idx} value={m.name}>
-                                  {m.name}
+                                  {m.name} {m.active ? "(Production Active)" : ""}
                                 </option>
                               ))}
                               {modelsList.length === 0 && (
                                 <option value="unet.tflite">unet.tflite</option>
                               )}
                             </select>
+                            <span style={{ fontSize: "12px", color: "var(--text-muted)", marginTop: "2px" }}>
+                              * การรัน Test จะประเมินด้วยโมเดลนี้ เพื่อวัดผลความแม่นยำ (Overkill/Underkill) ก่อนนำไปใช้จริง
+                            </span>
                           </div>
 
                           {/* Test Dataset (ZIP Upload) */}
@@ -392,6 +410,13 @@ export default function ModelsPage() {
                                   "var(--text-muted)"
                               }}>
                                 {isBenchmarkStarting ? "UPLOADING..." : benchmarkProgress.status}
+                              </span>
+                            </div>
+
+                            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", background: "rgba(255, 255, 255, 0.03)", padding: "6px 10px", borderRadius: "6px", fontSize: "12.5px", marginTop: "6px", border: "1px solid var(--border-color)" }}>
+                              <span style={{ color: "var(--text-muted)" }}>Testing Model:</span>
+                              <span style={{ fontWeight: "700", color: "#38bdf8", fontFamily: "var(--font-mono, monospace)" }}>
+                                {benchmarkModel || "unet.tflite"}
                               </span>
                             </div>
 
@@ -518,8 +543,19 @@ export default function ModelsPage() {
                     <div className="human-review-panel">
                       <div className="hmi-card" style={{ height: "100%", display: "flex", flexDirection: "column" }}>
                         <div className="card-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "8px" }}>
-                          <div>
+                          <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
                             <h3>HUMAN REVIEW</h3>
+                            <span style={{
+                              fontSize: "12px",
+                              padding: "2px 8px",
+                              borderRadius: "4px",
+                              background: "rgba(56, 189, 248, 0.12)",
+                              color: "#38bdf8",
+                              fontWeight: "600",
+                              border: "1px solid rgba(56, 189, 248, 0.25)"
+                            }}>
+                              Model: {benchmarkModel || "unet.tflite"}
+                            </span>
                           </div>
                           <div style={{ display: "flex", gap: "8px" }}>
                             <button className="review-action-btn" style={{ fontSize: "14px", padding: "7px 16px" }} onClick={handleExportBenchmarkCSV} title="Export CSV summary report">
@@ -649,9 +685,11 @@ export default function ModelsPage() {
                                     const isOverkill = item.ai_decision === "FAIL" && item.human_decision === "PASS";
                                     const isUnderkill = item.ai_decision === "PASS" && item.human_decision === "FAIL";
 
+                                    const rowKey = item.id ? `bm-row-${item.id}` : `bm-row-${item.image_name || absoluteIndex}`;
+
                                     return (
                                       <tr
-                                        key={item.id || absoluteIndex}
+                                        key={rowKey}
                                         onClick={() => {
                                           setBenchmarkSplitModalItem(item);
                                           setBenchmarkSplitModalIndex(absoluteIndex);
@@ -677,7 +715,8 @@ export default function ModelsPage() {
                                               cursor: "pointer",
                                               border: "1.5px solid var(--border-color)",
                                               background: "#000",
-                                              boxShadow: "0 2px 6px rgba(0,0,0,0.15)"
+                                              boxShadow: "0 2px 6px rgba(0,0,0,0.15)",
+                                              flexShrink: 0
                                             }}
                                             onClick={(e) => {
                                               e.stopPropagation();
@@ -689,9 +728,16 @@ export default function ModelsPage() {
                                             <img
                                               src={resolveImageUrl(item.annotated_image_url || item.image_url)}
                                               alt={item.image_name}
-                                              style={{ width: "100%", height: "100%", objectFit: "cover" }}
+                                              loading="lazy"
+                                              decoding="async"
+                                              width="56"
+                                              height="56"
+                                              style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
                                               onError={(e) => {
-                                                e.target.src = resolveImageUrl(item.raw_image_url || item.image_url);
+                                                const fallback = resolveImageUrl(item.raw_image_url || item.image_url);
+                                                if (e.target.src !== fallback) {
+                                                  e.target.src = fallback;
+                                                }
                                               }}
                                             />
                                           </div>
