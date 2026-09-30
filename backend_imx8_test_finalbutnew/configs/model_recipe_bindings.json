@@ -1,0 +1,16 @@
+{
+  "test": 123,
+  "active_recipe": "Product_Setting_ForTest.txt",
+  "active_machine_config": "Machine_Setting_WP269.txt",
+  "active_model": "unet_pytorch_new.tflite",
+  "bindings": {
+    "unet_pytorch_new.tflite": {
+      "recipe": "Product_Setting.txt",
+      "machine_config": "Machine_Setting_ForTest.txt"
+    },
+    "best_converted.tflite": {
+      "recipe": "Product_Setting.txt",
+      "machine_config": "Machine_Setting.txt"
+    }
+  }
+}
