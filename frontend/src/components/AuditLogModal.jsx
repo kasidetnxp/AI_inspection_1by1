@@ -27,8 +27,7 @@ export default function AuditLogModal({ isOpen, onClose }) {
       const q = searchQuery.toLowerCase();
       const matchAction = (log.action || "").toLowerCase().includes(q);
       const matchDetails = (log.details || "").toLowerCase().includes(q);
-      const matchAuthor = (log.author || "").toLowerCase().includes(q);
-      if (!matchAction && !matchDetails && !matchAuthor) return false;
+      if (!matchAction && !matchDetails) return false;
     }
     return true;
   });
@@ -255,7 +254,6 @@ export default function AuditLogModal({ isOpen, onClose }) {
                   <th style={{ padding: "12px 8px", width: "100px", color: "var(--text-muted)", fontWeight: "600", fontSize: "11px" }}>CATEGORY</th>
                   <th style={{ padding: "12px 8px", width: "170px", color: "var(--text-muted)", fontWeight: "600", fontSize: "11px" }}>ACTION</th>
                   <th style={{ padding: "12px 8px", color: "var(--text-muted)", fontWeight: "600", fontSize: "11px" }}>DETAILS</th>
-                  <th style={{ padding: "12px 8px", width: "100px", color: "var(--text-muted)", fontWeight: "600", fontSize: "11px" }}>AUTHOR</th>
                 </tr>
               </thead>
               <tbody>
@@ -288,9 +286,6 @@ export default function AuditLogModal({ isOpen, onClose }) {
                     </td>
                     <td style={{ padding: "10px 8px", color: "var(--text-main)", lineHeight: "1.4" }}>
                       {log.details}
-                    </td>
-                    <td style={{ padding: "10px 8px", color: "var(--text-muted)", fontSize: "12px", whiteSpace: "nowrap" }}>
-                      {log.author || "Operator"}
                     </td>
                   </tr>
                 ))}
