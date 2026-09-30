@@ -67,28 +67,173 @@ graph TD
 
 ## 📂 4. โครงสร้างโฟลเดอร์ (Project Directory Structure)
 
+โครงสร้างโฟลเดอร์ของโปรเจกต์ได้รับการออกแบบตามสถาปัตยกรรม 3-Tier แบบแยกโมดูลชัดเจน (Modular Microservices Architecture) เพื่อรองรับการทำงานแบบแยกระบบประมวลผล (Decoupled Edge and Central Services) ดังนี้:
+
+### 4.1 แผนผังโฟลเดอร์ฉบับสมบูรณ์ (Complete Directory Tree)
+
 ```text
 UIIU/
-├── docs/                     # 📚 เอกสารเทคนิค สถาปัตยกรรม และคู่มือระบบ
-├── backend_imx8/             # 🧠 [Edge AI Node] FastAPI Backend บน i.MX8 (Port 8001)
-│   ├── configs/              # โฟลเดอร์เก็บ Machine & Recipe Configuration Files (JSON/TXT)
-│   ├── models/               # ไฟล์โมเดล AI (เช่น best_converted_2c.tflite)
-│   ├── simulation/           # ไฟล์จำลองสัญญาณจากเครื่องจักร
-│   └── main.py               # จุดเริ่มรัน FastAPI Edge Server
-├── backend_pc/               # 🪺 [Central Server Node] NestJS Backend บน PC (Port 3000)
-│   ├── src/                  # NestJS Controllers, Services & Websocket Gateway
-│   └── package.json          # Dependency ของ NestJS
-├── frontend/                 # 💻 [HMI Dashboard] React 19 + Vite HMI Web App (Port 5173)
-│   ├── src/
-│   │   ├── components/       # UI Components เช่น ConfigEditorModal, Canvas
-│   │   ├── pages/            # หน้าจอหลัก (Inspect, History, Models, Settings)
-│   │   └── context/          # Context API สำหรับจัดการ State (InspectionContext)
-│   └── index.html
-├── datasets/                 # ข้อมูลชุดภาพสำหรับ Benchmark
-├── docker/                   # การตั้งค่า Docker Container (PostgreSQL, CloudBeaver)
-├── start.sh / stop.sh        # สคริปต์เปิด/ปิดระบบแบบครบวงจร
-└── README.md                 # เอกสารที่คุณกำลังอ่าน
+├── 📁 backend_imx8/                     # 🧠 [Edge AI Node] ส่วนประมวลผล AI และเชื่อมต่อเครื่องจักร (FastAPI, Port 8001)
+│   ├── 📁 configs/                      # แฟ้มการตั้งค่าเครื่องจักรและสูตรการผลิต (Local Edge Cache)
+│   │   ├── 📁 machines/                 # ไฟล์คอนฟิกเครื่องจักร (.txt / .json) เช่น Machine_Setting_WP269.txt
+│   │   ├── 📁 recipes/                  # ไฟล์คอนฟิกชิ้นงาน/สูตรการตรวจ เช่น Product_Setting.txt
+│   │   └── 📄 model_recipe_bindings.json# ตารางผูกความสัมพันธ์ระหว่าง Recipe และ AI Model
+│   ├── 📁 core/                         # โมดูล Core Logic สำหรับการรัน AI และการคำนวณกฎการตรวจสอบ (Inspection Rules)
+│   │   ├── 📁 configs/                  # ค่าคงที่และเกณฑ์มาตรฐาน
+│   │   │   └── 📄 inspection_rules.yaml # ค่า Threshold และพารามิเตอร์การตัดสินชิ้นงาน
+│   │   └── 📁 src/                      # Source code แกนหลัก
+│   │       ├── 📁 rules/                # Rule-based Engine คำนวณขอบเขต, ระยะห่าง และการตัดสิน
+│   │       │   ├── 📄 __init__.py
+│   │       │   └── 📄 inspection.py     # ตรรกะตรวจสอบ Probe Mark บน Pad (Overlap, Margin, Area Ratio)
+│   │       ├── 📁 unet/                 # โมดูล AI Segmentation (U-Net Architecture)
+│   │       │   ├── 📄 __init__.py
+│   │       │   ├── 📄 model.py          # โครงสร้าง U-Net Model Architecture
+│   │       │   └── 📄 predict.py        # ฟังก์ชันเตรียมภาพ (Preprocess) และทำ Inference
+│   │       └── 📁 utils/                # ยูทิลิตี้เสริม (Config Loader, Image Processing)
+│   │           ├── 📄 __init__.py
+│   │           └── 📄 config.py         # ฟังก์ชันโหลดไฟล์คอนฟิก YAML/JSON
+│   ├── 📁 models/                       # พื้นที่จัดเก็บไฟล์โมเดล AI ที่พร้อมรันบน NPU
+│   │   ├── 📄 active_model_info.json    # Metadata ของโมเดลปัจจุบัน (ชื่อ, วันที่, Input Resolution, Class Map)
+│   │   ├── 📄 active_model.tflite       # โมเดลหลักที่กำลังรันอยู่ (.tflite รองรับ INT8 Quantization)
+│   │   └── 📄 backup_model.tflite       # โมเดลสำรองกรณีโมเดลหลักมีปัญหา
+│   ├── 📁 simulation/                   # สภาพแวดล้อมจำลองการแชร์โฟลเดอร์ของ Prober Machine
+│   │   ├── 📁 benchmark_uploads/        # ข้อมูลชุดทดสอบ Benchmark ที่อัปโหลดผ่าน HMI
+│   │   ├── 📁 drive_M/                  # ไดรฟ์จำลอง Samba Share M: (Output & Processed Images จากเครื่องจักร)
+│   │   │   └── 📁 WP269/PMI/            # แยกโฟลเดอร์ตามหมายเลขเครื่องจักร (เช่น WP269)
+│   │   │       ├── 📁 OUTPUT/           # โฟลเดอร์ที่เครื่องจักรส่งภาพใหม่เข้ามา
+│   │   │       └── 📁 PROCESSED/        # โฟลเดอร์ย้ายภาพที่ตรวจสอบเสร็จแล้ว
+│   │   └── 📁 drive_N/                  # ไดรฟ์จำลอง Samba Share N: (Image Archive & Judgement TXT)
+│   │       └── 📁 WP269/PMI/
+│   │           ├── 📁 IMAGE/            # คลังเก็บรูปภาพทั้งหมด
+│   │           └── 📁 JUDGE/            # โฟลเดอร์เขียนไฟล์ผลตัดสิน (PASS/FAIL TXT) ให้ Prober นำไปใช้
+│   ├── 📄 active_machine_setting.json   # แคชคอนฟิกเครื่องจักรปัจจุบันที่กำลังทำงาน
+│   ├── 📄 active_product_setting.json   # แคชสูตรการผลิตปัจจุบันที่กำลังทำงาน
+│   ├── 📄 config.yaml                   # ไฟล์ตั้งค่าเซิร์ฟเวอร์ พอร์ต พาธโฟลเดอร์ และ Hardware Watchdog
+│   ├── 📄 main.py                       # จุดเริ่มต้นรัน FastAPI Server, File Watcher Loop, และ REST Endpoints
+│   ├── 📄 mount_prober_shares.sh        # สคริปต์เชื่อมต่อเครือข่าย Samba (cifs mount) ไปยัง Prober จริง
+│   ├── 📄 requirements.txt              # รายการ Python dependencies (FastAPI, OpenCV, NumPy, TFLite Runtime)
+│   ├── 📄 run_unet_tflite_folder.py     # สคริปต์ Standalone สำหรับทดสอบรันโมเดลกับภาพทั้งโฟลเดอร์
+│   └── 📄 setup_autostart_imx8.sh       # สคริปต์สร้าง systemd service ให้ Edge Node เปิดตัวเองอัตโนมัติตอนบูต
+│
+├── 📁 backend_pc/                       # 🪺 [Central Server Node] เซิร์ฟเวอร์ศูนย์กลางและการจัดการข้อมูล (NestJS, Port 3000)
+│   ├── 📁 configs/                      # Master Storage สำหรับ Recipe & Machine Setting ทั่วทั้งโรงงาน
+│   │   ├── 📁 machines/                 # ต้นฉบับคอนฟิกเครื่องจักรทั้งหมด
+│   │   ├── 📁 recipes/                  # ต้นฉบับ Recipe ของผลิตภัณฑ์ทั้งหมด
+│   │   └── 📄 model_recipe_bindings.json# ความสัมพันธ์การผูกโมเดลส่วนกลาง
+│   ├── 📁 scripts/                      # สคริปต์ฝั่งเซิร์ฟเวอร์สำหรับแปลงโมเดล
+│   │   ├── 📄 convert_model.py          # แปลงโมเดล PyTorch (.pth) สู่ ONNX / TensorFlow
+│   │   └── 📄 convert_to_int8.py        # แปลงโมเดลเป็น TFLite INT8 Quantization พร้อม Calibration Dataset
+│   ├── 📁 src/                          # โค้ดต้นฉบับ NestJS (TypeScript)
+│   │   ├── 📁 configs/                  # โมดูลจัดการไฟล์ Configuration
+│   │   │   ├── 📄 configs.controller.ts # REST API จัดการอ่าน/เขียน/ลบ/รีเนมไฟล์คอนฟิก
+│   │   │   ├── 📄 configs.module.ts     # ลงทะเบียน Module
+│   │   │   └── 📄 configs.service.ts    # ตรรกะจัดการไฟล์ระบบ และกระจาย (Sync) ไปยังเครื่อง Edge
+│   │   ├── 📁 events/                   # โมดูลสื่อสารสองทางแบบ Real-time
+│   │   │   ├── 📄 events.gateway.ts     # WebSocket Gateway (@WebSocketGateway) กระจายผลตรวจจับสู่ HMI
+│   │   │   └── 📄 hardware-monitor.service.ts # มอนิเตอร์สถานะ Hardware (RAM, CPU, Disk)
+│   │   ├── 📁 inspections/              # โมดูลประวัติการตรวจสอบชิ้นงาน
+│   │   │   ├── 📄 inspection.entity.ts  # Database Schema / TypeORM Entity (PostgreSQL Table: inspections)
+│   │   │   ├── 📄 inspections.controller.ts # REST Endpoints สำหรับดึงประวัติ และ Export CSV
+│   │   │   └── 📄 inspections.service.ts# จัดการสืบค้น Query ข้อมูล คัดกรอง วันที่/Lot และบันทึก Record
+│   │   ├── 📁 models/                   # โมดูลจัดการ AI Models
+│   │   │   ├── 📄 models.controller.ts  # REST API อัปโหลด, ดึงรายการ, เปลี่ยนโมเดลที่ใช้งาน
+│   │   │   ├── 📄 models.module.ts      # ลงทะเบียน Module
+│   │   │   └── 📄 models.service.ts     # จัดการคัดลอกโมเดลไปยัง Edge Node
+│   │   ├── 📁 training/                 # โมดูลควบคุมกระบวนการ Retrain โมเดล
+│   │   │   ├── 📄 training.controller.ts# Endpoint เริ่มต้นการเทรน และตรวจสอบสถานะ
+│   │   │   ├── 📄 training.module.ts    # ลงทะเบียน Module
+│   │   │   └── 📄 training.service.ts   # ควบคุมการรัน Python Training Script แบบ Asynchronous
+│   │   ├── 📄 app.module.ts             # Root Module เชื่อมต่อ Database, TypeORM, และ Submodules ทั้งหมด
+│   │   └── 📄 main.ts                   # จุดเริ่มต้นรัน NestJS Application, ตั้งค่า CORS, และ Global Pipes
+│   ├── 📄 nest-cli.json                 # การตั้งค่า NestJS CLI
+│   ├── 📄 package.json                  # รายการ Dependencies (NestJS, TypeORM, Socket.IO, pg, rxjs)
+│   ├── 📄 start_pc.sh                   # สคริปต์รันเซิร์ฟเวอร์แบบอัตโนมัติ
+│   └── 📄 tsconfig.json                 # การตั้งค่า TypeScript Compiler
+│
+├── 📁 frontend/                         # 💻 [HMI Dashboard] หน้าจอเว็บแอปพลิเคชันสำหรับ Operator (React 19 + Vite, Port 5173)
+│   ├── 📁 public/                       # Static Assets ของเบราว์เซอร์
+│   │   ├── 📄 favicon.svg               # ไอคอน Favicon ของระบบ
+│   │   ├── 📄 icons.svg                 # SVG Sprite Sheet สำหรับสัญลักษณ์ไอคอนต่างๆ
+│   │   └── 📄 nxp_logo.webp             # โลโก้ NXP สำหรับส่วนหัวของหน้าจอ
+│   ├── 📁 src/                          # โค้ดต้นฉบับ React Application
+│   │   ├── 📁 assets/                   # ไฟล์กราฟิกและไอคอนประกอบ UI
+│   │   ├── 📁 components/               # โมดูลหน้าต่างย่อย (Reusable UI Components & Modals)
+│   │   │   ├── 📄 AuditLogModal.jsx     # หน้าต่างดูประวัติการเข้าใช้งานและการเปลี่ยนคอนฟิกระบบ
+│   │   │   ├── 📄 BenchmarkReportModal.jsx # หน้าต่างรายงานผลการทดสอบความแม่นยำ (Benchmark Validation)
+│   │   │   ├── 📄 ConfigEditorModal.jsx # โปรแกรมแก้ไขไฟล์ JSON/TXT ในเบราว์เซอร์ (In-browser Code Editor)
+│   │   │   ├── 📄 ExportCSVModal.jsx    # หน้าต่างตัวเลือกการดาวน์โหลดข้อมูลผลการตรวจเป็นไฟล์ CSV
+│   │   │   ├── 📄 HistoryDetailModal.jsx# หน้าต่างดูผลการตรวจแบบเจาะลึกรายชิ้นงาน พร้อมภาพขยาย
+│   │   │   ├── 📄 ModelTrainingSubTab.jsx # แท็บควบคุมการเทรนโมเดลใหม่และการเลือกชุดข้อมูล
+│   │   │   ├── 📄 SplitViewModal.jsx    # หน้าต่างเปรียบเทียบภาพ Raw เทียบกับภาพ Annotated แบบสองฝั่ง
+│   │   │   └── 📄 WaferCanvas.jsx       # ตัวเรนเดอร์ภาพเวเฟอร์และ Bounding Box แบบ Frame-Perfect บน Canvas
+│   │   ├── 📁 context/                  # State Management ส่วนกลางของแอปพลิเคชัน
+│   │   │   └── 📄 InspectionContext.jsx # จัดการการเชื่อมต่อ WebSocket, เก็บผลตรวจล่าสุด, และแคชคอนฟิก
+│   │   ├── 📁 layouts/                  # โครงสร้างเลย์เอาต์หน้าจอ
+│   │   │   └── 📄 MainLayout.jsx        # เลย์เอาต์หลัก ประกอบด้วย Top Navigation Bar, Status Beacon และ Content Area
+│   │   ├── 📁 pages/                    # หน้าจอหลักตามเส้นทาง (Route Pages)
+│   │   │   ├── 📄 AnalyticsPage.jsx     # แดชบอร์ดสรุปผลเชิงสถิติ (Yield Trend, Defect Distribution Charts)
+│   │   │   ├── 📄 HistoryPage.jsx       # หน้าตารางค้นหาประวัติการตรวจสอบย้อนหลัง พร้อมระบบ Filter และ Pagination
+│   │   │   ├── 📄 InspectPage.jsx       # หน้าจอหลักแสดงผลตรวจจับแบบสด (Live Inspection View & Status Banner)
+│   │   │   ├── 📄 ModelsPage.jsx        # หน้าจัดการโมเดล AI, ดูค่า Benchmark Accuracy และเริ่ม Retrain
+│   │   │   └── 📄 SettingsPage.jsx      # หน้าตั้งค่าเครื่องจักร, จัดการสูตร Recipe และปรับแต่ง Threshold
+│   │   ├── 📁 types/                    # ไฟล์กำหนด Type Definitions
+│   │   │   └── 📄 inspection.ts         # TypeScript Interfaces สำหรับโครงสร้างข้อมูลการตรวจสอบ
+│   │   ├── 📁 utils/                    # ฟังก์ชันช่วยเหลือและคำนวณสถิติ
+│   │   │   ├── 📄 historyHelpers.js     # ฟังก์ชันจัดฟอร์แมตข้อมูลประวัติ และการ Export CSV
+│   │   │   └── 📄 historyHelpers.test.js# ยูนิตเทสต์สำหรับตรวจสอบความถูกต้องของฟังก์ชันช่วยเหลือ
+│   │   ├── 📄 App.css                   # สไตล์ชีตเฉพาะของคอมโพเนนต์หลัก
+│   │   ├── 📄 App.jsx                   # จุดรวมเส้นทางหลักของแอป (React Router & Layout Wrapper)
+│   │   ├── 📄 index.css                 # หัวใจหลักของดีไซน์ระบบ (CSS Custom Properties, Typography Scale, Dark Theme)
+│   │   └── 📄 main.jsx                  # จุด Mount React Root เข้าสู่ DOM
+│   ├── 📄 index.html                    # ไฟล์ HTML หลักของเว็บแอปพลิเคชัน
+│   ├── 📄 package.json                  # รายการ Dependencies (React 19, Lucide Icons, Socket.IO Client, Vite)
+│   └── 📄 vite.config.js                # การตั้งค่า Vite Build Tool และ Proxy สำหรับ Development
+│
+├── 📁 docs/                             # 📚 เอกสารเทคนิค สถาปัตยกรรม และคู่มือระบบอย่างละเอียด
+│   ├── 📁 screenshots/                  # รูปภาพหน้าจอของระบบในแต่ละสถานะการทำงาน
+│   ├── 📁 superpowers/plans/            # แผนงานการพัฒนาระบบและการออกแบบสถาปัตยกรรม
+│   ├── 📄 FRONTEND_IMX8_DEV_GUIDE.md    # คู่มือการเชื่อมต่อระหว่าง Frontend และ i.MX8 Edge Node
+│   ├── 📄 FUTURE_TRAINING_AND_VALIDATION_PLAN.md # แผนงานพัฒนาระบบเทรน AI และระบบตรวจสอบความถูกต้องในอนาคต
+│   ├── 📄 IMX8_PMI_FRONTEND_INTEGRATION_PLAN.md  # สถาปัตยกรรมการผสานระบบ HMI เข้ากับเครื่องจักร PMI
+│   ├── 📄 INFERENCER_CONFIG_ANALYSIS.md # บทวิเคราะห์โครงสร้าง Configuration ของระบบ Inference
+│   ├── 📄 inspection_rules_summary.md   # กฎเกณฑ์และสมการทางคณิตศาสตร์ในการตัดสินคุณภาพชิ้นงาน (Pass/Fail Rules)
+│   ├── 📄 MODEL_VALIDATION_LAB_PLAN.md  # คู่มือการทดสอบวัดประสิทธิภาพโมเดลในห้องปฏิบัติการ
+│   └── 📄 MULTI_MACHINE_1_TO_N_ARCHITECTURE_PLAN.md # พิมพ์เขียวสถาปัตยกรรม 1 Central Server คุม N Edge Nodes
+│
+├── 📁 docker/                           # 🐳 คอนฟิกูเรชัน Docker สำหรับรันโครงสร้างพื้นฐานระบบเซิร์ฟเวอร์
+│   ├── 📁 cbdata/                       # ข้อมูลการตั้งค่าระบบ CloudBeaver (Web-based Database GUI)
+│   └── 📁 pgdata/                       # ไดเรกทอรีเก็บข้อมูลถาวรของฐานข้อมูล PostgreSQL 15 (Persistent Volume)
+│
+├── 📁 datasets/                         # 📦 ชุดข้อมูลภาพตัวอย่างสำหรับทดสอบโมเดลและการรัน Benchmark
+├── 📁 outputs/                          # 📊 โฟลเดอร์เก็บผลลัพธ์การรันแบบออฟไลน์
+│   ├── 📁 inspection_visuals/           # ภาพที่ตีกรอบแสดงผลลัพธ์การทดสอบ
+│   └── 📄 inspection_report.csv         # ไฟล์สรุปผลการตรวจสอบแบบสเปรดชีต
+│
+├── 📄 docker-compose.yml                # คอนฟิกการเปิด Service ฐานข้อมูล (PostgreSQL & CloudBeaver) ด้วยคำสั่งเดียว
+├── 📄 init.sql                          # สคริปต์ SQL สำหรับสร้างตาราง inspections และ indexes ตั้งแต่เริ่มรันฐานข้อมูล
+├── 📄 start.sh                          # สคริปต์ Bash แบบ One-Click เพื่อเปิดระบบครบทุกโหนดพร้อมกัน (DB + PC + Edge + UI)
+├── 📄 stop.sh                           # สคริปต์ Bash ปิดระบบและคืน Resource ทั้งหมดอย่างปลอดภัย
+├── 📄 test_defect_mapping.py            # สคริปต์ทดสอบการจำลองแมปปิ้งจุดบกพร่อง
+└── 📄 README.md                         # เอกสารภาพรวมและการใช้งานระบบที่คุณกำลังอ่าน
 ```
+
+### 4.2 สรุปหน้าที่ของโฟลเดอร์หลักและความสัมพันธ์ระหว่างส่วนต่างๆ
+
+| โฟลเดอร์ / ไดเรกทอรี | ภาษา / เทคโนโลยีหลัก | บทบาทและหน้าที่ในระบบ | ความสัมพันธ์กับระบบส่วนอื่น |
+| :--- | :--- | :--- | :--- |
+| **`backend_imx8/`** | Python 3.10+, FastAPI, OpenCV, TFLite | **Edge Node (AI & Machine Interface):** ตรวจจับภาพด้วยโมเดล U-Net บน NPU, คำนวณกฎการตัดสิน Pass/Fail, และเขียนผลตัดสินลงโฟลเดอร์แชร์ของ Prober | ส่งผลตรวจและ Telemetry ไปยัง `backend_pc` และส่งภาพพร้อมสถิติให้ `frontend` แสดงผล |
+| **`backend_imx8/configs/`** | JSON, Text Config | **Local Config Cache:** เก็บค่าคอนฟิกเครื่องจักร (Machine Settings) และสูตรการผลิต (Product Recipes) | ซิงก์ข้อมูลกับ `backend_pc/configs/` และถูกเรียกใช้โดย Rule Engine ใน `core/src/rules/` |
+| **`backend_imx8/core/`** | Python | **Inspection Rule Engine & U-Net Inference:** ตรรกะคณิตศาสตร์สำหรับวิเคราะห์ขอบเขต Probe Mark, เปอร์เซ็นต์พื้นที่ และจุดบกพร่อง | รับภาพจาก `main.py` ทำการประมวลผล แล้วส่งผลลัพธ์กลับให้ `main.py` นำไปบันทึกและส่งต่อ |
+| **`backend_imx8/models/`** | TFLite (.tflite), JSON | **Edge AI Model Storage:** เก็บโมเดล AI น้ำหนักเบาที่ผ่านการแปลงเป็น INT8 Quantization เพื่อรันบน NPU | ได้รับโมเดลที่พร้อมใช้งานมาจาก `backend_pc/scripts/` |
+| **`backend_imx8/simulation/`**| Shell, File Structure | **Virtual Prober Environment:** โฟลเดอร์จำลองไดรฟ์ M: และ N: สำหรับทดสอบโดยไม่ต้องต่อกับเครื่องจักรจริง | จำลองการส่งภาพจากกล้องเครื่องจักรเข้าสู่ระบบ |
+| **`backend_pc/`** | TypeScript, NestJS, Node.js | **Central Server & Gateway:** เซิร์ฟเวอร์กลางสำหรับบันทึกประวัติลงฐานข้อมูล และกระจายข้อความ Real-time | รับข้อมูลจาก `backend_imx8` ผ่าน REST API และส่งต่อให้ `frontend` ผ่าน WebSocket |
+| **`backend_pc/src/`** | NestJS (Modules/Services) | **Business Logic & Persistence:** จัดการ REST Endpoints, WebSocket Gateway (`events.gateway.ts`), และ Query ฐานข้อมูล | สื่อสารกับ PostgreSQL ผ่าน TypeORM และเชื่อมต่อไปยัง Web Browser Clients |
+| **`backend_pc/scripts/`** | Python, PyTorch, TensorFlow | **Model Optimization Pipeline:** แปลงโมเดล PyTorch/ONNX ให้เป็น INT8 TFLite พร้อม Deploy สู่บอร์ด Edge | ส่งออกไฟล์ `.tflite` ไปยังโฟลเดอร์ `backend_imx8/models/` |
+| **`frontend/`** | JavaScript (ES6+), React 19, Vite | **HMI Web Dashboard:** อินเทอร์เฟซควบคุมสำหรับผู้ใช้งาน แสดงภาพเวเฟอร์แบบเรียลไทม์ ปรับแต่งคอนฟิก และดูประวัติ | เชื่อมต่อ WebSocket กับ `backend_pc` และส่งคำสั่งควบคุม (REST) ไปที่ `backend_imx8` |
+| **`frontend/src/components/`** | React Components | **UI Widgets & Interactive Modals:** คอมโพเนนต์หน้าต่างย่อย เช่น `ConfigEditorModal`, `WaferCanvas`, `ExportCSVModal` | ถูกเรียกใช้โดยหน้าจอหลักใน `frontend/src/pages/` |
+| **`frontend/src/context/`** | React Context API | **Global State & Network Layer:** รวมศูนย์ State การตรวจจับ การเชื่อมต่อ WebSocket และฟังก์ชันการบันทึกคอนฟิก | กระจายข้อมูลผลตรวจจับและสถานะเครื่องจักรไปยังทุกหน้าจอในระบบ |
+| **`docs/`** | Markdown, PNG Diagrams | **Technical Documentation:** รวบรวมเอกสารพิมพ์เขียว สถาปัตยกรรม 1:N, กฎเกณฑ์การตรวจสอบ และคู่มือนักพัฒนา | ใช้เป็นแนวทางอ้างอิงในการพัฒนาและต่อยอดฟังก์ชันการทำงาน |
+| **`docker/`** | Docker, PostgreSQL 15, CloudBeaver | **Central Infrastructure:** จัดเก็บฐานข้อมูลประวัติการตรวจจับอย่างถาวรใน `pgdata` | ให้บริการฐานข้อมูลแก่ `backend_pc` ผ่าน Connection String บนพอร์ต 5432 |
 
 ---
 
