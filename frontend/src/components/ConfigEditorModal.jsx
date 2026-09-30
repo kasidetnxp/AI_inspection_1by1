@@ -278,7 +278,7 @@ export default function ConfigEditorModal({
             </div>
             <div>
               <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                <h3 style={{ margin: 0, fontSize: "16px", fontWeight: "700" }}>
+                <h3 style={{ margin: 0, fontSize: "18px", fontWeight: "800" }}>
                   {isNew
                     ? configType === "product"
                       ? "Create New Recipe Configuration"
@@ -289,9 +289,9 @@ export default function ConfigEditorModal({
                 </h3>
                 <span
                   style={{
-                    fontSize: "10.5px",
+                    fontSize: "12px",
                     fontWeight: "700",
-                    padding: "2px 7px",
+                    padding: "3px 8px",
                     borderRadius: "4px",
                     background: configType === "product" ? "rgba(14, 165, 233, 0.15)" : "rgba(245, 158, 11, 0.15)",
                     color: configType === "product" ? "var(--color-info)" : "var(--color-warn)",
@@ -303,16 +303,16 @@ export default function ConfigEditorModal({
                 {isCurrentActive && (
                   <span
                     className="badge-result pass"
-                    style={{ fontSize: "10px", padding: "2px 8px", fontWeight: "700" }}
+                    style={{ fontSize: "11px", padding: "3px 8px", fontWeight: "700" }}
                   >
                     ACTIVE IN RUNTIME
                   </span>
                 )}
               </div>
-              <div style={{ fontSize: "12px", color: "var(--text-muted)", marginTop: "2px" }}>
+              <div style={{ fontSize: "13.5px", color: "var(--text-muted)", marginTop: "3px" }}>
                 {isNew
                   ? "Define rules and parameters based on current active template"
-                  : "Modify JSON configuration parameters and hot-reload into runtime"}
+                  : "Modify JSON configuration parameters and apply into runtime"}
               </div>
             </div>
           </div>
@@ -350,7 +350,7 @@ export default function ConfigEditorModal({
         >
           {/* Filename input / display */}
           <div style={{ display: "flex", alignItems: "center", gap: "10px", flex: 1, minWidth: "260px" }}>
-            <span style={{ fontSize: "12.5px", fontWeight: "700", color: "var(--text-muted)", whiteSpace: "nowrap" }}>
+            <span style={{ fontSize: "14px", fontWeight: "700", color: "var(--text-muted)", whiteSpace: "nowrap" }}>
               File Name:
             </span>
             <input
@@ -361,9 +361,9 @@ export default function ConfigEditorModal({
               className="font-mono"
               style={{
                 flex: 1,
-                maxWidth: "360px",
-                padding: "6px 12px",
-                fontSize: "13px",
+                maxWidth: "380px",
+                padding: "8px 12px",
+                fontSize: "14.5px",
                 borderRadius: "6px",
                 background: "var(--bg-input)",
                 border: "1px solid var(--border-color)",
@@ -375,9 +375,9 @@ export default function ConfigEditorModal({
             {!isNew && filename !== initialFilename && (
               <span
                 style={{
-                  fontSize: "11px",
+                  fontSize: "12px",
                   color: "var(--color-warn)",
-                  padding: "2px 8px",
+                  padding: "3px 8px",
                   borderRadius: "4px",
                   background: "rgba(245, 158, 11, 0.12)",
                   border: "1px solid rgba(245, 158, 11, 0.3)",
@@ -394,11 +394,11 @@ export default function ConfigEditorModal({
             {jsonError ? (
               <span
                 style={{
-                  fontSize: "11.5px",
+                  fontSize: "13px",
                   fontWeight: "600",
                   color: "var(--color-fail)",
                   background: "rgba(239, 68, 68, 0.12)",
-                  padding: "4px 10px",
+                  padding: "5px 12px",
                   borderRadius: "6px",
                   border: "1px solid rgba(239, 68, 68, 0.3)",
                   maxWidth: "280px",
@@ -413,11 +413,11 @@ export default function ConfigEditorModal({
             ) : (
               <span
                 style={{
-                  fontSize: "11.5px",
+                  fontSize: "13px",
                   fontWeight: "600",
                   color: "var(--color-pass)",
                   background: "rgba(16, 185, 129, 0.12)",
-                  padding: "4px 10px",
+                  padding: "5px 12px",
                   borderRadius: "6px",
                   border: "1px solid rgba(16, 185, 129, 0.3)"
                 }}
@@ -430,7 +430,7 @@ export default function ConfigEditorModal({
               type="button"
               onClick={handleFormatJson}
               className="select-file-btn"
-              style={{ padding: "5px 12px", fontSize: "12px", borderRadius: "6px" }}
+              style={{ padding: "6px 14px", fontSize: "13.5px", borderRadius: "6px" }}
               title="Auto format and beautify JSON"
             >
               Format JSON
@@ -440,8 +440,8 @@ export default function ConfigEditorModal({
               onClick={handleReset}
               className="select-file-btn"
               style={{
-                padding: "5px 12px",
-                fontSize: "12px",
+                padding: "6px 14px",
+                fontSize: "13.5px",
                 borderRadius: "6px",
                 background: "rgba(255, 255, 255, 0.04)"
               }}
@@ -506,7 +506,7 @@ export default function ConfigEditorModal({
                 background: "#090d16",
                 color: "#e2e8f0",
                 fontFamily: "var(--font-mono, 'Consolas', 'Courier New', monospace)",
-                fontSize: "13px",
+                fontSize: "14.5px",
                 lineHeight: "1.6",
                 boxSizing: "border-box"
               }}
@@ -527,9 +527,9 @@ export default function ConfigEditorModal({
             flexWrap: "wrap"
           }}
         >
-          <div style={{ fontSize: "12px", color: "var(--text-muted)", display: "flex", alignItems: "center", gap: "6px" }}>
+          <div style={{ fontSize: "13px", color: "var(--text-muted)", display: "flex", alignItems: "center", gap: "6px" }}>
             <span style={{ color: "var(--color-info)" }}>ℹ</span>
-            <span>Tab key inserts 2 spaces. Saving an active config automatically hot-reloads runtime.</span>
+            <span>Tab key inserts 2 spaces. Saving an active config automatically updates runtime.</span>
           </div>
 
           <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
@@ -538,7 +538,7 @@ export default function ConfigEditorModal({
               onClick={onClose}
               className="select-file-btn"
               disabled={saving}
-              style={{ padding: "8px 18px", fontSize: "13px", borderRadius: "6px", background: "transparent" }}
+              style={{ padding: "9px 18px", fontSize: "14px", borderRadius: "6px", background: "transparent" }}
             >
               Cancel
             </button>
@@ -548,8 +548,8 @@ export default function ConfigEditorModal({
               disabled={saving || !!jsonError}
               className="select-file-btn"
               style={{
-                padding: "8px 20px",
-                fontSize: "13px",
+                padding: "9px 20px",
+                fontSize: "14px",
                 fontWeight: "700",
                 borderRadius: "6px",
                 opacity: jsonError ? 0.6 : 1
@@ -563,8 +563,8 @@ export default function ConfigEditorModal({
               disabled={saving || !!jsonError}
               className="select-file-btn"
               style={{
-                padding: "8px 22px",
-                fontSize: "13px",
+                padding: "9px 22px",
+                fontSize: "14px",
                 fontWeight: "700",
                 borderRadius: "6px",
                 background: "var(--color-pass, #10b981)",
