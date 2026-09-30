@@ -1,199 +1,157 @@
-# 🔬 Edge AI Semiconductor Wafer Defect Inspection System
-### ระบบตรวจจับและวิเคราะห์ตำหนิบนแผ่น semiconductor wafer ด้วยปัญญาประดิษฐ์ประมวลผลที่ขอบ (Edge AI)
+# 🔬 AI Wafer Inspection HMI Dashboard (Edge AI System)
+### ระบบตรวจจับและวิเคราะห์ตำหนิบนแผ่น semiconductor wafer ด้วย Edge AI
 
 ---
 
 ## 📌 1. ภาพรวมระบบ (System Overview)
 
-ระบบ **Edge AI Wafer Defect Inspection System** ถูกพัฒนาขึ้นสำหรับการตรวจจับตำหนิแบบเรียลไทม์บนแผ่นเวเฟอร์ (Semiconductor Wafer Inspection) ในกระบวนการผลิตสารกึ่งตัวนำ โดยใช้โมเดล Deep Learning (YOLOv8-Segmentation / UNet) ที่ถูกควอนไทซ์เป็น INT8 เพื่อประมวลผลบนหน่วยประมวลผล NPU (Neural Processing Unit) ของฮาร์ดแวร์ระดับอุตสาหกรรม **NXP i.MX8M Plus**
+ระบบ **AI Wafer Inspection HMI Dashboard** ถูกพัฒนาขึ้นสำหรับการตรวจจับตำหนิแบบเรียลไทม์บนแผ่นเวเฟอร์ (Semiconductor Wafer Inspection) ในกระบวนการผลิตสารกึ่งตัวนำ โดยใช้โมเดล Deep Learning (YOLOv8-Segmentation / UNet) ในการประมวลผลบนหน่วยประมวลผลของฮาร์ดแวร์ระดับอุตสาหกรรม **NXP i.MX8M Plus** (Edge Node) ร่วมกับระบบเซิร์ฟเวอร์ศูนย์กลาง (PC Node) 
 
-ระบบประกอบด้วยหน้าจอแสดงผล **HMI (Human-Machine Interface)** สองรูปแบบหลัก (Dual-UI Architecture):
-1. **Local i.MX8 Native Python UI**: หน้าจอแสดงผลตรงบนบอร์ด i.MX8 (พัฒนาด้วย Python / Tkinter / PyQt) สำหรับผู้ควบคุมเครื่องจักรหน้างาน (Operator at Machine)
-2. **Central Web HMI Dashboard (React 19 + NestJS PC Node)**: หน้าเว็บศูนย์ควบคุมกลางสำหรับวิศวกรและผู้บริหาร (โหมด Engineer Inspection และ Operator Remote View ผ่าน Web Browser)
+ระบบ HMI (Human-Machine Interface) นี้ได้รับการออกแบบให้มีความลื่นไหล เป็นมิตรต่อผู้ใช้งาน และรองรับหน้าจอสัมผัสในโรงงานอุตสาหกรรม พร้อมหน้าต่างควบคุม (Settings) ที่สามารถปรับแก้พารามิเตอร์ของระบบแบบ Hot-Reload ได้ทันที
 
 ---
 
-## 🛠️ 2. สถาปัตยกรรมเทคโนโลยี (Tech Stack Breakdown & Justifications)
+## 🛠️ 2. สถาปัตยกรรมเทคโนโลยี (Tech Stack Architecture)
 
-ระบบเลือกใช้เทคโนโลยีในแต่ละ Layer อย่างพิถีพิถันเพื่อตอบโจทย์ประสิทธิภาพความเร็วระดับเรียลไทม์ ความเสถียรในโรงงานอุตสาหกรรม และการตอบสนองที่ลื่นไหล:
+สถาปัตยกรรมของระบบแบ่งออกเป็น 3 ส่วนหลัก (3-Tier Dual-Node Architecture):
 
 ```mermaid
 graph TD
     A[📷 Camera / Machine Input] -->|Raw Image File| B[🧠 NXP i.MX8 Edge AI Node - FastAPI Port 8001]
-    B -->|Direct Local Display| C[🖥️ Local i.MX8 Native Python UI]
-    B -->|TFLite INT8 / NPU Inference| D[⚙️ i.MX8 Rule Engine & Local DB]
-    D -->|Single txt Judgement| E[📟 Prober Machine Output]
-    B -->|Async HTTP JSON Sync| F[🪺 PC Central Backend - NestJS Port 3000]
-    F -->|Central DB & Socket Gateway| G[🐘 PostgreSQL Central DB]
-    F -->|WebSocket & REST APIs| H[💻 Central Web HMI - React 19 Port 5173]
-    H -->|Operator Remote View| I[🔴🟡🟢 Full-Screen Color Beacon]
-    H -->|Engineer View| J[📊 Interactive Analytics & Model Manager]
+    B -->|TFLite INT8 / NPU Inference| C[⚙️ i.MX8 Rule Engine & Local DB]
+    C -->|Single txt Judgement| D[📟 Prober Machine Output]
+    B -->|Async HTTP JSON Sync| E[🪺 PC Central Backend - NestJS Port 3000]
+    E -->|Central DB & Socket Gateway| F[🐘 PostgreSQL Central DB]
+    E <-->|WebSocket & REST APIs| G[💻 Central Web HMI - React 19 Port 5173]
+    B <-->|Edge Settings API| G
+    G -->|Operator View| H[🔴🟡🟢 Full-Screen Color Beacon & Canvas]
+    G -->|Engineer View| I[📊 Config Editor Modal & History Export]
 ```
 
-### 💻 Frontend (Human-Machine Interface - HMI)
-| Technology | Description | เหตุผลในการเลือกใช้ (Justification) |
-| :--- | :--- | :--- |
-| **React 19** | Core UI Library | ช่วยในการจัดการ Component-based State ที่ซับซ้อนได้อย่างมีประสิทธิภาพและลื่นไหล รองรับการ Re-render เฉพาะจุดที่มีการอัปเดตข้อมูลเรียลไทม์จาก WebSocket |
-| **Vite 8** | Frontend Build Tool & Dev Server | ให้ความเร็วในการพัฒนาสูงมากด้วย Instant Hot Module Replacement (HMR) และการ bundling ที่รวดเร็ว เหมาะกับการพัฒนาแอปพลิเคชัน HMI ระดับอุตสาหกรรม |
-| **Vanilla CSS** | Pure Custom Styling | หลีกเลี่ยง Heavy CSS Frameworks (เช่น Tailwind หรือ Bootstrap) เพื่อให้สามารถควบคุมสัดส่วนเลย์เอาต์ ความละเอียดของภาพ Canvas และระบบเปลี่ยนสีธีมทั้งหน้าจอ (Full-Screen Theme) ได้สมบูรณ์แบบ 100% โดยไม่มี Overhead |
-| **HTML5 Canvas API** | Graphics Rendering Engine | ใช้สำหรับวาดภาพถ่ายแผ่นเวเฟอร์ เลเซอร์สแกนเนอร์ และการแสดงผล Overlay Bounding Box / Segmentation Masks พร้อมสเกลสัดส่วน 1:1 ได้อย่างคมชัดด้วยประสิทธิภาพ 60 FPS |
+### 💻 2.1 Frontend (HMI Web Dashboard)
+- **React 19 + Vite 8**: สร้าง UI component ที่อัปเดตแบบเรียลไทม์ผ่าน WebSocket มีความเร็วสูงและ Hot Module Replacement
+- **Vanilla CSS (Custom Design System)**: ออกแบบสไตล์เฉพาะตัวด้วย CSS Variables ควบคุมสเกล Typography (14px - 22px) และ Layout ได้สมบูรณ์ โดยไม่พึ่งพา Framework ที่มี Overhead
+- **HTML5 Canvas API**: ใช้สำหรับวาดภาพถ่ายแผ่นเวเฟอร์ การวาด Bounding Box / Segmentation Masks พร้อมการคำนวณสเกลภาพแบบ 1:1
 
----
+### ⚙️ 2.2 Edge AI Backend (NXP i.MX8 - FastAPI)
+- **FastAPI (Python 3.10+)**: API ความเร็วสูงบนพอร์ต 8001 จัดการ Inference Pipeline, Telemetry ของ Edge Board และจัดการไฟล์ Config (Recipe/Machine)
+- **PyTorch & TensorFlow Lite**: รันโมเดล Quantized INT8 บน NPU สำหรับตรวจจับ Pad, Probe Mark, และ Silicon Grain
+- **OpenCV & NumPy**: จัดการ Image Processing แบบความหน่วงต่ำ
 
-### ⚙️ Backend & Inference Engine
-| Technology | Description | เหตุผลในการเลือกใช้ (Justification) |
-| :--- | :--- | :--- |
-| **FastAPI (Python 3.10+)** | High-performance Web Framework | เป็น Framework ที่เร็วกว่า Flask หลายเท่า สร้างบน Starlette/Pydantic รองรับ Asynchronous (async/await) เหมาะสำหรับรับส่งข้อมูลสตรีมมิ่งภาพและ Telemetry ความเร็วสูง |
-| **Uvicorn** | ASGI Web Server | Server ที่รองรับการเชื่อมต่อแบบ Async ความเร็วสูง เหมาะสำหรับการทำ WebSocket Streaming แบบเรียลไทม์ระหว่าง Backend กับ HMI Frontend |
-| **PyTorch & YOLOv8-Seg** | Deep Learning Framework & Model | ใช้ฝึกฝนและทำ Segmentation ตรวจจับแผ่น Pad, รอย Probe Mark และสิ่งปนเปื้อน (Silicon Grain / Dust) ด้วยความแม่นยำสูง (mAP > 97%) |
-| **TensorFlow Lite (TFLite INT8)** | Edge Quantized Model Format | ทำการ Quantize โมเดลจาก PyTorch เป็น INT8 เพื่อให้สามารถรันบนฮาร์ดแวร์ NPU อุปกรณ์ริมขอบ (NXP i.MX8) ได้ที่ความเร็วระดับมิลลิวินาที (<17ms per frame) |
-| **OpenCV (cv2)** | Image Processing Library | ใช้สำหรับประมวลผลภาพเบื้องต้น (Image Crop, Bounding Box Annotation, Edge Alignment) ก่อนส่งภาพเข้า AI โมเดล |
-
----
-
-### 🐘 Data Persistence & Hardware
-| Technology | Description | เหตุผลในการเลือกใช้ (Justification) |
-| :--- | :--- | :--- |
-| **PostgreSQL** | Enterprise Relational Database | ตอบโจทย์มาตรฐานโรงงานอุตสาหกรรมด้วยความสามารถในการรองรับข้อมูลธุรกรรม (Transactions) การบันทึกประวัติผลตรวจ (Inspection Logs) และความปลอดภัยของข้อมูลสูง |
-| **SQLite (Fallback)** | Lightweight Embedded Database | ทำหน้าที่เป็นระบบสำรองอัตโนมัติ (Auto-fallback) เมื่อ PostgreSQL Offline เพื่อให้ระบบ HMI สามารถทำงานและบันทึกข้อมูลได้อย่างต่อเนื่องไม่สะดุด |
-| **NXP i.MX8M Plus** | Edge AI Hardware Target | บอร์ดไมโครโพรเซสเซอร์ระดับอุตสาหกรรมพร้อม NPU ในตัว (2.3 TOPS) ใช้พลังงานต่ำ เหมาะสำหรับติดตั้งข้างสายการผลิตจริง |
+### 🪺 2.3 Central Server Backend (PC Node - NestJS)
+- **NestJS (TypeScript)**: รันบนพอร์ต 3000 หน้าที่ประสานงาน (Gateway) ระหว่าง Edge Nodes หลายตัวและ HMI
+- **PostgreSQL**: ฐานข้อมูล Enterprise (รันผ่าน Docker) เก็บประวัติผลตรวจจับ และสถิติการผลิต
+- **SQLite (Fallback)**: ระบบฐานข้อมูลสำรองอัตโนมัติหาก PostgreSQL ดาวน์
 
 ---
 
 ## 🌟 3. ฟีเจอร์หลักของระบบ (Key Features)
 
-1. **โหมดตรวจจับ 2 Classes & 3 Classes (Model Class Architecture Manager)**:
-   - สลับใช้งานระหว่างโหมด 2 คลาส (`Pad + Probe Mark`) และ 3 คลาส (`Pad + Probe Mark + Silicon Grain`) ได้ทันที
-   - ระบบตรวจสอบและสลับโหมดอัตโนมัติให้ตรงกับสถาปัตยกรรมของโมเดล AI ที่เปิดใช้งาน (`2C` / `3C`)
-2. **การแสดงผล Operator Mode เต็มหน้าจอ (Full-Screen Color Beacon)**:
-   - แบนเนอร์ผลลัพธ์ขนาดใหญ่ (`PASS`, `WARNING`, `FAIL`) ฟอนต์หนา 56px
-   - พื้นหลังและส่วนประกอบทั้งหน้าจอเปลี่ยนสีตามผลลัพธ์ (เขียว/เหลือง/แดง) เป็นไฟสัญญาณเตือนทางสายตาจากระยะไกล
-3. **การแสดงผลภาพถ่ายจริง 100% (No Fake Simulation)**:
-   - แสดงเฉพาะภาพถ่ายจริงจากกล้องหรือไฟล์สตรีม
-   - กรณีไม่มีสัญญาณภาพ หน้าจอจะแสดงข้อความเตือน **"NO IMAGE AVAILABLE"** พร้อมสถานะรอกล้องโดยไม่สร้างรูปภาพจำลองขึ้นมาเอง
-4. **Synchronized Image & Banner Display**:
-   - ระบบ Preload ภาพล่วงหน้าในหน่วยความจำ เพื่อให้อัปเดตรูปภาพ แถบผลลัพธ์สี และเส้นเลเซอร์สแกนพร้อมกันในเฟรมเดียว (Frame-Perfect Sync)
-5. **ระบบวิเคราะห์และส่งออกรายงาน (Analytics & Spreadsheet Export)**:
-   - คำนวณอัตรา Yield Rate, Defect Rate, ความแม่นยำเฉลี่ย และประวัติเวลา Inference (ms)
-   - ส่งออกข้อมูลการผลิตย้อนหลังเป็นไฟล์สเปรดชีต CSV ได้ทันที
+1. **โหมดตรวจจับแบบไดนามิก (Model Class Architecture Manager)**:
+   - ระบบจะอ่านค่าคลาสที่ตรวจจับได้จากโมเดล (`Pad + Probe Mark` 2C หรือเพิ่ม `Silicon Grain` 3C) และปรับการแสดงผลบน Canvas พร้อมตารางผลลัพธ์โดยอัตโนมัติ
+
+2. **Full-Screen Operator Beacon & Frame-Perfect Sync**:
+   - แบนเนอร์ผลลัพธ์ (PASS/WARNING/FAIL) เปลี่ยนสีพื้นหลังทั้งหน้าจอ เป็นสัญญาณไฟทางสายตา
+   - Preload รูปภาพพร้อมกับการคำนวณ Bounding Box เพื่อให้การเรนเดอร์กราฟิกไม่กระตุก (No flickering)
+
+3. **In-Browser Config Editor Modal (หน้า Settings)**:
+   - ตารางรายการไฟล์ Recipe และ Machine Configuration
+   - **Config Editor Modal**: เครื่องมือแก้ไขไฟล์ JSON แบบฝังในเบราว์เซอร์ พร้อมการเช็กความถูกต้อง (Valid JSON format) ปุ่ม Format JSON และระบบบันทึกแบบ Hot-Reload เข้าสู่ Runtime บน Edge ทันที
+   - การจัดการเปิดใช้งานโมเดล AI (`.tflite` / `.pth`) ผ่านหน้า UI
+
+4. **History & Analytics Export**:
+   - ตารางประวัติการตรวจสอบย้อนหลังที่ดึงข้อมูลจาก Database แบบ Pagination
+   - ระบบ **Export to CSV**: ดาวน์โหลดข้อมูลผลการตรวจสอบพร้อม timestamp เป็นไฟล์ Spreadsheet ชื่อไฟล์ฟอร์แมต `inspection_history_YYYY-MM-DD_HHMM.csv`
 
 ---
 
-## 📂 4. โครงสร้างโฟลเดอร์ของโปรเจกต์ (Project Directory Structure)
+## 📂 4. โครงสร้างโฟลเดอร์ (Project Directory Structure)
 
 ```text
 UIIU/
-├── docs/                     # 📚 เอกสารสถาปัตยกรรม คู่มือ และรายงานสรุปทั้งหมด
-│   ├── inspection_rules_summary.md        # สรุปตรรกะและเงื่อนไขการตรวจจับ Pass/Fail
-│   ├── FRONTEND_IMX8_DEV_GUIDE.md         # คู่มือการเชื่อมต่อ Web HMI กับ i.MX8
-│   ├── IMX8_PMI_FRONTEND_INTEGRATION_PLAN.md
-│   ├── INFERENCER_CONFIG_ANALYSIS.md      # การวิเคราะห์พารามิเตอร์ Recipe & Machine
-│   ├── FUTURE_TRAINING_AND_VALIDATION_PLAN.md
-│   ├── MODEL_VALIDATION_LAB_PLAN.md
-│   └── screenshots/                       # ภาพหน้าจออ้างอิง UI
-├── backend_imx8/             # 🧠 [Edge AI Node] FastAPI Backend บน NXP i.MX8 (Port 8001)
-│   ├── configs/              # Recipe & Machine Configuration Library
-│   │   ├── machines/
-│   │   ├── recipes/
-│   │   └── model_recipe_bindings.json
-│   ├── models/               # จัดเก็บโมเดล AI (.tflite, .pth)
-│   ├── simulation/           # โฟลเดอร์จำลองการทำงานของเครื่องจักร (image, process, output, judge)
-│   ├── main.py               # API Server, Pipeline, NPU AI & Judgement Writer
-│   └── config.yaml           # i.MX8 Edge Configuration
+├── docs/                     # 📚 เอกสารเทคนิค สถาปัตยกรรม และคู่มือระบบ
+├── backend_imx8/             # 🧠 [Edge AI Node] FastAPI Backend บน i.MX8 (Port 8001)
+│   ├── configs/              # โฟลเดอร์เก็บ Machine & Recipe Configuration Files (JSON/TXT)
+│   ├── models/               # ไฟล์โมเดล AI (เช่น best_converted_2c.tflite)
+│   ├── simulation/           # ไฟล์จำลองสัญญาณจากเครื่องจักร
+│   └── main.py               # จุดเริ่มรัน FastAPI Edge Server
 ├── backend_pc/               # 🪺 [Central Server Node] NestJS Backend บน PC (Port 3000)
-│   ├── src/                  # NestJS Modules, Controllers, Services & Socket.io Gateway
-│   ├── package.json          # NestJS Dependencies
-│   └── tsconfig.json
+│   ├── src/                  # NestJS Controllers, Services & Websocket Gateway
+│   └── package.json          # Dependency ของ NestJS
 ├── frontend/                 # 💻 [HMI Dashboard] React 19 + Vite HMI Web App (Port 5173)
-├── datasets/                 # ข้อมูลชุดภาพสำหรับ Train และ Benchmark
-├── docker/                   # ข้อมูล Container Persistence (PostgreSQL, CloudBeaver)
-├── start.sh / stop.sh        # One-Click System Launcher / Shutdown (Multi-Node)
-└── README.md                 # System Overview & Documentation
+│   ├── src/
+│   │   ├── components/       # UI Components เช่น ConfigEditorModal, Canvas
+│   │   ├── pages/            # หน้าจอหลัก (Inspect, History, Models, Settings)
+│   │   └── context/          # Context API สำหรับจัดการ State (InspectionContext)
+│   └── index.html
+├── datasets/                 # ข้อมูลชุดภาพสำหรับ Benchmark
+├── docker/                   # การตั้งค่า Docker Container (PostgreSQL, CloudBeaver)
+├── start.sh / stop.sh        # สคริปต์เปิด/ปิดระบบแบบครบวงจร
+└── README.md                 # เอกสารที่คุณกำลังอ่าน
 ```
-
-### 📚 ดัชนีเอกสารทางเทคนิค (Documentation Index)
-* 📑 [inspection_rules_summary.md](file:///home/nxp1/Desktop/PUNPUNJA/PROJECT/UIIU/docs/inspection_rules_summary.md) - สรุปเกณฑ์การตรวจสอบเงื่อนไข Pass/Fail/Filter ของภาพ
-* 📑 [FRONTEND_IMX8_DEV_GUIDE.md](file:///home/nxp1/Desktop/PUNPUNJA/PROJECT/UIIU/docs/FRONTEND_IMX8_DEV_GUIDE.md) - คู่มือการพัฒนาเชื่อมต่อ Frontend HMI กับ Edge API
-* 📑 [INFERENCER_CONFIG_ANALYSIS.md](file:///home/nxp1/Desktop/PUNPUNJA/PROJECT/UIIU/docs/INFERENCER_CONFIG_ANALYSIS.md) - การแมปปิ้งพารามิเตอร์ Recipe และการตั้งค่าเครื่องจักร
-* 📑 [FUTURE_TRAINING_AND_VALIDATION_PLAN.md](file:///home/nxp1/Desktop/PUNPUNJA/PROJECT/UIIU/docs/FUTURE_TRAINING_AND_VALIDATION_PLAN.md) - แผนการเทรนและวัดความแม่นยำโมเดลในอนาคต
-* 📑 [MODEL_VALIDATION_LAB_PLAN.md](file:///home/nxp1/Desktop/PUNPUNJA/PROJECT/UIIU/docs/MODEL_VALIDATION_LAB_PLAN.md) - แผนการทดสอบในห้องปฏิบัติการ Model Validation
 
 ---
 
-## 🚀 5. วิธีการติดตั้งและเริ่มต้นใช้งานระบบ (Installation & System Startup Guide)
+## 🚀 5. วิธีการติดตั้งและเริ่มต้นใช้งาน (Installation & Quick Start)
 
 ### ความต้องการของระบบ (Prerequisites)
-- **Node.js**: v18.0.0 ขึ้นไป
-- **Python**: v3.10 ขึ้นไป
-- **PostgreSQL Database**: พอร์ต 5432 (บริการฐานข้อมูลหลัก หากไม่ได้เปิด ระบบจะสลับไปใช้ SQLite สำรองให้อัตโนมัติ)
+- **Node.js**: v18.0.0+
+- **Python**: v3.10+
+- **Docker & Docker Compose**: สำหรับรัน PostgreSQL
 
 ---
 
-### ⚡ สรุปคำสั่งเปิดใช้งานเต็มระบบ (Quick Full-System Launch)
+### ⚡ สรุปคำสั่งเปิดใช้งานเต็มระบบ 3 ขั้นตอน
 
-#### **1. เปิดบริการ PostgreSQL Database**
+เพื่อจำลองการทำงานบนเครื่องเดียว (Development Mode) ให้เปิด Terminal 3 หน้าต่าง:
+
+**Terminal 1: รัน Database & Central Backend (PC Node - Port 3000)**
 ```bash
 cd /home/nxp1/Desktop/PUNPUNJA/PROJECT/UIIU
+# เปิดฐานข้อมูล PostgreSQL
 sudo docker compose up -d
+
+# เปิด NestJS Server
+cd backend_pc
+npm install
+npm run start:dev
 ```
 
-#### **2. เปิดใช้งาน Backend Server (FastAPI + WebSocket + AI Rule Engine)**
-เปิด **Terminal 1** ที่โฟลเดอร์ root ของโปรเจกต์:
+**Terminal 2: รัน Edge AI Backend (i.MX8 Node - Port 8001)**
 ```bash
 cd /home/nxp1/Desktop/PUNPUNJA/PROJECT/UIIU
-.venv/bin/python3 -m uvicorn backend.main:app --host 0.0.0.0 --port 8001
+# รัน FastAPI (ถ้าใช้ Virtual Environment อย่าลืม source ก่อนรัน)
+.venv/bin/python3 -m uvicorn backend_imx8.main:app --host 0.0.0.0 --port 8001 --reload
 ```
-* Backend API จะรันที่ `http://localhost:8001` (Swagger UI: `http://localhost:8001/docs`)
-* WebSocket Streaming ที่ `ws://localhost:8001/ws`
+* API Server รันที่ `http://localhost:8001` (เช็ก API Docs ได้ที่ `http://localhost:8001/docs`)
 
-#### **3. เปิดใช้งาน Frontend HMI Dashboard (React 19 + Vite)**
-เปิด **Terminal 2**:
+**Terminal 3: รัน HMI Frontend (React Dashboard - Port 5173)**
 ```bash
 cd /home/nxp1/Desktop/PUNPUNJA/PROJECT/UIIU/frontend
+npm install
 npm run dev
 ```
-* HMI Web Application จะพร้อมใช้งานที่ `http://localhost:5173`
-
-#### **4. เข้าใช้งานผ่าน Web Browser**
-เปิดเว็บเบราว์เซอร์แล้วระบุ URL:
-👉 **`http://localhost:5173`**
+* เข้าใช้งาน Web HMI ได้ที่: 👉 **`http://localhost:5173`**
 
 ---
 
-### 🛠️ การติดตั้งใหม่จากเริ่มต้น (First-Time Environment Setup)
+## 📡 6. รายการ API Endpoints (Core Interfaces)
 
-หากย้ายเครื่องหรือติดตั้งใหม่ครั้งแรก ให้รันคำสั่งเตรียมสภาพแวดล้อมดังนี้:
-
-1. **สร้าง Virtual Environment และติดตั้ง Python Dependencies**:
-   ```bash
-   python3 -m venv .venv
-   .venv/bin/pip install fastapi uvicorn[standard] websockets psycopg2-binary opencv-python-headless pillow pydantic pyyaml python-multipart numpy torch torchvision ultralytics
-   ```
-2. **ติดตั้ง Node.js Dependencies สำหรับ Frontend**:
-   ```bash
-   cd frontend
-   npm install
-   ```
+| Component | Endpoint | Method | Protocol | Description |
+| :--- | :--- | :--- | :--- | :--- |
+| **Edge Node** | `/api/sys-stats` | GET | REST | ข้อมูล Telemetry ฮาร์ดแวร์ (CPU, RAM) |
+| **Edge Node** | `/api/configs/{type}` | GET/POST | REST | อ่านหรือบันทึกไฟล์ Recipe / Machine Config |
+| **Edge Node** | `/api/models` | GET/POST | REST | รายการ AI Models ที่ใช้งานได้ |
+| **PC Node** | `/api/history` | GET | REST | ดึงประวัติการตรวจจับจาก Database แบบ Pagination |
+| **PC Node** | `/ws` | SUB | WebSocket | สตรีมมิ่งผลตรวจจับใหม่แบบเรียลไทม์ให้ Frontend |
 
 ---
 
-### 🔍 วิธีการตรวจสอบสถานะการทำงาน (Verification)
-- **เช็กระบบฐานข้อมูลและ HMI Backend**: เข้าไปที่ `http://localhost:8001/api/sys-stats` จะต้องคืนค่า JSON `"db": "PostgreSQL"`
-- **เช็กสถานะการเชื่อมต่อสตรีมมิ่งสด**: ที่หน้าเว็บ `http://localhost:5173` มุมขวาบนต้องแสดงสถานะ **`DB: POSTGRESQL`** และ **`EDGE: ONLINE`** พร้อมแสดงผลการสแกนแผ่นเวเฟอร์สด 1:1 แบบ Frame-Perfect Sync
+## 👨‍💻 7. การพัฒนาและการจัดการ Git
 
-## 📡 6. รายการ API Endpoints ที่สำคัญ
+โปรเจกต์นี้ถูกจัดการผ่าน GitHub Repository ผู้พัฒนาควรยึดหลักดังนี้:
+- **Git Commit Standards**: ใช้ Conventional Commits เช่น `feat:`, `fix:`, `style:`, `refactor:`
+- **Typography & Styling**: หากมีการแก้ไข UI ควรยึดขนาดอักษร (Typography Scale) ตามที่กำหนดไว้ใน `index.css` และควรดูความเรียบร้อยทั้งในหน้าจอขนาดเล็กและหน้าจอ HMI แบบ Full-HD (1920x1080)
+- **Testing**: หากเพิ่มฟีเจอร์การคำนวณ Threshold หรือ Logic ฝั่ง Edge ต้องมีการทดสอบ Simulation เสมอ
 
-| Endpoint | Method | Protocol | Description |
-| :--- | :--- | :--- | :--- |
-| `/ws` | GET | WebSocket | สตรีมมิ่งข้อมูลการตรวจจับแบบเรียลไทม์ (`NEW_INSPECTION`) |
-| `/api/latest-inspection` | GET | HTTP REST | ดึงข้อมูลผลการตรวจจับแผ่นเวเฟอร์ล่าสุด |
-| `/api/history` | GET | HTTP REST | ดึงประวัติการตรวจจับทั้งหมดสำหรับตารางประวัติ |
-| `/api/sys-stats` | GET | HTTP REST | ดึงข้อมูล Telemetry ของฮาร์ดแวร์ (CPU, NPU %, RAM, Temp) |
-| `/api/models` | GET | HTTP REST | ดึงรายการโมเดล AI ที่ลงทะเบียนในระบบ |
-| `/visuals/{filename}` | GET | HTTP Static | ดึงไฟล์ภาพถ่ายแผ่นเวเฟอร์จริงและการเน้นสัญลักษณ์ |
-
----
-
-## 👨‍💻 7. สรุปผู้พัฒนาและข้อกำหนดการใช้งาน
-- **พัฒนาขึ้นสำหรับ**: Semiconductor Wafer Quality Inspection Project
-- **ระบบปฏิบัติการเป้าหมาย**: Linux / NXP i.MX8 Yocto Linux & Windows Development Environment
+*© 2026 NXP Semiconductors & Project Team. All Rights Reserved.*
