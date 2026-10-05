@@ -2179,10 +2179,24 @@ def process_benchmark_image(task: dict):
     filename = task["filename"]
     rules = task.get("rules", {})
     
-    fail_dist_um = float(rules.get("fail_distance_um", 8.0))
-    max_ratio_pct = float(rules.get("max_area_ratio_pct", 25.0))
-    min_ratio_pct = float(rules.get("min_area_ratio_pct", 0.5))
-    missing_action = rules.get("missing_mark_action", "fail").lower()
+    # ponytail: load active production config so benchmark rules match production 100%
+    config_path = ACTIVE_PRODUCT_SETTING_FILE if os.path.exists(ACTIVE_PRODUCT_SETTING_FILE) else os.path.join(CORE_DIR, "configs", "inspection_rules.yaml")
+    base_cfg = load_inspection_config(config_path) if has_actual_rules else {}
+    custom_cfg = base_cfg.copy()
+
+    if rules.get("fail_distance_um") is not None:
+        custom_cfg["fail_distance_um"] = float(rules["fail_distance_um"])
+    if rules.get("max_area_ratio_pct") is not None:
+        custom_cfg["max_area_ratio_pct"] = float(rules["max_area_ratio_pct"])
+    if rules.get("min_area_ratio_pct") is not None:
+        custom_cfg["min_area_ratio_pct"] = float(rules["min_area_ratio_pct"])
+    if rules.get("missing_mark_action") is not None:
+        custom_cfg["missing_mark_action"] = str(rules["missing_mark_action"]).lower()
+
+    fail_dist_um = float(custom_cfg.get("fail_distance_um", 8.0))
+    max_ratio_pct = float(custom_cfg.get("max_area_ratio_pct", 25.0))
+    min_ratio_pct = float(custom_cfg.get("min_area_ratio_pct", 0.0))
+    missing_action = str(custom_cfg.get("missing_mark_action", "fail")).lower()
     
     import cv2
     img_cv = cv2.imread(image_path)
@@ -2368,14 +2382,7 @@ def process_benchmark_image(task: dict):
             "probemarks": mark_polys,
             "grains": grain_polys
         }]
-        custom_cfg = {
-            "fail_distance_um": fail_dist_um,
-            "warning_distance_um": 0.0,
-            "warning_occurrence_threshold": 1,
-            "max_area_ratio_pct": max_ratio_pct,
-            "min_area_ratio_pct": min_ratio_pct,
-            "missing_mark_action": missing_action,
-        }
+        # ponytail: custom_cfg initialized from production config with optional rule overrides
         try:
             report = run_inspection(
                 generic_results,
@@ -4399,12 +4406,7 @@ async def start_benchmark(payload: dict):
     model_name = payload.get("model_name", "unet.tflite")
     dataset_key = payload.get("dataset_key", "all_wafers")
     custom_folder = payload.get("custom_folder")
-    rules = payload.get("rules", {
-        "fail_distance_um": 8.0,
-        "max_area_ratio_pct": 25.0,
-        "min_area_ratio_pct": 0.5,
-        "missing_mark_action": "fail"
-    })
+    rules = payload.get("rules", {})
     limit = payload.get("limit", 50)
     
     # 1. Resolve image list
@@ -4551,10 +4553,10 @@ async def start_benchmark(payload: dict):
 async def upload_benchmark_images(
     files: List[UploadFile] = File(...),
     model_name: str = Form("unet.tflite"),
-    fail_distance_um: float = Form(8.0),
-    max_area_ratio_pct: float = Form(25.0),
-    min_area_ratio_pct: float = Form(0.5),
-    missing_mark_action: str = Form("fail")
+    fail_distance_um: Optional[float] = Form(None),
+    max_area_ratio_pct: Optional[float] = Form(None),
+    min_area_ratio_pct: Optional[float] = Form(None),
+    missing_mark_action: Optional[str] = Form(None)
 ):
     """Uploads batch wafer images or a ZIP archive, extracts images, and immediately starts a validation benchmark run."""
     global priority_dispatcher_state, P1_QUEUE
@@ -4604,12 +4606,11 @@ async def upload_benchmark_images(
     if not saved_paths:
         raise HTTPException(status_code=400, detail="No valid wafer images found in uploaded file(s) or ZIP archive.")
 
-    rules = {
-        "fail_distance_um": fail_distance_um,
-        "max_area_ratio_pct": max_area_ratio_pct,
-        "min_area_ratio_pct": min_area_ratio_pct,
-        "missing_mark_action": missing_mark_action
-    }
+    rules = {}
+    if fail_distance_um is not None: rules["fail_distance_um"] = fail_distance_um
+    if max_area_ratio_pct is not None: rules["max_area_ratio_pct"] = max_area_ratio_pct
+    if min_area_ratio_pct is not None: rules["min_area_ratio_pct"] = min_area_ratio_pct
+    if missing_mark_action is not None: rules["missing_mark_action"] = missing_mark_action
 
     return await start_benchmark({
         "session_id": session_id,

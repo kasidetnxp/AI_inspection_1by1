@@ -653,6 +653,39 @@ export default function ModelsPage() {
                             </div>
                           </div>
 
+                          {/* Pagination Header (Top of Table) */}
+                          <div className="table-pagination-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 16px", borderBottom: "1px solid var(--border-color)", background: "rgba(0,0,0,0.03)", flexWrap: "wrap", gap: "10px", fontSize: "13.5px" }}>
+                            <div style={{ display: "flex", alignItems: "center", gap: "10px", color: "var(--text-muted)" }}>
+                              <span>
+                                Showing <strong>{filteredBenchmarkResults.length === 0 ? 0 : (effectiveBenchmarkPage - 1) * (benchmarkPageSize === "ALL" ? filteredBenchmarkResults.length : Number(benchmarkPageSize)) + 1}</strong> - <strong>{Math.min(effectiveBenchmarkPage * (benchmarkPageSize === "ALL" ? filteredBenchmarkResults.length : Number(benchmarkPageSize)), filteredBenchmarkResults.length)}</strong> of <strong>{filteredBenchmarkResults.length}</strong>
+                              </span>
+                              <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                                <span>Page Size:</span>
+                                <select
+                                  value={benchmarkPageSize}
+                                  onChange={(e) => { setBenchmarkPageSize(e.target.value === "ALL" ? "ALL" : Number(e.target.value)); setBenchmarkPage(1); }}
+                                  style={{ padding: "4px 8px", borderRadius: "4px", border: "1px solid var(--border-color)", background: "var(--bg-input)", color: "var(--text-main)", fontSize: "13.5px" }}
+                                >
+                                  <option value={15}>15</option>
+                                  <option value={25}>25</option>
+                                  <option value={50}>50</option>
+                                  <option value={100}>100</option>
+                                  <option value="ALL">All ({filteredBenchmarkResults.length})</option>
+                                </select>
+                              </div>
+                            </div>
+
+                            {benchmarkPageSize !== "ALL" && totalBenchmarkPages > 1 && (
+                              <div className="pagination-btn-group" style={{ display: "flex", alignItems: "center", gap: "3px" }}>
+                                <button className="pagination-nav-btn" disabled={effectiveBenchmarkPage <= 1} onClick={() => setBenchmarkPage(1)} title="First Page">⏮</button>
+                                <button className="pagination-nav-btn" disabled={effectiveBenchmarkPage <= 1} onClick={() => setBenchmarkPage(p => Math.max(1, p - 1))} title="Previous Page">◀</button>
+                                <span style={{ padding: "0 6px", fontWeight: "bold" }}>Page {effectiveBenchmarkPage} of {totalBenchmarkPages}</span>
+                                <button className="pagination-nav-btn" disabled={effectiveBenchmarkPage >= totalBenchmarkPages} onClick={() => setBenchmarkPage(p => Math.min(totalBenchmarkPages, p + 1))} title="Next Page">▶</button>
+                                <button className="pagination-nav-btn" disabled={effectiveBenchmarkPage >= totalBenchmarkPages} onClick={() => setBenchmarkPage(totalBenchmarkPages)} title="Last Page">⏭</button>
+                              </div>
+                            )}
+                          </div>
+
                           {/* Results Table */}
                           <div className="table-container" style={{ flex: 1, overflowY: "auto" }}>
                             <table className="history-table benchmark-review-table report-table">
@@ -850,39 +883,6 @@ export default function ModelsPage() {
                                 )}
                               </tbody>
                             </table>
-                          </div>
-
-                          {/* Pagination Footer (Mirrors History Table) */}
-                          <div className="table-pagination-footer" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 16px", borderTop: "1px solid var(--border-color)", background: "rgba(0,0,0,0.03)", flexWrap: "wrap", gap: "10px", fontSize: "13.5px" }}>
-                            <div style={{ display: "flex", alignItems: "center", gap: "10px", color: "var(--text-muted)" }}>
-                              <span>
-                                Showing <strong>{filteredBenchmarkResults.length === 0 ? 0 : (effectiveBenchmarkPage - 1) * (benchmarkPageSize === "ALL" ? filteredBenchmarkResults.length : Number(benchmarkPageSize)) + 1}</strong> - <strong>{Math.min(effectiveBenchmarkPage * (benchmarkPageSize === "ALL" ? filteredBenchmarkResults.length : Number(benchmarkPageSize)), filteredBenchmarkResults.length)}</strong> of <strong>{filteredBenchmarkResults.length}</strong>
-                              </span>
-                              <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-                                <span>Page Size:</span>
-                                <select
-                                  value={benchmarkPageSize}
-                                  onChange={(e) => { setBenchmarkPageSize(e.target.value === "ALL" ? "ALL" : Number(e.target.value)); setBenchmarkPage(1); }}
-                                  style={{ padding: "4px 8px", borderRadius: "4px", border: "1px solid var(--border-color)", background: "var(--bg-input)", color: "var(--text-main)", fontSize: "13.5px" }}
-                                >
-                                  <option value={15}>15</option>
-                                  <option value={25}>25</option>
-                                  <option value={50}>50</option>
-                                  <option value={100}>100</option>
-                                  <option value="ALL">All ({filteredBenchmarkResults.length})</option>
-                                </select>
-                              </div>
-                            </div>
-
-                            {benchmarkPageSize !== "ALL" && totalBenchmarkPages > 1 && (
-                              <div className="pagination-btn-group" style={{ display: "flex", alignItems: "center", gap: "3px" }}>
-                                <button className="pagination-nav-btn" disabled={effectiveBenchmarkPage <= 1} onClick={() => setBenchmarkPage(1)} title="First Page">⏮</button>
-                                <button className="pagination-nav-btn" disabled={effectiveBenchmarkPage <= 1} onClick={() => setBenchmarkPage(p => Math.max(1, p - 1))} title="Previous Page">◀</button>
-                                <span style={{ padding: "0 6px", fontWeight: "bold" }}>Page {effectiveBenchmarkPage} of {totalBenchmarkPages}</span>
-                                <button className="pagination-nav-btn" disabled={effectiveBenchmarkPage >= totalBenchmarkPages} onClick={() => setBenchmarkPage(p => Math.min(totalBenchmarkPages, p + 1))} title="Next Page">▶</button>
-                                <button className="pagination-nav-btn" disabled={effectiveBenchmarkPage >= totalBenchmarkPages} onClick={() => setBenchmarkPage(totalBenchmarkPages)} title="Last Page">⏭</button>
-                              </div>
-                            )}
                           </div>
 
                         </div>

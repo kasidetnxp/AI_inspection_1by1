@@ -466,18 +466,25 @@ export default function SplitViewModal() {
                       display: "flex",
                       flexDirection: "column",
                       height: "100%",
-                      minHeight: 0
+                      width: "340px",
+                      minWidth: "340px",
+                      maxWidth: "340px",
+                      minHeight: 0,
+                      gap: "10px"
                     }}
                   >
+                    {/* TOP: INSPECTION METADATA & RESULTS (SCROLLABLE IF NEEDED) */}
                     <div
                       className="model-meta-box"
                       style={{
                         flex: 1,
                         minHeight: 0,
                         overflowY: "auto",
+                        overflowX: "hidden",
+                        scrollbarGutter: "stable",
                         display: "flex",
                         flexDirection: "column",
-                        gap: "10px",
+                        gap: "8px",
                         padding: "14px",
                         background: "rgba(255, 255, 255, 0.02)",
                         borderRadius: "8px",
@@ -526,9 +533,22 @@ export default function SplitViewModal() {
                       <div style={{ height: "1px", background: "var(--border-color)", margin: "1px 0" }} />
 
                       {/* Inspection Results */}
-                      <div className="meta-row" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <div className="meta-row" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", minHeight: "28px" }}>
                         <span className="meta-lbl" style={{ flexShrink: 0 }}>Result:</span>
-                        <span className={`badge-result ${(benchmarkSplitModalItem.ai_decision || "PASS").toLowerCase()}`}>
+                        <span
+                          className={`badge-result ${(benchmarkSplitModalItem.ai_decision || "PASS").toLowerCase()}`}
+                          style={{
+                            fontSize: "12px",
+                            fontWeight: "700",
+                            padding: "3px 10px",
+                            height: "26px",
+                            display: "inline-flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            boxSizing: "border-box",
+                            margin: 0
+                          }}
+                        >
                           {benchmarkSplitModalItem.ai_decision || "PASS"}
                         </span>
                       </div>
@@ -593,36 +613,82 @@ export default function SplitViewModal() {
                             : "-"}
                         </span>
                       </div>
+                    </div>
 
-                      <div style={{ height: "1px", background: "var(--border-color)", margin: "1px 0" }} />
-
-                      {/* Human Decision Section */}
-                      <div className="meta-row" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                        <span className="meta-lbl" style={{ flexShrink: 0 }}>Human Decision:</span>
+                    {/* BOTTOM: FIXED DEDICATED HUMAN REVIEW PANEL */}
+                    <div
+                      className="human-review-box"
+                      style={{
+                        flexShrink: 0,
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: "10px",
+                        padding: "12px 14px",
+                        background: "rgba(255, 255, 255, 0.025)",
+                        borderRadius: "8px",
+                        border: "1px solid var(--border-color)",
+                        boxShadow: "0 2px 8px rgba(0, 0, 0, 0.12)"
+                      }}
+                    >
+                      {/* Human Decision Section (Fixed 28px height badge for zero layout shift) */}
+                      <div className="meta-row" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", minHeight: "28px" }}>
+                        <span className="meta-lbl" style={{ flexShrink: 0, fontWeight: "600" }}>Human Decision:</span>
                         {benchmarkSplitModalItem.human_decision && benchmarkSplitModalItem.human_decision !== "UNREVIEWED" ? (
-                          <span className={`badge-result ${benchmarkSplitModalItem.human_decision.toLowerCase()}`}>
+                          <span
+                            className={`badge-result ${benchmarkSplitModalItem.human_decision.toLowerCase()}`}
+                            style={{
+                              fontSize: "12px",
+                              fontWeight: "700",
+                              padding: "3px 10px",
+                              height: "26px",
+                              display: "inline-flex",
+                              alignItems: "center",
+                              justifyContent: "center",
+                              boxSizing: "border-box",
+                              margin: 0
+                            }}
+                          >
                             {benchmarkSplitModalItem.human_decision}
                           </span>
                         ) : (
-                          <span className="font-mono" style={{ fontSize: "11px", color: "var(--text-muted)" }}>
+                          <span
+                            className="font-mono"
+                            style={{
+                              fontSize: "12px",
+                              fontWeight: "700",
+                              padding: "3px 10px",
+                              height: "26px",
+                              display: "inline-flex",
+                              alignItems: "center",
+                              justifyContent: "center",
+                              boxSizing: "border-box",
+                              margin: 0,
+                              color: "var(--text-muted)",
+                              border: "1px solid var(--border-color)",
+                              borderRadius: "5px",
+                              background: "rgba(255, 255, 255, 0.04)"
+                            }}
+                          >
                             UNREVIEWED
                           </span>
                         )}
                       </div>
 
-                      {/* Human Decision Action Buttons (Clean PASS / FAIL without hotkey pills) */}
-                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px", marginTop: "2px" }}>
+                      {/* Human Decision Action Buttons (Fixed 38px height) */}
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px" }}>
                         <button
                           type="button"
                           className={`btn-human-pass ${benchmarkSplitModalItem.human_decision === "PASS" ? "active" : ""}`}
                           style={{
-                            padding: "10px 8px",
+                            padding: "8px",
+                            height: "38px",
                             fontSize: "13px",
                             display: "flex",
                             justifyContent: "center",
                             alignItems: "center",
                             fontWeight: "700",
-                            borderRadius: "6px"
+                            borderRadius: "6px",
+                            boxSizing: "border-box"
                           }}
                           onClick={() => handleSaveHumanReview(benchmarkSplitModalItem, "PASS", benchmarkModalComment)}
                         >
@@ -632,13 +698,15 @@ export default function SplitViewModal() {
                           type="button"
                           className={`btn-human-fail ${benchmarkSplitModalItem.human_decision === "FAIL" ? "active" : ""}`}
                           style={{
-                            padding: "10px 8px",
+                            padding: "8px",
+                            height: "38px",
                             fontSize: "13px",
                             display: "flex",
                             justifyContent: "center",
                             alignItems: "center",
                             fontWeight: "700",
-                            borderRadius: "6px"
+                            borderRadius: "6px",
+                            boxSizing: "border-box"
                           }}
                           onClick={() => handleSaveHumanReview(benchmarkSplitModalItem, "FAIL", benchmarkModalComment)}
                         >
@@ -646,19 +714,25 @@ export default function SplitViewModal() {
                         </button>
                       </div>
 
-                      {/* Comment Box */}
-                      <div style={{ display: "flex", flexDirection: "column", gap: "4px", marginTop: "4px" }}>
-                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      {/* Comment Box (Stable layout height) */}
+                      <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", minHeight: "16px" }}>
                           <span className="meta-lbl" style={{ fontSize: "11px" }}>Comment:</span>
-                          {benchmarkModalComment !== (benchmarkSplitModalItem.notes || "") && (
-                            <span style={{ fontSize: "10px", color: "var(--color-info)" }}>Auto-saving on blur...</span>
-                          )}
+                          <span
+                            style={{
+                              fontSize: "10px",
+                              color: "var(--color-info)",
+                              visibility: benchmarkModalComment !== (benchmarkSplitModalItem.notes || "") ? "visible" : "hidden"
+                            }}
+                          >
+                            Auto-saving on blur...
+                          </span>
                         </div>
                         <textarea
                           className="form-control"
                           style={{
                             width: "100%",
-                            height: "60px",
+                            height: "56px",
                             resize: "none",
                             fontSize: "12px",
                             padding: "6px 8px",
@@ -666,7 +740,8 @@ export default function SplitViewModal() {
                             border: "1px solid var(--border-color)",
                             borderRadius: "6px",
                             color: "var(--text-main)",
-                            fontFamily: "inherit"
+                            fontFamily: "inherit",
+                            boxSizing: "border-box"
                           }}
                           placeholder="Enter remarks / notes..."
                           value={benchmarkModalComment}

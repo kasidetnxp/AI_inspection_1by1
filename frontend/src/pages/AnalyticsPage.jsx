@@ -316,6 +316,39 @@ export default function AnalyticsPage() {
                 <span className="pill-id" id="report-row-count">{filteredHistory.length} Records</span>
               </div>
 
+              {/* Pagination Header (Top of Table) */}
+              <div className="table-pagination-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 16px", borderBottom: "1px solid var(--border-color)", background: "rgba(0,0,0,0.03)", flexWrap: "wrap", gap: "10px", fontSize: "13.5px" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: "10px", color: "var(--text-muted)" }}>
+                  <span>
+                    Showing <strong>{filteredHistory.length === 0 ? 0 : (effectiveHistoryPage - 1) * (historyPageSize === "ALL" ? filteredHistory.length : Number(historyPageSize)) + 1}</strong> - <strong>{Math.min(effectiveHistoryPage * (historyPageSize === "ALL" ? filteredHistory.length : Number(historyPageSize)), filteredHistory.length)}</strong> of <strong>{filteredHistory.length}</strong>
+                  </span>
+                  <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                    <span>Page Size:</span>
+                    <select
+                      value={historyPageSize}
+                      onChange={(e) => { setHistoryPageSize(e.target.value === "ALL" ? "ALL" : Number(e.target.value)); setHistoryPage(1); }}
+                      style={{ padding: "4px 8px", borderRadius: "4px", border: "1px solid var(--border-color)", background: "var(--bg-input)", color: "var(--text-main)", fontSize: "13.5px" }}
+                    >
+                      <option value={15}>15</option>
+                      <option value={25}>25</option>
+                      <option value={50}>50</option>
+                      <option value={100}>100</option>
+                      <option value="ALL">All ({filteredHistory.length})</option>
+                    </select>
+                  </div>
+                </div>
+
+                {historyPageSize !== "ALL" && totalHistoryPages > 1 && (
+                  <div className="pagination-btn-group" style={{ display: "flex", alignItems: "center", gap: "3px" }}>
+                    <button className="pagination-nav-btn" disabled={effectiveHistoryPage <= 1} onClick={() => setHistoryPage(1)} title="First Page">⏮</button>
+                    <button className="pagination-nav-btn" disabled={effectiveHistoryPage <= 1} onClick={() => setHistoryPage(p => Math.max(1, p - 1))} title="Previous Page">◀</button>
+                    <span style={{ padding: "0 6px", fontWeight: "bold" }}>Page {effectiveHistoryPage} of {totalHistoryPages}</span>
+                    <button className="pagination-nav-btn" disabled={effectiveHistoryPage >= totalHistoryPages} onClick={() => setHistoryPage(p => Math.min(totalHistoryPages, p + 1))} title="Next Page">▶</button>
+                    <button className="pagination-nav-btn" disabled={effectiveHistoryPage >= totalHistoryPages} onClick={() => setHistoryPage(totalHistoryPages)} title="Last Page">⏭</button>
+                  </div>
+                )}
+              </div>
+
               <div className="card-body table-container" style={{ flex: 1, overflowY: "auto" }}>
                 <table className="history-table report-table" style={{ width: "100%", tableLayout: "auto" }}>
                   <thead>
@@ -384,39 +417,6 @@ export default function AnalyticsPage() {
                     )}
                   </tbody>
                 </table>
-              </div>
-
-              {/* Pagination Footer */}
-              <div className="table-pagination-footer" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 16px", borderTop: "1px solid var(--border-color)", background: "rgba(0,0,0,0.03)", flexWrap: "wrap", gap: "10px", fontSize: "13.5px" }}>
-                <div style={{ display: "flex", alignItems: "center", gap: "10px", color: "var(--text-muted)" }}>
-                  <span>
-                    Showing <strong>{filteredHistory.length === 0 ? 0 : (effectiveHistoryPage - 1) * (historyPageSize === "ALL" ? filteredHistory.length : Number(historyPageSize)) + 1}</strong> - <strong>{Math.min(effectiveHistoryPage * (historyPageSize === "ALL" ? filteredHistory.length : Number(historyPageSize)), filteredHistory.length)}</strong> of <strong>{filteredHistory.length}</strong>
-                  </span>
-                  <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-                    <span>Page Size:</span>
-                    <select
-                      value={historyPageSize}
-                      onChange={(e) => { setHistoryPageSize(e.target.value === "ALL" ? "ALL" : Number(e.target.value)); setHistoryPage(1); }}
-                      style={{ padding: "4px 8px", borderRadius: "4px", border: "1px solid var(--border-color)", background: "var(--bg-input)", color: "var(--text-main)", fontSize: "13.5px" }}
-                    >
-                      <option value={15}>15</option>
-                      <option value={25}>25</option>
-                      <option value={50}>50</option>
-                      <option value={100}>100</option>
-                      <option value="ALL">All ({filteredHistory.length})</option>
-                    </select>
-                  </div>
-                </div>
-
-                {historyPageSize !== "ALL" && totalHistoryPages > 1 && (
-                  <div className="pagination-btn-group" style={{ display: "flex", alignItems: "center", gap: "3px" }}>
-                    <button className="pagination-nav-btn" disabled={effectiveHistoryPage <= 1} onClick={() => setHistoryPage(1)} title="First Page">⏮</button>
-                    <button className="pagination-nav-btn" disabled={effectiveHistoryPage <= 1} onClick={() => setHistoryPage(p => Math.max(1, p - 1))} title="Previous Page">◀</button>
-                    <span style={{ padding: "0 6px", fontWeight: "bold" }}>Page {effectiveHistoryPage} of {totalHistoryPages}</span>
-                    <button className="pagination-nav-btn" disabled={effectiveHistoryPage >= totalHistoryPages} onClick={() => setHistoryPage(p => Math.min(totalHistoryPages, p + 1))} title="Next Page">▶</button>
-                    <button className="pagination-nav-btn" disabled={effectiveHistoryPage >= totalHistoryPages} onClick={() => setHistoryPage(totalHistoryPages)} title="Last Page">⏭</button>
-                  </div>
-                )}
               </div>
             </div>
           </div>

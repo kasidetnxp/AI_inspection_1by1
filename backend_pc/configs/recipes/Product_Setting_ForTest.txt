@@ -8,7 +8,8 @@
   "servicePort": 10010,
   "devices": [
     "CF1561CCAA-V7011",
-    "TF1581DTAB-V7011"
+    "TF1581DTAB-V7011",
+    "TF1581DTAB-V71-PS16-PT-1"
   ],
   "padShape": "rectangle",
   "thingColors": [

@@ -387,6 +387,47 @@ export default function HistoryPage() {
             </div>
           </div>
 
+          {/* PAGINATION HEADER */}
+          {totalPages > 1 && (
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                padding: "10px 16px",
+                borderBottom: "1px solid var(--border-color)",
+                background: "rgba(0,0,0,0.03)",
+                fontSize: "12px",
+                color: "var(--text-muted)"
+              }}
+            >
+              <span>
+                Showing {(currentPage - 1) * pageSize + 1} to {Math.min(currentPage * pageSize, filteredHistory.length)} of {filteredHistory.length} entries
+              </span>
+              <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
+                <button
+                  className="view-btn"
+                  disabled={currentPage === 1}
+                  onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                  style={{ opacity: currentPage === 1 ? 0.5 : 1 }}
+                >
+                  ◀ Prev
+                </button>
+                <span className="font-mono" style={{ fontWeight: "bold", padding: "0 8px" }}>
+                  {currentPage} / {totalPages}
+                </span>
+                <button
+                  className="view-btn"
+                  disabled={currentPage === totalPages}
+                  onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                  style={{ opacity: currentPage === totalPages ? 0.5 : 1 }}
+                >
+                  Next ▶
+                </button>
+              </div>
+            </div>
+          )}
+
           <div className="card-body table-container" style={{ maxHeight: "calc(100vh - 380px)", overflowY: "auto" }}>
             <table className="history-table report-table" style={{ width: "100%", tableLayout: "auto" }}>
               <thead>
@@ -492,46 +533,6 @@ export default function HistoryPage() {
               </tbody>
             </table>
           </div>
-
-          {/* PAGINATION FOOTER */}
-          {totalPages > 1 && (
-            <div
-              style={{
-                display: "flex",
-                justifyContent: "space-between",
-                alignItems: "center",
-                padding: "12px 20px",
-                borderTop: "1px solid var(--border-color)",
-                fontSize: "12px",
-                color: "var(--text-muted)"
-              }}
-            >
-              <span>
-                Showing {(currentPage - 1) * pageSize + 1} to {Math.min(currentPage * pageSize, filteredHistory.length)} of {filteredHistory.length} entries
-              </span>
-              <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
-                <button
-                  className="view-btn"
-                  disabled={currentPage === 1}
-                  onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-                  style={{ opacity: currentPage === 1 ? 0.5 : 1 }}
-                >
-                  ◀ Prev
-                </button>
-                <span className="font-mono" style={{ fontWeight: "bold", padding: "0 8px" }}>
-                  {currentPage} / {totalPages}
-                </span>
-                <button
-                  className="view-btn"
-                  disabled={currentPage === totalPages}
-                  onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-                  style={{ opacity: currentPage === totalPages ? 0.5 : 1 }}
-                >
-                  Next ▶
-                </button>
-              </div>
-            </div>
-          )}
         </div>
       </main>
     </div>
