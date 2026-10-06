@@ -235,48 +235,204 @@ UIIU/
 | **`docs/`** | Markdown, PNG Diagrams | **Technical Documentation:** รวบรวมเอกสารพิมพ์เขียว สถาปัตยกรรม 1:N, กฎเกณฑ์การตรวจสอบ และคู่มือนักพัฒนา | ใช้เป็นแนวทางอ้างอิงในการพัฒนาและต่อยอดฟังก์ชันการทำงาน |
 | **`docker/`** | Docker, PostgreSQL 15, CloudBeaver | **Central Infrastructure:** จัดเก็บฐานข้อมูลประวัติการตรวจจับอย่างถาวรใน `pgdata` | ให้บริการฐานข้อมูลแก่ `backend_pc` ผ่าน Connection String บนพอร์ต 5432 |
 
+### 4.3 ⚠️ โครงสร้างโฟลเดอร์เมื่อดึงจาก Git (ทำไมได้โฟลเดอร์มาไม่ครบ และสิ่งที่ต้องเตรียมเพิ่ม)
+
+หากทำการ `git clone` โค้ดโปรเจกต์ลงบนเครื่องใหม่ แล้วสังเกตว่า **บางโฟลเดอร์หายไป หรือไม่มีไฟล์โมเดล AI** นั่นเป็นผลมาจากข้อจำกัดทางเทคนิคและนโยบายของระบบ 3 ประการ:
+
+1. **ข้อจำกัดขนาดไฟล์ของ GitHub (>100MB)**:
+   - ไฟล์น้ำหนักโมเดล AI เช่น `active_model.tflite` (~31MB), `backup_model.tflite` (~13MB) รวมถึงไฟล์ `.pt`, `.onnx`, `.pth` ถูกระบุไว้ใน `.gitignore` เพื่อไม่ให้พื้นที่ Git บวมและไม่ติด Policy ขนาดไฟล์ของ GitHub
+   - **สิ่งที่ต้องทำ**: ต้องคัดลอกไฟล์โมเดล `active_model.tflite` มาวางในโฟลเดอร์ `backend_imx8/models/` ด้วยตนเอง
+2. **รูปภาพ Wafer และไดรฟ์จำลอง (Simulation & Datasets)**:
+   - ไฟล์รูปภาพดิบ `.bmp` จากเครื่องจักร Prober มีปริมาณหลายพันรูป (ขนาดรวมหลาย Gigabytes) จึงถูก `.gitignore` ไม่ให้ถูกผลักขึ้น Git
+   - โฟลเดอร์ `backend_imx8/simulation/` และ `backend_imx8_test_finalbutnew/simulation/` จะถูกเก็บไว้เฉพาะโครงสร้างไดเรกทอรี (Directory Skeleton) ผ่านไฟล์ `.gitkeep` เพื่อให้ระบบไม่แครช
+3. **พฤติกรรมดั้งเดิมของ Git ไม่เก็บโฟลเดอร์ว่าง (Empty Directories)**:
+   - โฟลเดอร์ที่ไม่มีไฟล์อยู่เลยจะไม่ถูกดึงลงมา โปรเจกต์จึงได้ใส่ไฟล์ `.gitkeep` ไว้ในโฟลเดอร์สำคัญทั้งหมด (เช่น `models/.gitkeep`, `simulation/.../.gitkeep`) เพื่อให้เมื่อ Clone มาแล้วจะได้โครงสร้างโฟลเดอร์ครบถ้วนทันที
+
+#### 📋 ตารางเช็คลิสต์สิ่งที่ต้องเตรียมหลังดึงโค้ดจาก Git (Pre-run Checklist):
+
+| โฟลเดอร์ / ไฟล์ | สถานะเมื่อ Clone จาก Git | สิ่งที่ต้องทำเพิ่มก่อนเปิดระบบ |
+| :--- | :--- | :--- |
+| **`backend_imx8/models/`** | มีเฉพาะ `.gitkeep` และ `active_model_info.json` | **ต้องนำไฟล์ `active_model.tflite` มาวางในนี้** |
+| **`backend_imx8/simulation/`** | มีโครงสร้างไดรฟ์จำลองพร้อม `.gitkeep` | หากทดสอบแบบ Simulation สามารถนำภาพ `.bmp` มาใส่ใน `drive_N/WP269/PMI/IMAGE` ได้ |
+| **`backend_imx8/active_*.json`** | ไม่ได้ติดตามบน Git | **ระบบจะสร้างให้อัตโนมัติ (Auto-generate)** ตอนเปิดแอปครั้งแรกจากค่าเริ่มต้น |
+| **`backend_pc/node_modules/`** | ไม่มีใน Git | รัน `npm install` ในโฟลเดอร์ `backend_pc` |
+| **`frontend/node_modules/`** | ไม่มีใน Git | รัน `npm install` ในโฟลเดอร์ `frontend` |
+| **`docker/pgdata/`** | มีเฉพาะโฟลเดอร์ว่าง | ระบบ Docker จะสร้างข้อมูลฐานข้อมูลให้เองเมื่อสั่ง `docker compose up -d` |
+
 ---
 
-## 🚀 5. วิธีการติดตั้งและเริ่มต้นใช้งาน (Installation & Quick Start)
+## 🚀 5. วิธีการติดตั้งและเปิดระบบบนเครื่องอื่น (Cross-Device Setup & Deployment Guide)
 
-### ความต้องการของระบบ (Prerequisites)
-- **Node.js**: v18.0.0+
-- **Python**: v3.10+
-- **Docker & Docker Compose**: สำหรับรัน PostgreSQL
+### ความต้องการของระบบ (System Prerequisites)
+* **Python**: 3.10 ขึ้นไป (แนะนำ Python 3.10 - 3.12)
+* **Node.js**: v18.0.0 ขึ้นไป (แนะนำ Node.js LTS v20+)
+* **Docker & Docker Compose**: (จำเป็นหากต้องการใช้ PostgreSQL และ CloudBeaver)
+* **Git**: สำหรับดึงโค้ดเวอร์ชันล่าสุด
 
 ---
 
-### ⚡ สรุปคำสั่งเปิดใช้งานเต็มระบบ 3 ขั้นตอน
+### 🖥️ รูปแบบที่ 1: การเปิดใช้งานบน PC / Laptop เครื่องใหม่ (โหมดจำลอง & พัฒนา - Development / Simulation Mode)
 
-เพื่อจำลองการทำงานบนเครื่องเดียว (Development Mode) ให้เปิด Terminal 3 หน้าต่าง:
+หากต้องการเปิดระบบเพื่อทดสอบการทำงาน, ตรวจสอบ UI หรือทำโมเดลจำลองบนคอมพิวเตอร์ทั่วไป:
 
-**Terminal 1: รัน Database & Central Backend (PC Node - Port 3000)**
+#### ขั้นตอนที่ 1: ดึงโค้ดจาก Git
 ```bash
-cd /home/nxp1/Desktop/PUNPUNJA/PROJECT/UIIU
-# เปิดฐานข้อมูล PostgreSQL
-sudo docker compose up -d
+git clone https://github.com/Panpan2307/UIIU.git
+cd UIIU
+```
 
-# เปิด NestJS Server
+#### ขั้นตอนที่ 2: ติดตั้ง Python Virtual Environment & Dependencies
+```bash
+# 1. สร้าง Virtual Environment
+python3 -m venv .venv
+
+# 2. เปิดใช้งาน Virtual Environment
+# บน Linux/macOS:
+source .venv/bin/activate
+# บน Windows (PowerShell):
+# .venv\Scripts\Activate.ps1
+
+# 3. อัปเกรด pip และติดตั้งแพ็กเกจหลัก
+pip install --upgrade pip
+pip install -r requirements.txt
+
+# 4. ติดตั้ง Engine สำหรับรัน AI Model TFLite
+# สำหรับเครื่อง x86 PC ทั่วไป แนะนำติดตั้ง tensorflow หรือ tflite-runtime:
+pip install tensorflow>=2.14.0
+```
+
+#### ขั้นตอนที่ 3: วางไฟล์โมเดล AI
+นำไฟล์โมเดลที่ผ่านการเทรนแล้ว (เช่น `active_model.tflite`) มาวางในโฟลเดอร์:
+```bash
+mkdir -p backend_imx8/models
+cp /path/to/your/active_model.tflite backend_imx8/models/active_model.tflite
+```
+
+#### ขั้นตอนที่ 4: ติดตั้ง Node.js Dependencies สำหรับ Backend PC และ Frontend
+```bash
+# ติดตั้งฝั่ง Central Backend (NestJS)
 cd backend_pc
 npm install
-npm run start:dev
-```
+cd ..
 
-**Terminal 2: รัน Edge AI Backend (i.MX8 Node - Port 8001)**
-```bash
-cd /home/nxp1/Desktop/PUNPUNJA/PROJECT/UIIU
-# รัน FastAPI (ถ้าใช้ Virtual Environment อย่าลืม source ก่อนรัน)
-.venv/bin/python3 -m uvicorn backend_imx8.main:app --host 0.0.0.0 --port 8001 --reload
-```
-* API Server รันที่ `http://localhost:8001` (เช็ก API Docs ได้ที่ `http://localhost:8001/docs`)
-
-**Terminal 3: รัน HMI Frontend (React Dashboard - Port 5173)**
-```bash
-cd /home/nxp1/Desktop/PUNPUNJA/PROJECT/UIIU/frontend
+# ติดตั้งฝั่ง HMI Frontend (React + Vite)
+cd frontend
 npm install
-npm run dev
+cd ..
 ```
-* เข้าใช้งาน Web HMI ได้ที่: 👉 **`http://localhost:5173`**
+
+#### ขั้นตอนที่ 5: สั่งเปิดระบบ (Start System)
+
+**วิธี A (สะดวกที่สุด - รันผ่านสคริปต์อัตโนมัติ One-Click):**
+```bash
+chmod +x start.sh stop.sh
+./start.sh
+```
+*สคริปต์จะเปิดฐานข้อมูล Docker, รัน Edge Backend (8001), รัน NestJS (3000), รัน Vite Frontend (5173) และเปิดเบราว์เซอร์ให้อัตโนมัติ*
+
+**วิธี B (รันแยกทีละ Terminal เพื่อดู Log แยกแต่ละส่วน):**
+* **Terminal 1 (Database & Central PC - Port 3000):**
+  ```bash
+  docker compose up -d
+  cd backend_pc && npm run start:dev
+  ```
+* **Terminal 2 (Edge AI Backend - Port 8001):**
+  ```bash
+  cd backend_imx8
+  python3 main.py
+  # หรือ: python3 -m uvicorn main:app --host 0.0.0.0 --port 8001
+  ```
+* **Terminal 3 (React HMI Frontend - Port 5173):**
+  ```bash
+  cd frontend && npm run dev
+  ```
+
+👉 เข้าใช้งานหน้าจอ Dashboard ได้ที่: **`http://localhost:5173`**
+
+---
+
+### 📟 รูปแบบที่ 2: การนำไปเปิดบน "บอร์ด i.MX8 จริง" หรือเครื่อง Edge ประจำเครื่องจักร (Hardware Deployment Mode)
+
+หากต้องการนำส่วนประมวลผล AI ไปติดตั้งบนบอร์ด **NXP i.MX8M Plus** (หรือเครื่อง Industrial PC) ที่เชื่อมต่อกับเครื่องจักร Prober โดยตรง:
+
+#### ขั้นตอนที่ 1: คัดลอกเฉพาะโฟลเดอร์ `backend_imx8` ไปยังบอร์ด
+สามารถใช้คำสั่ง `scp` หรือแฟลชไดรฟ์เพื่อคัดลอกโฟลเดอร์:
+```bash
+scp -r backend_imx8 root@<IP_iMX8_BOARD>:/home/root/backend_imx8
+```
+
+#### ขั้นตอนที่ 2: ติดตั้ง Dependencies บนบอร์ด i.MX8 (Linux Yocto / ARM64)
+```bash
+cd /home/root/backend_imx8
+
+# 1. ติดตั้ง Python Libraries
+pip3 install -r requirements.txt
+
+# 2. ตรวจสอบ TFLite Runtime พร้อม NPU Delegate (VeriSilicon TIM-VX / libvx_delegate.so)
+# บนระบบ Yocto Linux ของ NXP ปกติจะมี python3-tflite-runtime และ eIQ ติดตั้งมาพร้อมกับ BSP
+python3 -c "import tflite_runtime; print('TFLite OK')"
+```
+
+#### ขั้นตอนที่ 3: วางไฟล์โมเดล AI
+ตรวจสอบว่ามีไฟล์ `active_model.tflite` อยู่ในโฟลเดอร์ `models/`:
+```bash
+ls -la models/active_model.tflite
+```
+
+#### ขั้นตอนที่ 4: เมานต์ไดรฟ์เครือข่ายของเครื่อง Prober (ไดรฟ์ N: และ M:)
+ใช้สคริปต์ช่วยเหลือเพื่อเชื่อมต่อไดรฟ์แชร์จากเครื่อง Prober ผ่าน CIFS:
+```bash
+# รูปแบบ: sudo bash mount_prober_shares.sh [IP_เครื่อง_PROBER] [USERNAME] [PASSWORD]
+sudo bash mount_prober_shares.sh 192.168.1.100 operator prober123
+```
+
+#### ขั้นตอนที่ 5: สั่งรัน Edge Backend
+* **ทดสอบรันด้วยตัวเอง:**
+  ```bash
+  python3 main.py
+  ```
+* **หรือตั้งค่าให้เปิดอัตโนมัติตอนเปิดเครื่อง (Systemd Auto-start Service):**
+  ```bash
+  sudo chmod +x setup_autostart_imx8.sh
+  sudo bash setup_autostart_imx8.sh
+  ```
+  ตรวจสอบสถานะ Service ด้วย:
+  ```bash
+  systemctl status backend_imx8.service
+  journalctl -u backend_imx8.service -f
+  ```
+
+#### ขั้นตอนที่ 6: การเชื่อมต่อหน้าจอ HMI จากคอมพิวเตอร์เครื่องอื่น
+1. เปิดหน้าจอเว็บ HMI (จากคอมพิวเตอร์ในห้องควบคุม หรือ PC ประจำไลน์ผลิต)
+2. ไปที่เมนู **Settings (การตั้งค่า)**
+3. ในช่อง **Edge Board IP Address** ให้กรอก IP ของบอร์ด i.MX8 (เช่น `192.168.1.150` หรือ `10.42.0.95`)
+4. หน้าจอจะเชื่อมต่อกับบอร์ด i.MX8 และเริ่มแสดงผลสดผ่านพอร์ต 8001 ทันที
+
+---
+
+### 🛠️ 5.3 การแก้ปัญหาที่พบบ่อยเมื่อนำไปเปิดบนเครื่องอื่น (Troubleshooting)
+
+1. **ปัญหา: พิมพ์ `python3 main.py` แล้วโปรแกรมปิดตัวเองทันที ไม่แสดงข้อความใดๆ**
+   - **สาเหตุเดิม**: ในโค้ดเวอร์ชันก่อนหน้าไม่มีบล็อก `if __name__ == "__main__":`
+   - **วิธีแก้**: ในโค้ดเวอร์ชันล่าสุดได้รับการอัปเดตให้มีตัวเรียก `uvicorn.run()` เรียบร้อยแล้ว สามารถพิมพ์ `python3 main.py` เพื่อเปิดเซิร์ฟเวอร์ได้ทันที หรือใช้คำสั่งทางการ `python3 -m uvicorn main:app --host 0.0.0.0 --port 8001`
+2. **ปัญหา: Error `ModuleNotFoundError: No module named 'matplotlib'`**
+   - **วิธีแก้**: รันคำสั่ง `pip install matplotlib` หรือ `pip install -r requirements.txt` (ในเวอร์ชันล่าสุด โค้ดได้ใส่ Safe Fallback ไว้แล้ว ทำให้แม้ยังไม่ได้ลง matplotlib ตัวแอปก็ยังบูตขึ้นได้โดยไม่ Crash)
+3. **ปัญหา: Error `TFLite interpreter is not available`**
+   - **วิธีแก้**: 
+     - บนคอมพิวเตอร์ x86 ทั่วไป: ให้รัน `pip install tensorflow` หรือ `pip install tflite-runtime`
+     - บนบอร์ด i.MX8: ให้ตรวจสอบว่าใน Yocto มีการติดตั้งแพ็กเกจ `python3-tflite-runtime` ของ NXP eIQ แล้วหรือไม่
+4. **ปัญหา: Error `Address already in use` (Port 8001 หรือ 3000 ชน)**
+   - **วิธีแก้**: มีกระบวนการเดิมค้างอยู่ ให้สั่งปิดด้วยคำสั่ง:
+     ```bash
+     ./stop.sh
+     # หรือค้นหา PID เพื่อสั่ง kill:
+     sudo lsof -i :8001 | awk 'NR>1 {print $2}' | xargs -r kill -9
+     sudo lsof -i :3000 | awk 'NR>1 {print $2}' | xargs -r kill -9
+     ```
+5. **ปัญหา: ไดรฟ์ N: หรือ M: หาไม่เจอเมื่อรันบนเครื่องที่ไม่ใช่เครื่องจักร**
+   - **วิธีแก้**: ระบบมี fallback อัตโนมัติไปที่โฟลเดอร์ `backend_imx8/simulation/` ซึ่งระบบจะสร้างโฟลเดอร์ให้เองอัตโนมัติหากยังไม่มี
+
+---
 
 ---
 

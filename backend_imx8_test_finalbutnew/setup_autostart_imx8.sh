@@ -22,7 +22,7 @@ echo "[INFO] Target Service:    $SERVICE_FILE"
 # 1. Install Python dependencies if requirements.txt exists
 if [ -f "$APP_DIR/requirements.txt" ] && command -v pip3 &> /dev/null; then
     echo "[INFO] Installing Python dependencies from requirements.txt..."
-    pip3 install -r "$APP_DIR/requirements.txt" --quiet || true
+    pip3 install -r "$APP_DIR/requirements.txt" || echo "[WARN] Some dependencies may need manual installation"
 fi
 
 # 2. Ensure Fast RAM-disk buffer directory exists

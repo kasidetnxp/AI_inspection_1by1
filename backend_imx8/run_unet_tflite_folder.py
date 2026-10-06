@@ -9,10 +9,14 @@ import numpy as np
 try:
     from tflite_runtime.interpreter import Interpreter, load_delegate
 except ImportError:
-    from tensorflow.lite.python.interpreter import Interpreter
     try:
-        from tensorflow.lite.python.interpreter import load_delegate
+        from tensorflow.lite.python.interpreter import Interpreter
+        try:
+            from tensorflow.lite.python.interpreter import load_delegate
+        except ImportError:
+            load_delegate = None
     except ImportError:
+        Interpreter = None
         load_delegate = None
 
 
@@ -197,6 +201,12 @@ def draw_results(image, class_ids, masks):
 def load_interpreter(model_path):
     if not os.path.exists(model_path):
         raise FileNotFoundError(f"Model file not found: {model_path}")
+
+    if Interpreter is None:
+        raise ImportError(
+            "TFLite interpreter is not available. Please install 'tflite-runtime' or 'tensorflow' "
+            "(e.g. 'pip install tflite-runtime' or 'pip install tensorflow')."
+        )
 
     delegates = []
     if load_delegate:

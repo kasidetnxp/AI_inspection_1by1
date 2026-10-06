@@ -29,23 +29,37 @@ inspections.db
 *.csv
 confuse/
 
-# Large model files (>100MB limit on GitHub)
+# Large model files (>100MB limit on GitHub - keep folder structure and json metadata)
 *.pth
 *.pt
 *.onnx
 *.weights
 *.tflite
-models/
-**/models/
-backend_imx8/models/
-backend_imx8_test_final/models/
+!**/models/
+!**/models/.gitkeep
+!**/models/*.json
 
-# Datasets, raw images, and simulation outputs
-simulation
-simulation/
-backend_imx8/simulation
-**/simulation/
-**/simulation
+# Datasets, raw images, and simulation outputs (ignore heavy files, keep folder structure via .gitkeep)
+/simulation
+simulation/**/*.bmp
+simulation/**/*.png
+simulation/**/*.jpg
+simulation/**/*.jpeg
+simulation/**/*.zip
+simulation/**/*.txt
+backend_imx8/simulation/**/*.bmp
+backend_imx8/simulation/**/*.png
+backend_imx8/simulation/**/*.jpg
+backend_imx8/simulation/**/*.jpeg
+backend_imx8/simulation/**/*.zip
+backend_imx8/simulation/**/*.txt
+backend_imx8_test_finalbutnew/simulation/**/*.bmp
+backend_imx8_test_finalbutnew/simulation/**/*.png
+backend_imx8_test_finalbutnew/simulation/**/*.jpg
+backend_imx8_test_finalbutnew/simulation/**/*.jpeg
+backend_imx8_test_finalbutnew/simulation/**/*.zip
+backend_imx8_test_finalbutnew/simulation/**/*.txt
+!**/simulation/**/.gitkeep
 Pun_for_Accuracy/
 *.bmp
 *.zip

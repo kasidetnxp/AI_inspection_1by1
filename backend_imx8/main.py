@@ -18,8 +18,11 @@ try:
     import psycopg2
 except ImportError:
     psycopg2 = None
-import matplotlib
-matplotlib.use('Agg')
+try:
+    import matplotlib
+    matplotlib.use('Agg')
+except ImportError:
+    matplotlib = None
 from typing import List, Optional
 from datetime import datetime, timedelta
 import glob
@@ -169,9 +172,19 @@ def resolve_windows_drive_path(raw_path: str, sim_root: str = None) -> str:
                 return exact_path
                 
         # Fallback to local simulation workspace
-        return os.path.abspath(os.path.join(sim_root, f"drive_{drive_upper}", rest))
+        sim_target = os.path.abspath(os.path.join(sim_root, f"drive_{drive_upper}", rest))
+        try:
+            os.makedirs(os.path.dirname(sim_target), exist_ok=True)
+        except Exception:
+            pass
+        return sim_target
         
-    return os.path.abspath(os.path.join(sim_root, clean.lstrip("/")))
+    sim_fallback = os.path.abspath(os.path.join(sim_root, clean.lstrip("/")))
+    try:
+        os.makedirs(os.path.dirname(sim_fallback), exist_ok=True)
+    except Exception:
+        pass
+    return sim_fallback
 
 DEFAULT_PRODUCT_SETTING = {
     "scriptName": "unet-inferencer.py",
@@ -5093,3 +5106,14 @@ async def websocket_hardware_endpoint(websocket: WebSocket):
         pass
 
 
+if __name__ == "__main__":
+    import uvicorn
+    port = int(os.environ.get("PORT", 8001))
+    host = os.environ.get("HOST", "0.0.0.0")
+    print("=" * 60)
+    print(f"🚀 Starting Edge AI Backend Server")
+    print(f"👉 Local:   http://localhost:{port}")
+    print(f"👉 Network: http://{host}:{port}")
+    print(f"👉 API Doc: http://localhost:{port}/docs")
+    print("=" * 60)
+    uvicorn.run("main:app", host=host, port=port, reload=False)

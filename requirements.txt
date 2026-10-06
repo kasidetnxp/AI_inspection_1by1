@@ -9,6 +9,7 @@ pillow>=9.5.0
 matplotlib>=3.7.0
 pyyaml>=6.0
 psutil>=5.9.0
+psycopg2-binary>=2.9.0
 torch>=2.0.0
 torchvision>=0.15.0
 ultralytics>=8.0.0
