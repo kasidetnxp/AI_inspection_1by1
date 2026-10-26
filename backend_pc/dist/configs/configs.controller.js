@@ -24,6 +24,9 @@ let ConfigsController = class ConfigsController {
     getAllConfigs() {
         return this.configsService.getAllConfigs();
     }
+    getActiveConfig() {
+        return this.configsService.getActiveConfig();
+    }
     listConfigs(type) {
         if (type !== 'product' && type !== 'machine') {
             throw new common_1.BadRequestException('Type must be product or machine');
@@ -72,6 +75,12 @@ __decorate([
     __metadata("design:paramtypes", []),
     __metadata("design:returntype", void 0)
 ], ConfigsController.prototype, "getAllConfigs", null);
+__decorate([
+    (0, common_1.Get)('active'),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", []),
+    __metadata("design:returntype", void 0)
+], ConfigsController.prototype, "getActiveConfig", null);
 __decorate([
     (0, common_1.Get)(':type/list'),
     __param(0, (0, common_1.Param)('type')),

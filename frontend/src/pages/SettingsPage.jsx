@@ -91,9 +91,6 @@ export default function SettingsPage() {
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "12px", paddingBottom: "4px" }}>
           <div>
             <h2 style={{ margin: 0, fontSize: "22px", fontWeight: "800", color: "var(--text-main)", letterSpacing: "0.5px" }}>SYSTEM CONFIGURATION</h2>
-            <div style={{ fontSize: "14px", color: "var(--text-muted)", marginTop: "4px" }}>
-              Hardware edge node, recipe profiles, and machine calibration parameters
-            </div>
           </div>
           <button
             onClick={() => setIsAuditModalOpen(true)}
@@ -118,7 +115,6 @@ export default function SettingsPage() {
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "1px solid var(--border-color)", paddingBottom: "14px", flexWrap: "wrap", gap: "10px" }}>
             <div style={{ display: "flex", alignItems: "center", gap: "12px", flexWrap: "wrap" }}>
               <h3 style={{ margin: 0, fontSize: "20px", fontWeight: "800", letterSpacing: "0.5px" }}>EDGE NODE & SYSTEM</h3>
-              <span style={{ fontSize: "14px", color: "var(--text-muted)" }}>i.MX8 Machine Gateway & Factory Network Connectivity</span>
             </div>
             <span
               className="badge-result"

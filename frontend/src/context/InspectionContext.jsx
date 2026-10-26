@@ -61,15 +61,19 @@ export function InspectionProvider({ children }) {
 
   const getDefaultEdgeIp = () => {
     const saved = typeof localStorage !== "undefined" ? localStorage.getItem("IMX8_EDGE_IP") : null;
-    if (saved && saved !== "10.42.0.1" && saved !== "10.42.0.95") return saved;
-    const hostname = typeof window !== "undefined" ? (window.location.hostname || "localhost") : "localhost";
-    return (hostname === "0.0.0.0" || hostname === "::") ? "localhost" : hostname;
+    if (saved && saved !== "10.42.0.1" && saved !== "10.42.0.95") {
+      return (saved === "localhost" || saved === "::1" || saved === "0.0.0.0") ? "127.0.0.1" : saved;
+    }
+    const hostname = typeof window !== "undefined" ? (window.location.hostname || "127.0.0.1") : "127.0.0.1";
+    return (hostname === "0.0.0.0" || hostname === "::" || hostname === "localhost" || hostname === "::1") ? "127.0.0.1" : hostname;
   };
 
   const [edgeIp, setEdgeIp] = useState(getDefaultEdgeIp);
-  const apiBase = `http://${edgeIp}:8001`;
-  const pcHost = typeof window !== "undefined" ? (window.location.hostname || "localhost") : "localhost";
-  const pcApiBase = `http://${pcHost === "0.0.0.0" || pcHost === "::" ? "localhost" : pcHost}:3000`;
+  const resolvedEdgeIp = (edgeIp === "localhost" || edgeIp === "::1" || edgeIp === "0.0.0.0") ? "127.0.0.1" : edgeIp;
+  const apiBase = `http://${resolvedEdgeIp}:8001`;
+  const pcHost = typeof window !== "undefined" ? (window.location.hostname || "127.0.0.1") : "127.0.0.1";
+  const resolvedPcHost = (pcHost === "0.0.0.0" || pcHost === "::" || pcHost === "localhost" || pcHost === "::1") ? "127.0.0.1" : pcHost;
+  const pcApiBase = `http://${resolvedPcHost}:3000`;
 
   const resolveImageUrl = (url, machine) => {
     if (!url) return null;
@@ -608,8 +612,11 @@ export function InspectionProvider({ children }) {
   };
 
   const fetchActiveConfig = useCallback(async () => {
+    // 1. Try Edge Node first (live edge runtime)
     try {
-      const res = await fetch(`${apiBase}/api/config/active?t=${Date.now()}`);
+      const res = await fetch(`${apiBase}/api/config/active?t=${Date.now()}`, {
+        signal: AbortSignal.timeout(3500)
+      });
       if (res.ok) {
         const data = await res.json();
         setActiveConfig(data);
@@ -628,10 +635,24 @@ export function InspectionProvider({ children }) {
         return data;
       }
     } catch (err) {
-      console.warn("Failed fetching active config:", err);
+      // Edge offline, fallback to PC Central
+    }
+
+    // 2. Fallback to Central PC Server (Master Store)
+    try {
+      const pcRes = await fetch(`${pcApiBase}/api/v1/configs/active?t=${Date.now()}`, {
+        signal: AbortSignal.timeout(3500)
+      });
+      if (pcRes.ok) {
+        const pcData = await pcRes.json();
+        setActiveConfig(pcData);
+        return pcData;
+      }
+    } catch (pcErr) {
+      console.warn("Failed fetching active config from both Edge and PC:", pcErr);
     }
     return null;
-  }, [apiBase]);
+  }, [apiBase, pcApiBase]);
 
   const handleSaveThresholds = async () => {
     setIsSavingThresholds(true);
@@ -746,18 +767,50 @@ export function InspectionProvider({ children }) {
   });
 
   const fetchConfigLibrary = useCallback(async () => {
+    // 1. Primary: Fetch full catalog from Central PC Server
     try {
-      const res = await fetch(`${pcApiBase}/api/v1/configs?t=${Date.now()}`);
+      const res = await fetch(`${pcApiBase}/api/v1/configs?t=${Date.now()}`, {
+        signal: AbortSignal.timeout(3500)
+      });
       if (res.ok) {
         const data = await res.json();
-        setConfigLibrary(data);
+        setConfigLibrary({
+          recipes: data.recipes || [],
+          machines: data.machines || [],
+          bindings: data.bindings || {},
+          active_recipe: data.active_recipe || "",
+          active_machine: data.active_machine || ""
+        });
         return data;
       }
     } catch (err) {
-      console.warn("Failed fetching config library:", err);
+      // PC offline, fallback to standalone edge mode
+    }
+
+    // 2. Standalone Fallback: Show active config on Edge
+    try {
+      const edgeRes = await fetch(`${apiBase}/api/config/active?t=${Date.now()}`, {
+        signal: AbortSignal.timeout(3500)
+      });
+      if (edgeRes.ok) {
+        const edgeData = await edgeRes.json();
+        const activeRec = edgeData.active_recipe || "Product_Setting.txt";
+        const activeMach = edgeData.active_machine || "Machine_Setting.txt";
+        const fallbackLibrary = {
+          recipes: [{ name: activeRec, is_active: true, active: true, size: "Active (Standalone)" }],
+          machines: [{ name: activeMach, is_active: true, active: true, size: "Active (Standalone)" }],
+          bindings: {},
+          active_recipe: activeRec,
+          active_machine: activeMach
+        };
+        setConfigLibrary(fallbackLibrary);
+        return fallbackLibrary;
+      }
+    } catch (edgeErr) {
+      console.warn("Failed fetching config library from both PC and Edge:", edgeErr);
     }
     return null;
-  }, [apiBase]);
+  }, [pcApiBase, apiBase]);
 
   const handleActivateRecipe = async (name) => {
     try {
@@ -842,20 +895,45 @@ export function InspectionProvider({ children }) {
   };
 
   const fetchConfigFile = useCallback(async (configType, filename) => {
+    // 1. Primary: Try Central PC Server
     try {
-      const res = await fetch(`${pcApiBase}/api/v1/configs/${configType}/file/${encodeURIComponent(filename)}`);
+      const res = await fetch(`${pcApiBase}/api/v1/configs/${configType}/file/${encodeURIComponent(filename)}`, {
+        signal: AbortSignal.timeout(3500)
+      });
       if (res.ok) {
         return await res.json();
       }
-      const err = await res.json();
-      throw new Error(err.detail || err.message || "Failed to load config file");
     } catch (e) {
-      console.error("fetchConfigFile error:", e);
-      throw e;
+      // PC offline, fallback to Edge
     }
-  }, [pcApiBase]);
+
+    // 2. Standalone Fallback: Fetch from Edge Node directly
+    try {
+      const edgeRes = await fetch(`${apiBase}/api/config/${configType}/${encodeURIComponent(filename)}?t=${Date.now()}`, {
+        signal: AbortSignal.timeout(3500)
+      });
+      if (edgeRes.ok) {
+        const edgeData = await edgeRes.json();
+        return edgeData.content || edgeData.parsed || edgeData;
+      }
+    } catch (edgeErr) {
+      // Direct file fetch failed, check active fallback
+      try {
+        const activeRes = await fetch(`${apiBase}/api/config/active?t=${Date.now()}`, {
+          signal: AbortSignal.timeout(2000)
+        });
+        if (activeRes.ok) {
+          const edgeData = await activeRes.json();
+          const activeContent = configType === "product" ? edgeData.product : edgeData.machine;
+          if (activeContent) return activeContent;
+        }
+      } catch (_) {}
+    }
+    throw new Error(`Failed to load ${configType} config '${filename}'`);
+  }, [pcApiBase, apiBase]);
 
   const saveConfigFile = useCallback(async (configType, filename, content, activate = false, oldFilename = null) => {
+    // 1. Primary: Save to Central PC Server Library (and sync to edge)
     try {
       const res = await fetch(`${pcApiBase}/api/v1/configs/${configType}/save`, {
         method: "POST",
@@ -866,21 +944,50 @@ export function InspectionProvider({ children }) {
           activate,
           edge_ip: edgeIp,
           old_filename: oldFilename
-        })
+        }),
+        signal: AbortSignal.timeout(6000)
       });
-      const data = await res.json();
       if (res.ok) {
+        const data = await res.json();
         setConfigUploadStatus(data.message || `Saved ${filename}`);
-        await fetchConfigLibrary();
-        await fetchActiveConfig();
+        // Refresh catalog in background without holding up save confirmation
+        Promise.allSettled([fetchConfigLibrary(), fetchActiveConfig()]);
         return { success: true, data };
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        const errMessage = errData.message || errData.detail;
+        if (errMessage) {
+          return { success: false, error: errMessage };
+        }
       }
-      return { success: false, error: data.detail || data.message || "Save failed" };
     } catch (e) {
-      console.error("saveConfigFile error:", e);
-      return { success: false, error: e.message };
+      console.warn("Central PC save offline or timed out, falling back directly to Edge Node:", e);
     }
-  }, [pcApiBase, edgeIp, fetchConfigLibrary, fetchActiveConfig]);
+
+    // 2. Standalone Fallback: Save directly to Edge Node on-the-fly!
+    try {
+      const edgeRes = await fetch(`${apiBase}/api/config/${configType}/save`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          filename,
+          content,
+          activate: true
+        }),
+        signal: AbortSignal.timeout(6000)
+      });
+      const edgeData = await edgeRes.json().catch(() => ({}));
+      if (edgeRes.ok) {
+        setConfigUploadStatus(edgeData.message || `Active config '${filename}' updated directly on Edge Node`);
+        Promise.allSettled([fetchConfigLibrary(), fetchActiveConfig()]);
+        return { success: true, data: edgeData };
+      }
+      return { success: false, error: edgeData.detail || edgeData.message || "Save failed on Edge Node" };
+    } catch (edgeErr) {
+      console.error("saveConfigFile error:", edgeErr);
+      return { success: false, error: `Save failed: ${edgeErr.message || 'Cannot reach server'}` };
+    }
+  }, [pcApiBase, apiBase, edgeIp, fetchConfigLibrary, fetchActiveConfig]);
 
   // ==========================================
   // SYSTEM AUDIT LOGS (backend_imx8 / PostgreSQL)
@@ -1173,6 +1280,14 @@ export function InspectionProvider({ children }) {
       .then(res => res.ok ? res.json() : null)
       .then(data => {
         if (data) {
+          if (data.status === "STOPPED") {
+            data.status = "IDLE";
+            data.p1_total = 0;
+            data.p1_processed = 0;
+            data.p0_pending = 0;
+            data.p1_pending = 0;
+            data.active_priority = "IDLE";
+          }
           setBenchmarkProgress(prev => {
             const currentTotal = data.p1_total ?? data.total ?? prev.p1_total ?? 0;
             const currentProcessed = data.p1_processed ?? data.processed ?? prev.p1_processed ?? 0;
@@ -1219,6 +1334,18 @@ export function InspectionProvider({ children }) {
   };
 
   const handleStartBenchmark = () => {
+    if (benchmarkProgress.status === "STOPPED") {
+      setBenchmarkProgress({
+        status: "IDLE",
+        active_priority: "IDLE",
+        p0_pending: 0,
+        p1_pending: 0,
+        p1_total: 0,
+        p1_processed: 0,
+        p1_current_image: "",
+        active_session_id: null
+      });
+    }
     if (!benchmarkZipFile) {
       if (benchmarkFileInputRef.current) {
         benchmarkFileInputRef.current.click();
@@ -1245,12 +1372,23 @@ export function InspectionProvider({ children }) {
   };
 
   const handleStopBenchmark = () => {
-    setBenchmarkProgress(prev => ({ ...prev, status: "STOPPED", active_priority: "IDLE" }));
+    // Immediately reset to IDLE and clear uploaded zip for a fresh new benchmark
+    setBenchmarkProgress({
+      status: "IDLE",
+      active_priority: "IDLE",
+      p0_pending: 0,
+      p1_pending: 0,
+      p1_total: 0,
+      p1_processed: 0,
+      p1_current_image: "",
+      active_session_id: null
+    });
+    setBenchmarkZipFile(null);
+    if (benchmarkFileInputRef && benchmarkFileInputRef.current) {
+      benchmarkFileInputRef.current.value = "";
+    }
     fetch(`${apiBase}/api/model/benchmark/stop`, { method: "POST" })
       .then(res => res.json())
-      .then(data => {
-        fetchBenchmarkProgress();
-      })
       .catch(err => console.error("Error stopping benchmark:", err));
   };
 
@@ -1720,154 +1858,219 @@ export function InspectionProvider({ children }) {
     let ws = null;
     let pollStats = null;
     let reconnectTimeout = null;
+    let isMounted = true;
+
+    // Independent HTTP health check & metrics poller
+    const performHealthCheck = async () => {
+      try {
+        const res = await fetch(`${apiBase}/api/sys-stats`, { cache: "no-store" });
+        if (res.ok) {
+          const stats = await res.json();
+          if (!isMounted) return;
+          setIsBackendConnected(true);
+          setSysStats(prev => ({
+            ...prev,
+            cpu: stats.cpu ?? prev.cpu,
+            npu: stats.npu ?? prev.npu,
+            ram: stats.ram ?? prev.ram,
+            temp: stats.temp ?? prev.temp
+          }));
+          if (stats.db) setDbType(stats.db);
+        } else if (!ws || ws.readyState !== WebSocket.OPEN) {
+          if (isMounted) setIsBackendConnected(false);
+        }
+      } catch {
+        if (!ws || ws.readyState !== WebSocket.OPEN) {
+          if (isMounted) setIsBackendConnected(false);
+        }
+      }
+    };
+
+    // Immediate initial check and interval
+    performHealthCheck();
+    pollStats = setInterval(performHealthCheck, 2500);
 
     const connectBackend = () => {
-      console.log(`Attempting connection to FastAPI server at ${edgeIp}:8001...`);
-      ws = new WebSocket(`ws://${edgeIp}:8001/ws`);
+      const wsHost = (edgeIp === "localhost" || edgeIp === "::1" || edgeIp === "0.0.0.0") ? "127.0.0.1" : edgeIp;
+      console.log(`Attempting connection to FastAPI server at ${wsHost}:8001...`);
+      try {
+        ws = new WebSocket(`ws://${wsHost}:8001/ws`);
 
-      ws.onopen = () => {
-        console.log("WebSocket connection established with NXP i.MX8 backend.");
-        setIsBackendConnected(true);
-        setIsSimRunning(false); // Stop local simulation
-        fetchModels();
-
-        // Fetch initial logs
-        fetch(`${apiBase}/api/history`)
-          .then(r => r.json())
-          .then(data => setHistory(Array.isArray(data) ? data : []))
-          .catch(e => setHistory([]));
-
-        // Fetch latest scan data
-        fetch(`${apiBase}/api/latest-inspection`)
-          .then(r => r.json())
-          .then(data => {
-            if (data && data.id) {
-              mapInspectionData(data);
-            }
-          })
-          .catch(e => console.error(e));
-
-        // Fetch benchmark datasets & progress
-        fetchBenchmarkDatasets();
-        fetchBenchmarkProgress();
-        fetchBenchmarkResults();
-
-        // Fallback polling loop if real-time hardware WS is inactive
-        pollStats = setInterval(() => {
-          fetch(`${apiBase}/api/sys-stats`)
-            .then(r => r.json())
-            .then(stats => {
-              setSysStats(prev => ({
-                ...prev,
-                cpu: stats.cpu ?? prev.cpu,
-                npu: stats.npu ?? prev.npu,
-                ram: stats.ram ?? prev.ram,
-                temp: stats.temp ?? prev.temp
-              }));
-              setDbType(stats.db);
-            })
-            .catch(e => console.error(e));
-
-          // Only poll benchmark progress when idle or completed, avoid interfering with live WS stream
-          setBenchmarkProgress(prev => {
-            if (prev.status !== "RUNNING") {
-              fetchBenchmarkProgress();
-            }
-            return prev;
-          });
-        }, 2500);
-      };
-
-      ws.onmessage = (event) => {
-        const payload = JSON.parse(event.data);
-        if (payload.event === "NEW_INSPECTION" && payload.data) {
-          mapInspectionData(payload.data);
-          setHistory(prev => {
-            const list = Array.isArray(prev) ? prev : [];
-            const newKey = payload.data.imageUrl || (payload.data.id + "_" + payload.data.timestamp + "_" + (payload.data.pad || "") + "_" + (payload.data.xyCoord || ""));
-            const isDup = list.slice(0, 10).some(item => {
-              const key = item.imageUrl || (item.id + "_" + item.timestamp + "_" + (item.pad || "") + "_" + (item.xyCoord || ""));
-              return key === newKey;
-            });
-            if (isDup) return list;
-            return [payload.data, ...list];
-          });
-        } else if (payload.event === "BENCHMARK_PROGRESS" && payload.data) {
-          const pData = payload.data;
-          setBenchmarkProgress(prev => {
-            const currentTotal = pData.p1_total ?? pData.total ?? prev.p1_total ?? 0;
-            const currentProcessed = pData.p1_processed ?? pData.processed ?? prev.p1_processed ?? 0;
-            const newStatus = pData.status || (currentProcessed < currentTotal && currentTotal > 0 ? "RUNNING" : prev.status);
-
-            const updated = {
-              ...prev,
-              status: newStatus,
-              p1_total: currentTotal,
-              p1_processed: currentProcessed,
-              p0_pending: pData.p0_pending ?? prev.p0_pending ?? 0,
-              p1_pending: pData.p1_pending ?? prev.p1_pending ?? 0,
-              active_priority: pData.active_priority || prev.active_priority || "IDLE",
-              p1_current_image: pData.current_image || pData.p1_current_image || prev.p1_current_image || "",
-              active_session_id: pData.session_id || pData.active_session_id || prev.active_session_id
-            };
-
-            return JSON.stringify(prev) === JSON.stringify(updated) ? prev : updated;
-          });
-          // If a new benchmark run has started with 0 processed, clear previous run results & reset page
-          if (pData.p1_processed === 0 && pData.status === "RUNNING") {
-            setBenchmarkResults([]);
-            setBenchmarkPage(1);
-          }
-
-          if (payload.data.kpis && payload.data.kpis.total_tested > 0) {
-            setBenchmarkKpis(prev => {
-              const next = JSON.stringify(payload.data.kpis);
-              return JSON.stringify(prev) === next ? prev : payload.data.kpis;
-            });
-          }
-          if (payload.data.latest_result) {
-            setBenchmarkResults(prev => {
-              const list = Array.isArray(prev) ? prev : [];
-              const incomingSessId = payload.data.session_id || (payload.data.latest_result && payload.data.latest_result.session_id);
-              // If incoming result is from a newer session than what is in list, clear list
-              const cleanList = (incomingSessId && list.length > 0 && list[0].session_id && list[0].session_id !== incomingSessId)
-                ? []
-                : list;
-
-              const exists = cleanList.some(r => r.id === payload.data.latest_result.id);
-              if (exists) return cleanList.map(r => r.id === payload.data.latest_result.id ? payload.data.latest_result : r);
-              return [...cleanList, payload.data.latest_result];
-            });
-          }
-        } else if (payload.event === "BENCHMARK_REVIEW_UPDATED" && payload.data) {
-          if (payload.data.kpis) setBenchmarkKpis(payload.data.kpis);
-          setBenchmarkResults(prev => (Array.isArray(prev) ? prev : []).map(r => r.id === payload.data.result_id ? { ...r, human_decision: payload.data.human_decision } : r));
-        } else if (payload.event === "MODEL_ACTIVATED") {
+        ws.onopen = () => {
+          if (!isMounted) return;
+          console.log("WebSocket connection established with NXP i.MX8 backend.");
+          setIsBackendConnected(true);
+          setIsSimRunning(false); // Stop local simulation
           fetchModels();
+
+          // Fetch initial logs (Edge primary, Central PC fallback)
+          fetch(`${apiBase}/api/history`, { signal: AbortSignal.timeout(3000) })
+            .then(r => r.json())
+            .then(data => {
+              if (Array.isArray(data) && data.length > 0) {
+                setHistory(data);
+              } else {
+                fetch(`${pcApiBase}/api/v1/history`, { signal: AbortSignal.timeout(3000) })
+                  .then(r => r.json())
+                  .then(pcData => setHistory(Array.isArray(pcData) ? pcData : []))
+                  .catch(() => setHistory([]));
+              }
+            })
+            .catch(() => {
+              fetch(`${pcApiBase}/api/v1/history`, { signal: AbortSignal.timeout(3000) })
+                .then(r => r.json())
+                .then(pcData => setHistory(Array.isArray(pcData) ? pcData : []))
+                .catch(() => setHistory([]));
+            });
+
+          // Fetch latest scan data (Edge primary, Central PC fallback)
+          fetch(`${apiBase}/api/latest-inspection`, { signal: AbortSignal.timeout(3000) })
+            .then(r => r.json())
+            .then(data => {
+              if (data && data.id) {
+                mapInspectionData(data);
+              } else {
+                fetch(`${pcApiBase}/api/v1/latest-inspection`, { signal: AbortSignal.timeout(3000) })
+                  .then(r => r.json())
+                  .then(pcData => {
+                    if (pcData && pcData.id) mapInspectionData(pcData);
+                  })
+                  .catch(() => {});
+              }
+            })
+            .catch(() => {
+              fetch(`${pcApiBase}/api/v1/latest-inspection`, { signal: AbortSignal.timeout(3000) })
+                .then(r => r.json())
+                .then(pcData => {
+                  if (pcData && pcData.id) mapInspectionData(pcData);
+                })
+                .catch(() => {});
+            });
+
+          // Fetch benchmark datasets & progress
+          fetchBenchmarkDatasets();
+          fetchBenchmarkProgress();
+          fetchBenchmarkResults();
+        };
+
+        ws.onmessage = (event) => {
+          const payload = JSON.parse(event.data);
+          if (payload.event === "NEW_INSPECTION" && payload.data) {
+            mapInspectionData(payload.data);
+            setHistory(prev => {
+              const list = Array.isArray(prev) ? prev : [];
+              const newKey = payload.data.imageUrl || (payload.data.id + "_" + payload.data.timestamp + "_" + (payload.data.pad || "") + "_" + (payload.data.xyCoord || ""));
+              const isDup = list.slice(0, 10).some(item => {
+                const key = item.imageUrl || (item.id + "_" + item.timestamp + "_" + (item.pad || "") + "_" + (item.xyCoord || ""));
+                return key === newKey;
+              });
+              if (isDup) return list;
+              return [payload.data, ...list];
+            });
+          } else if (payload.event === "BENCHMARK_PROGRESS" && payload.data) {
+            const pData = payload.data;
+            if (pData.status === "STOPPED") {
+              pData.status = "IDLE";
+              pData.p1_total = 0;
+              pData.p1_processed = 0;
+              pData.p0_pending = 0;
+              pData.p1_pending = 0;
+              pData.active_priority = "IDLE";
+            }
+            setBenchmarkProgress(prev => {
+              const currentTotal = pData.p1_total ?? pData.total ?? prev.p1_total ?? 0;
+              const currentProcessed = pData.p1_processed ?? pData.processed ?? prev.p1_processed ?? 0;
+              const newStatus = pData.status || (currentProcessed < currentTotal && currentTotal > 0 ? "RUNNING" : prev.status);
+
+              const updated = {
+                ...prev,
+                status: newStatus,
+                p1_total: currentTotal,
+                p1_processed: currentProcessed,
+                p0_pending: pData.p0_pending ?? prev.p0_pending ?? 0,
+                p1_pending: pData.p1_pending ?? prev.p1_pending ?? 0,
+                active_priority: pData.active_priority || prev.active_priority || "IDLE",
+                p1_current_image: pData.current_image || pData.p1_current_image || prev.p1_current_image || "",
+                active_session_id: pData.session_id || pData.active_session_id || prev.active_session_id
+              };
+
+              return JSON.stringify(prev) === JSON.stringify(updated) ? prev : updated;
+            });
+            // If a new benchmark run has started with 0 processed, clear previous run results & reset page
+            if (pData.p1_processed === 0 && pData.status === "RUNNING") {
+              setBenchmarkResults([]);
+              setBenchmarkPage(1);
+            }
+
+            if (payload.data.kpis && payload.data.kpis.total_tested > 0) {
+              setBenchmarkKpis(prev => {
+                const next = JSON.stringify(payload.data.kpis);
+                return JSON.stringify(prev) === next ? prev : payload.data.kpis;
+              });
+            }
+            if (payload.data.latest_result) {
+              setBenchmarkResults(prev => {
+                const list = Array.isArray(prev) ? prev : [];
+                const incoming = payload.data.latest_result;
+                const incomingSessId = payload.data.session_id || incoming.session_id;
+                const cleanList = (incomingSessId && list.length > 0 && list[0].session_id && list[0].session_id !== incomingSessId)
+                  ? []
+                  : list;
+
+                // Match by ID, or fallback to image_name (strictly avoid matching undefined === undefined)
+                const exists = cleanList.some(r => {
+                  if (incoming.id != null && r.id != null) return r.id === incoming.id;
+                  if (incoming.image_name && r.image_name) return r.image_name === incoming.image_name;
+                  return false;
+                });
+
+                if (exists) {
+                  return cleanList.map(r => {
+                    const isMatch = (incoming.id != null && r.id != null)
+                      ? r.id === incoming.id
+                      : (incoming.image_name && r.image_name && r.image_name === incoming.image_name);
+                    return isMatch ? { ...r, ...incoming } : r;
+                  });
+                }
+                return [...cleanList, incoming];
+              });
+            }
+          } else if (payload.event === "BENCHMARK_REVIEW_UPDATED" && payload.data) {
+            if (payload.data.kpis) setBenchmarkKpis(payload.data.kpis);
+            setBenchmarkResults(prev => (Array.isArray(prev) ? prev : []).map(r => r.id === payload.data.result_id ? { ...r, human_decision: payload.data.human_decision } : r));
+          } else if (payload.event === "MODEL_ACTIVATED") {
+            fetchModels();
+          }
+        };
+
+        ws.onerror = () => {
+          if (ws) ws.close();
+        };
+
+        ws.onclose = () => {
+          if (!isMounted) return;
+          console.log("FastAPI backend WebSocket closed. Rechecking Edge health via HTTP...");
+          performHealthCheck();
+          reconnectTimeout = setTimeout(connectBackend, 3500);
+        };
+      } catch (err) {
+        console.error("Failed to connect Edge WebSocket:", err);
+        if (isMounted) {
+          performHealthCheck();
+          reconnectTimeout = setTimeout(connectBackend, 3500);
         }
-      };
-
-
-      ws.onerror = () => {
-        ws.close();
-      };
-
-      ws.onclose = () => {
-        console.log("FastAPI backend is offline. Running in offline client simulator mode.");
-        setIsBackendConnected(false);
-        if (pollStats) clearInterval(pollStats);
-        reconnectTimeout = setTimeout(connectBackend, 5000);
-      };
+      }
     };
 
     connectBackend();
 
     return () => {
+      isMounted = false;
       if (ws) ws.close();
       if (pollStats) clearInterval(pollStats);
       if (reconnectTimeout) clearTimeout(reconnectTimeout);
     };
-  }, [edgeIp]);
+  }, [edgeIp, apiBase]);
 
   // ==========================================
   // REAL-TIME HARDWARE MONITORING WEBSOCKET
@@ -1878,9 +2081,11 @@ export function InspectionProvider({ children }) {
     let isSubscribed = true;
 
     const connectHardwareMonitor = () => {
-      const hostname = typeof window !== "undefined" ? (window.location.hostname || "localhost") : "localhost";
-      const pcWsUrl = `ws://${hostname}:3000/ws/hardware`;
-      const imx8WsUrl = `ws://${edgeIp}:8001/ws/hardware`;
+      const hostname = typeof window !== "undefined" ? (window.location.hostname || "127.0.0.1") : "127.0.0.1";
+      const resolvedHost = (hostname === "localhost" || hostname === "::1" || hostname === "0.0.0.0") ? "127.0.0.1" : hostname;
+      const pcWsUrl = `ws://${resolvedHost}:3000/ws/hardware`;
+      const wsEdgeHost = (edgeIp === "localhost" || edgeIp === "::1" || edgeIp === "0.0.0.0") ? "127.0.0.1" : edgeIp;
+      const imx8WsUrl = `ws://${wsEdgeHost}:8001/ws/hardware`;
 
       // Try PC NestJS relay first, with fallback to direct i.MX8 WebSocket
       const targetUrl = pcWsUrl;

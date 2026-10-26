@@ -2389,6 +2389,11 @@ body.light-theme .kpi-card:hover {
   background: linear-gradient(135deg, rgba(16, 185, 129, 0.08) 0%, var(--bg-card) 100%);
 }
 
+.kpi-card.highlight-orange {
+  border-color: rgba(249, 115, 22, 0.45);
+  background: linear-gradient(135deg, rgba(249, 115, 22, 0.12) 0%, rgba(234, 88, 12, 0.04) 50%, var(--bg-card) 100%);
+}
+
 .kpi-card.highlight-info {
   border-color: rgba(14, 165, 233, 0.35);
   background: linear-gradient(135deg, rgba(14, 165, 233, 0.08) 0%, var(--bg-card) 100%);
@@ -2404,6 +2409,11 @@ body.light-theme .kpi-card.alert-warning {
 
 body.light-theme .kpi-card.highlight-success {
   background: linear-gradient(135deg, rgba(16, 185, 129, 0.06) 0%, #ffffff 100%);
+}
+
+body.light-theme .kpi-card.highlight-orange {
+  border-color: rgba(249, 115, 22, 0.45);
+  background: linear-gradient(135deg, rgba(249, 115, 22, 0.08) 0%, #ffffff 100%);
 }
 
 body.light-theme .kpi-card.highlight-info {

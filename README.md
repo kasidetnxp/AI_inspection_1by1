@@ -41,7 +41,7 @@ graph TD
 ### 🪺 2.3 Central Server Backend (PC Node - NestJS)
 - **NestJS (TypeScript)**: รันบนพอร์ต 3000 หน้าที่ประสานงาน (Gateway) ระหว่าง Edge Nodes หลายตัวและ HMI
 - **PostgreSQL**: ฐานข้อมูล Enterprise (รันผ่าน Docker) เก็บประวัติผลตรวจจับ และสถิติการผลิต
-- **SQLite (Fallback)**: ระบบฐานข้อมูลสำรองอัตโนมัติหาก PostgreSQL ดาวน์
+- **In-Memory Buffer (Fallback)**: ระบบสำรองข้อมูลอัตโนมัติในหน่วยความจำ RAM หาก PostgreSQL ดาวน์
 
 ---
 
@@ -484,7 +484,7 @@ sudo bash mount_prober_shares.sh 192.168.1.100 operator prober123
   - **API Gateway**: คอยรับ HTTP POST Request ข้อมูล payload ผลตรวจล่าสุดจาก `backend_imx8`
   - **WebSocket Broadcaster**: เมื่อรับข้อมูลมาแล้ว `EventsGateway` จะทำการกระจายข้อมูลการตรวจจับ (Event: `NEW_INSPECTION`) ไปยังเบราว์เซอร์ทั้งหมดที่เชื่อมต่ออยู่ทันที (Real-time update)
 - **การเก็บข้อมูล (Data Persistence)**:
-  - **ประวัติการทำงาน (History/Logs)**: ข้อมูลทั้งหมด เช่น รหัสชิ้นงาน, ผลการตรวจ, เวลาอนุมาน (Inference Time), และลิงก์รูปภาพ (`imageUrl`) จะถูกบันทึกเป็น Record ลงในฐานข้อมูล **PostgreSQL** ผ่าน TypeORM (มีการใช้ `SQLite` หรือ In-memory Array เป็น Fallback กรณีฐานข้อมูลหลักล่ม) เพื่อให้สามารถสืบค้นและดึงออกไปวิเคราะห์ย้อนหลังเป็น CSV ได้
+  - **ประวัติการทำงาน (History/Logs)**: ข้อมูลทั้งหมด เช่น รหัสชิ้นงาน, ผลการตรวจ, เวลาอนุมาน (Inference Time), และลิงก์รูปภาพ (`imageUrl`) จะถูกบันทึกเป็น Record ลงในฐานข้อมูล **PostgreSQL** (และใช้ In-Memory Array เป็น Fallback กรณีฐานข้อมูลหลักออฟไลน์) เพื่อให้สามารถสืบค้นและดึงออกไปวิเคราะห์ย้อนหลังเป็น CSV ได้
 
 ### 3. `frontend` (HMI Dashboard - หน้าจอควบคุมของผู้ใช้งาน)
 ส่วนนี้คือ "หน้าตาของระบบ" ที่ผู้ควบคุมเครื่อง (Operator) หรือวิศวกร (Engineer) มองเห็นผ่าน Web Browser

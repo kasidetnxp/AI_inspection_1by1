@@ -5,7 +5,15 @@ import * as path from 'path';
 @Injectable()
 export class ConfigsService {
   private readonly logger = new Logger(ConfigsService.name);
-  private readonly projectRoot = '/home/nxp1/Desktop/PUNPUNJA/PROJECT/UIIU';
+  private readonly projectRoot = (() => {
+    if (fs.existsSync(path.join(process.cwd(), 'configs'))) {
+      return path.resolve(process.cwd(), '..');
+    }
+    if (fs.existsSync(path.join(process.cwd(), 'backend_pc', 'configs'))) {
+      return process.cwd();
+    }
+    return process.env.PROJECT_ROOT || '/home/nxp1/Desktop/PUNPUNJA/PROJECT/UIIU';
+  })();
   private readonly configsDir = path.join(this.projectRoot, 'backend_pc', 'configs');
   private readonly recipesDir = path.join(this.configsDir, 'recipes');
   private readonly machinesDir = path.join(this.configsDir, 'machines');
@@ -80,6 +88,63 @@ export class ConfigsService {
       bindings: bindings.bindings || {},
       active_recipe: bindings.active_recipe || '',
       active_machine: bindings.active_machine_config || ''
+    };
+  }
+
+  getActiveConfig() {
+    const bindings = this.loadBindings();
+    const activeRecipeName = bindings.active_recipe || 'Product_Setting.txt';
+    const activeMachineName = bindings.active_machine_config || 'Machine_Setting.txt';
+
+    const recipePath = path.join(this.recipesDir, activeRecipeName);
+    const machinePath = path.join(this.machinesDir, activeMachineName);
+
+    let productData: any = {};
+    let machineData: any = {};
+
+    try {
+      if (fs.existsSync(recipePath)) {
+        productData = JSON.parse(fs.readFileSync(recipePath, 'utf-8'));
+      }
+    } catch (e) {
+      this.logger.warn(`Failed reading active recipe: ${e.message}`);
+    }
+
+    try {
+      if (fs.existsSync(machinePath)) {
+        machineData = JSON.parse(fs.readFileSync(machinePath, 'utf-8'));
+      }
+    } catch (e) {
+      this.logger.warn(`Failed reading active machine config: ${e.message}`);
+    }
+
+    const edgeThresh = parseFloat(productData.edgeThreshold || 8.0);
+    const edgeFactor = parseFloat(productData.edgeConversionFactor || 1.0);
+    const failDistUm = edgeFactor > 0 ? edgeThresh / edgeFactor : edgeThresh;
+    const maxAreaRatio = parseFloat(productData.areaRatioThreshold || 25.0);
+
+    return {
+      status: 'success',
+      source: 'pc_central_master',
+      active_recipe: activeRecipeName,
+      active_machine: activeMachineName,
+      product: productData,
+      machine: machineData,
+      prober_name: machineData['prober.name'] || 'WP288',
+      computed: {
+        failDistanceUm: failDistUm,
+        maxAreaRatioPct: maxAreaRatio,
+        targetWidth: productData.targetWidth || 160,
+        targetHeight: productData.targetHeight || 160,
+        minAreaSizes: productData.minAreaSizes || [300, 10],
+        hRoi: productData.horizontalRoi || 0.7,
+        vRoi: productData.verticalRoi || 0.7,
+        simulatedSourceFolder: machineData['lot.source.folder'] || '',
+        simulatedJudgeFolder: machineData['machine.result.folder'] || '',
+        processedFolder: machineData['lot.input.folder'] || '',
+        outputFolder: machineData['lot.output.folder'] || '',
+        isHardwareMounted: false,
+      }
     };
   }
 

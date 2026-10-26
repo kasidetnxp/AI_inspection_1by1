@@ -1,6 +1,53 @@
 import React, { useState, useEffect, useRef } from "react";
 import { useInspection } from "../context/InspectionContext";
 
+// Clean templates containing ONLY active parameters, with blanks for values to be filled in
+const NEW_PRODUCT_TEMPLATE = `{
+  "edgeThreshold": ,
+  "areaRatioThreshold": ,
+  "targetWidth": 160,
+  "targetHeight": 160,
+  "horizontalRoi": 0.7,
+  "verticalRoi": 0.7,
+  "minAreaSizes": [300, 10],
+  "devices": []
+}`;
+
+const NEW_MACHINE_TEMPLATE = `{
+  "lot.source.folder": "N:\\\\WP269\\\\PMI\\\\IMAGE",
+  "machine.result.folder": "N:\\\\WP269\\\\PMI\\\\JUDGE",
+  "lot.input.folder": "M:\\\\WP269\\\\PMI\\\\PROCESSED\\\\{output.lotNo}",
+  "lot.output.folder": "M:\\\\WP269\\\\PMI\\\\OUTPUT\\\\{output.lotNo}",
+  "machine.result.fileFormat": "{output.result}_{output.code}_{output.machine}_{output.ts}.txt",
+  "process.end.timeout": 10000,
+  "input.index.processTime": 0,
+  "input.index.waferId": 1,
+  "input.index.siteCoordinate": 2,
+  "input.index.probecardSite": 3,
+  "input.index.padNo": 4,
+  "input.index.detailInfo": 5,
+  "input.index.device": 6,
+  "input.index.temperature": 7,
+  "input.index.machine": -1,
+  "input.index.lotNo": -1
+}`;
+
+// Background defaults to ensure full compatibility with inference pipeline
+const BACKGROUND_PRODUCT_DEFAULTS = {
+  scriptName: "unet-inferencer.py",
+  algorithm: "unet",
+  classNames: ["pad", "probemark"],
+  padShape: "rectangle",
+  thingColors: ["#FF0000", "#00FF00"],
+  badLabels: ["bad", "defect"],
+  skipDevices: [],
+  padIndex: 0,
+  generateOutput: true,
+  combineOutput: true,
+  greyscaleThreshold: 0,
+  edgeConversionFactor: 1.0
+};
+
 export default function ConfigEditorModal({
   isOpen,
   onClose,
@@ -17,19 +64,19 @@ export default function ConfigEditorModal({
   const [initialContent, setInitialContent] = useState("");
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [isActivating, setIsActivating] = useState(false);
   const [errorMsg, setErrorMsg] = useState(null);
   const [jsonError, setJsonError] = useState(null);
   const [saveSuccessMsg, setSaveSuccessMsg] = useState(null);
 
   const textareaRef = useRef(null);
+  const fetchedKeyRef = useRef("");
 
   // Check if current file is active in runtime
   const isCurrentActive =
     !isNew &&
     ((configType === "product" && configLibrary.active_recipe === initialFilename) ||
       (configType === "machine" && configLibrary.active_machine === initialFilename));
-
-  const fetchedKeyRef = useRef("");
 
   // Initialize or fetch file
   useEffect(() => {
@@ -55,15 +102,7 @@ export default function ConfigEditorModal({
           : `Machine_Custom_${new Date().toISOString().slice(0, 10).replace(/-/g, "")}.txt`;
       setFilename(defaultName);
 
-      // Clone from activeConfigTemplate if provided
-      let templateStr = "{\n  \n}";
-      if (activeConfigTemplate && typeof activeConfigTemplate === "object") {
-        try {
-          templateStr = JSON.stringify(activeConfigTemplate, null, 2);
-        } catch {
-          templateStr = "{\n  \n}";
-        }
-      }
+      const templateStr = configType === "product" ? NEW_PRODUCT_TEMPLATE : NEW_MACHINE_TEMPLATE;
       setContent(templateStr);
       setInitialContent(templateStr);
       setLoading(false);
@@ -104,12 +143,19 @@ export default function ConfigEditorModal({
     }
   }, [isOpen, configType, initialFilename, isNew, activeConfigTemplate, fetchConfigFile]);
 
-  // Live JSON validation
+  // Live JSON validation (gentle when empty values are waiting to be typed)
   useEffect(() => {
     if (!content.trim()) {
       setJsonError("Content cannot be empty");
       return;
     }
+
+    // Check if user is still filling in empty template fields like `"key": ,`
+    if (/:\s*,/.test(content) || /:\s*$/.test(content.trim()) || /:\s*\}/.test(content)) {
+      setJsonError("WAITING_FILL");
+      return;
+    }
+
     try {
       const parsed = JSON.parse(content);
       if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
@@ -149,12 +195,17 @@ export default function ConfigEditorModal({
   };
 
   const handleFormatJson = () => {
+    if (jsonError === "WAITING_FILL") {
+      setErrorMsg("กรุณากรอกค่าตัวเลขให้ครบก่อนจัดฟอร์แมต (Please fill in empty values before formatting)");
+      return;
+    }
     try {
       const parsed = JSON.parse(content);
       setContent(JSON.stringify(parsed, null, 2));
       setJsonError(null);
+      setErrorMsg(null);
     } catch (e) {
-      setJsonError(`Cannot format: ${e.message}`);
+      setErrorMsg(`Cannot format: ${e.message}`);
     }
   };
 
@@ -174,17 +225,32 @@ export default function ConfigEditorModal({
       return;
     }
 
+    // Check for unfilled empty fields
+    if (/:\s*,/.test(content) || /:\s*$/.test(content.trim()) || /:\s*\}/.test(content)) {
+      setErrorMsg("กรุณากรอกค่าพารามิเตอร์ให้ครบก่อนบันทึก (เช่น ค่าหลัง 'edgeThreshold': หรือ 'areaRatioThreshold':)");
+      return;
+    }
+
+    let parsed = null;
     try {
-      JSON.parse(content);
+      parsed = JSON.parse(content);
     } catch (e) {
       setErrorMsg(`Cannot save: Invalid JSON - ${e.message}`);
       return;
     }
 
+    // If it's a product recipe, ensure background baseline parameters exist so the AI pipeline works seamlessly
+    let finalPayload = content;
+    if (configType === "product" && parsed && typeof parsed === "object") {
+      const merged = { ...BACKGROUND_PRODUCT_DEFAULTS, ...parsed };
+      finalPayload = JSON.stringify(merged, null, 2);
+    }
+
     setSaving(true);
+    setIsActivating(shouldActivate);
     try {
       const oldFilename = !isNew && initialFilename && cleanFilename !== initialFilename ? initialFilename : null;
-      const result = await saveConfigFile(configType, cleanFilename, content, shouldActivate, oldFilename);
+      const result = await saveConfigFile(configType, cleanFilename, finalPayload, shouldActivate, oldFilename);
       if (result.success) {
         setSaveSuccessMsg(
           shouldActivate
@@ -202,6 +268,7 @@ export default function ConfigEditorModal({
       setErrorMsg(err.message || "An unexpected error occurred");
     } finally {
       setSaving(false);
+      setIsActivating(false);
     }
   };
 
@@ -217,13 +284,13 @@ export default function ConfigEditorModal({
         left: 0,
         width: "100vw",
         height: "100vh",
-        backgroundColor: "rgba(0, 0, 0, 0.72)",
+        backgroundColor: "rgba(0, 0, 0, 0.75)",
         backdropFilter: "blur(6px)",
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
         zIndex: 9999,
-        padding: "20px",
+        padding: "16px",
         boxSizing: "border-box"
       }}
     >
@@ -233,13 +300,13 @@ export default function ConfigEditorModal({
         style={{
           width: "920px",
           maxWidth: "96vw",
-          height: "85vh",
-          maxHeight: "850px",
+          height: "86vh",
+          maxHeight: "860px",
           display: "flex",
           flexDirection: "column",
           borderRadius: "12px",
           border: "1px solid var(--border-color)",
-          boxShadow: "0 20px 50px rgba(0, 0, 0, 0.45)",
+          boxShadow: "0 20px 50px rgba(0, 0, 0, 0.5)",
           overflow: "hidden",
           background: "var(--bg-card, #111827)"
         }}
@@ -258,8 +325,8 @@ export default function ConfigEditorModal({
           <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
             <div
               style={{
-                width: "36px",
-                height: "36px",
+                width: "38px",
+                height: "38px",
                 borderRadius: "8px",
                 background: configType === "product" ? "rgba(14, 165, 233, 0.15)" : "rgba(245, 158, 11, 0.15)",
                 color: configType === "product" ? "var(--color-info)" : "var(--color-warn)",
@@ -290,7 +357,7 @@ export default function ConfigEditorModal({
                 <span
                   style={{
                     fontSize: "12px",
-                    fontWeight: "700",
+                    fontWeight: "800",
                     padding: "3px 8px",
                     borderRadius: "4px",
                     background: configType === "product" ? "rgba(14, 165, 233, 0.15)" : "rgba(245, 158, 11, 0.15)",
@@ -303,7 +370,7 @@ export default function ConfigEditorModal({
                 {isCurrentActive && (
                   <span
                     className="badge-result pass"
-                    style={{ fontSize: "11px", padding: "3px 8px", fontWeight: "700" }}
+                    style={{ fontSize: "11px", padding: "3px 8px", fontWeight: "800" }}
                   >
                     ACTIVE IN RUNTIME
                   </span>
@@ -311,7 +378,7 @@ export default function ConfigEditorModal({
               </div>
               <div style={{ fontSize: "13.5px", color: "var(--text-muted)", marginTop: "3px" }}>
                 {isNew
-                  ? "Define rules and parameters based on current active template"
+                  ? "JSON template with core parameters ready. Fill in your desired values and save."
                   : "Modify JSON configuration parameters and apply into runtime"}
               </div>
             </div>
@@ -345,10 +412,10 @@ export default function ConfigEditorModal({
             justifyContent: "space-between",
             flexWrap: "wrap",
             gap: "12px",
-            background: "rgba(0, 0, 0, 0.15)"
+            background: "rgba(0, 0, 0, 0.18)"
           }}
         >
-          {/* Filename input / display */}
+          {/* Filename input */}
           <div style={{ display: "flex", alignItems: "center", gap: "10px", flex: 1, minWidth: "260px" }}>
             <span style={{ fontSize: "14px", fontWeight: "700", color: "var(--text-muted)", whiteSpace: "nowrap" }}>
               File Name:
@@ -357,20 +424,20 @@ export default function ConfigEditorModal({
               type="text"
               value={filename}
               onChange={(e) => setFilename(e.target.value)}
-              placeholder="e.g. Recipe_KMI710_Rev2.txt"
+              placeholder="e.g. Recipe_KMI710.txt"
               className="font-mono"
               style={{
                 flex: 1,
-                maxWidth: "380px",
+                maxWidth: "360px",
                 padding: "8px 12px",
-                fontSize: "14.5px",
+                fontSize: "14px",
                 borderRadius: "6px",
                 background: "var(--bg-input)",
                 border: "1px solid var(--border-color)",
                 color: "var(--text-main)",
                 fontWeight: "600"
               }}
-              title={!isNew ? "Edit to rename file" : "Enter configuration filename"}
+              title="Configuration filename"
             />
             {!isNew && filename !== initialFilename && (
               <span
@@ -391,7 +458,22 @@ export default function ConfigEditorModal({
 
           {/* Validation & Toolbar Actions */}
           <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-            {jsonError ? (
+            {jsonError === "WAITING_FILL" ? (
+              <span
+                style={{
+                  fontSize: "13px",
+                  fontWeight: "600",
+                  color: "var(--color-info, #0ea5e9)",
+                  background: "rgba(14, 165, 233, 0.12)",
+                  padding: "5px 12px",
+                  borderRadius: "6px",
+                  border: "1px solid rgba(14, 165, 233, 0.3)"
+                }}
+                title="Fill in values after the colon"
+              >
+                ✎ กรอกค่าตัวเลขในช่องว่าง
+              </span>
+            ) : jsonError ? (
               <span
                 style={{
                   fontSize: "13px",
@@ -401,7 +483,7 @@ export default function ConfigEditorModal({
                   padding: "5px 12px",
                   borderRadius: "6px",
                   border: "1px solid rgba(239, 68, 68, 0.3)",
-                  maxWidth: "280px",
+                  maxWidth: "260px",
                   overflow: "hidden",
                   textOverflow: "ellipsis",
                   whiteSpace: "nowrap"
@@ -431,7 +513,7 @@ export default function ConfigEditorModal({
               onClick={handleFormatJson}
               className="select-file-btn"
               style={{ padding: "6px 14px", fontSize: "13.5px", borderRadius: "6px" }}
-              title="Auto format and beautify JSON"
+              title="Auto format JSON"
             >
               Format JSON
             </button>
@@ -445,7 +527,7 @@ export default function ConfigEditorModal({
                 borderRadius: "6px",
                 background: "rgba(255, 255, 255, 0.04)"
               }}
-              title="Reset content to initial"
+              title="Reset template to initial"
             >
               Reset
             </button>
@@ -459,12 +541,12 @@ export default function ConfigEditorModal({
               padding: "10px 22px",
               background: "rgba(239, 68, 68, 0.12)",
               color: "var(--color-fail)",
-              fontSize: "12.5px",
+              fontSize: "13px",
               fontWeight: "600",
               borderBottom: "1px solid rgba(239, 68, 68, 0.25)"
             }}
           >
-            {errorMsg}
+            ✕ {errorMsg}
           </div>
         )}
         {saveSuccessMsg && (
@@ -473,7 +555,7 @@ export default function ConfigEditorModal({
               padding: "10px 22px",
               background: "rgba(16, 185, 129, 0.12)",
               color: "var(--color-pass)",
-              fontSize: "12.5px",
+              fontSize: "13px",
               fontWeight: "600",
               borderBottom: "1px solid rgba(16, 185, 129, 0.25)"
             }}
@@ -482,7 +564,7 @@ export default function ConfigEditorModal({
           </div>
         )}
 
-        {/* EDITOR AREA */}
+        {/* CLEAN JSON TEXTAREA EDITOR */}
         <div style={{ flex: 1, position: "relative", minHeight: 0, display: "flex", flexDirection: "column" }}>
           {loading ? (
             <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-muted)" }}>
@@ -495,6 +577,7 @@ export default function ConfigEditorModal({
               onChange={(e) => setContent(e.target.value)}
               onKeyDown={handleKeyDown}
               spellCheck="false"
+              placeholder='{\n  "edgeThreshold": 8.0,\n  ...\n}'
               style={{
                 flex: 1,
                 width: "100%",
@@ -506,8 +589,8 @@ export default function ConfigEditorModal({
                 background: "#090d16",
                 color: "#e2e8f0",
                 fontFamily: "var(--font-mono, 'Consolas', 'Courier New', monospace)",
-                fontSize: "14.5px",
-                lineHeight: "1.6",
+                fontSize: "15px",
+                lineHeight: "1.7",
                 boxSizing: "border-box"
               }}
             />
@@ -529,7 +612,11 @@ export default function ConfigEditorModal({
         >
           <div style={{ fontSize: "13px", color: "var(--text-muted)", display: "flex", alignItems: "center", gap: "6px" }}>
             <span style={{ color: "var(--color-info)" }}>ℹ</span>
-            <span>Tab key inserts 2 spaces. Saving an active config automatically updates runtime.</span>
+            <span>
+              {isNew
+                ? "พิมพ์ค่าตัวเลขหลังเครื่องหมาย : แล้วกด Save เพื่อบันทึกเข้าสู่ระบบ"
+                : "Tab key inserts 2 spaces. Saving an active config automatically updates runtime."}
+            </span>
           </div>
 
           <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
@@ -545,22 +632,22 @@ export default function ConfigEditorModal({
             <button
               type="button"
               onClick={() => handleSave(false)}
-              disabled={saving || !!jsonError}
+              disabled={saving || (jsonError && jsonError !== "WAITING_FILL")}
               className="select-file-btn"
               style={{
                 padding: "9px 20px",
                 fontSize: "14px",
                 fontWeight: "700",
                 borderRadius: "6px",
-                opacity: jsonError ? 0.6 : 1
+                opacity: jsonError && jsonError !== "WAITING_FILL" ? 0.6 : 1
               }}
             >
-              {saving ? "Saving..." : "Save Changes"}
+              {saving && !isActivating ? "Saving..." : "Save Changes"}
             </button>
             <button
               type="button"
               onClick={() => handleSave(true)}
-              disabled={saving || !!jsonError}
+              disabled={saving || (jsonError && jsonError !== "WAITING_FILL")}
               className="select-file-btn"
               style={{
                 padding: "9px 22px",
@@ -570,11 +657,11 @@ export default function ConfigEditorModal({
                 background: "var(--color-pass, #10b981)",
                 borderColor: "var(--color-pass, #10b981)",
                 color: "#ffffff",
-                opacity: jsonError ? 0.6 : 1,
+                opacity: jsonError && jsonError !== "WAITING_FILL" ? 0.6 : 1,
                 boxShadow: "0 2px 8px rgba(16, 185, 129, 0.3)"
               }}
             >
-              {saving ? "Applying..." : "Save & Activate"}
+              {saving && isActivating ? "Applying..." : "Save & Activate"}
             </button>
           </div>
         </div>

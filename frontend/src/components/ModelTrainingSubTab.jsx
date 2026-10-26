@@ -144,68 +144,8 @@ export default function ModelTrainingSubTab() {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "16px", paddingBottom: "50px", width: "100%" }}>
-      {/* HEADER BAR */}
-      <div
-        className="hmi-card"
-        style={{
-          padding: "16px 20px",
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-          flexWrap: "wrap",
-          gap: "10px",
-          background: "var(--bg-card)",
-          border: "1px solid var(--border-color)"
-        }}
-      >
-        <div>
-          <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-            <h2 style={{ margin: 0, fontSize: "17px", fontWeight: "700", color: "var(--text-main)" }}>
-              MODEL TRAINING
-            </h2>
-            <span
-              style={{
-                fontSize: "11px",
-                padding: "2px 8px",
-                borderRadius: "4px",
-                background: "rgba(16, 185, 129, 0.15)",
-                color: "#059669",
-                fontWeight: "700"
-              }}
-            >
-              PC GPU (CUDA)
-            </span>
-          </div>
-          <div style={{ fontSize: "12px", color: "var(--text-muted)", marginTop: "2px" }}>
-            Train PyTorch U-Net models on PC host
-          </div>
-        </div>
-
-        <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-          <span style={{ fontSize: "12px", color: "var(--text-muted)" }}>
-            Host: <strong style={{ color: "var(--text-main)" }}>{pcApiBase}</strong>
-          </span>
-          <button
-            onClick={() => {
-              fetchTrainingModels();
-              fetchTrainingStatus();
-            }}
-            className="btn-secondary"
-            style={{ fontSize: "12px", padding: "5px 12px", borderRadius: "6px", cursor: "pointer" }}
-          >
-            Refresh
-          </button>
-        </div>
-      </div>
-
-      {/* TWO-COLUMN GRID */}
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px", alignItems: "start" }}>
-        
-        {/* LEFT COLUMN: SETTINGS & DATASET */}
-        <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
-          
-          {/* 1. MODEL SETTINGS */}
-          <div className="hmi-card" style={{ padding: "18px", display: "flex", flexDirection: "column", gap: "14px", background: "var(--bg-card)", border: "1px solid var(--border-color)" }}>
+      {/* 1. MODEL SETTINGS */}
+      <div className="hmi-card" style={{ padding: "18px", display: "flex", flexDirection: "column", gap: "14px", background: "var(--bg-card)", border: "1px solid var(--border-color)" }}>
             <div style={{ borderBottom: "1px solid var(--border-color)", paddingBottom: "8px" }}>
               <h3 style={{ margin: 0, fontSize: "14px", fontWeight: "700", color: "var(--text-main)" }}>
                 1. MODEL SETTINGS
@@ -513,29 +453,53 @@ export default function ModelTrainingSubTab() {
 
           </div>
 
-        </div>
-
-        {/* RIGHT COLUMN: TRAINING RUN & METRICS */}
-        <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
-          
+          {/* 3. TRAINING RUN */}
           <div className="hmi-card" style={{ padding: "18px", display: "flex", flexDirection: "column", gap: "14px", background: "var(--bg-card)", border: "1px solid var(--border-color)" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "1px solid var(--border-color)", paddingBottom: "8px" }}>
-              <h3 style={{ margin: 0, fontSize: "14px", fontWeight: "700", color: "var(--text-main)" }}>
-                3. TRAINING RUN
-              </h3>
-              <span
-                style={{
-                  fontSize: "11px",
-                  fontWeight: "700",
-                  padding: "3px 8px",
-                  borderRadius: "4px",
-                  background: isTrainingActive ? "rgba(59, 130, 246, 0.15)" : isTrainingCompleted ? "rgba(16, 185, 129, 0.15)" : "var(--bg-subtle)",
-                  color: isTrainingActive ? "#2563eb" : isTrainingCompleted ? "#059669" : "var(--text-muted)",
-                  border: "1px solid var(--border-color)"
-                }}
-              >
-                STATUS: {trainingStatus?.state || "IDLE"}
-              </span>
+              <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                <h3 style={{ margin: 0, fontSize: "14px", fontWeight: "700", color: "var(--text-main)" }}>
+                  3. TRAINING RUN
+                </h3>
+                <span
+                  style={{
+                    fontSize: "11px",
+                    padding: "2px 8px",
+                    borderRadius: "4px",
+                    background: "rgba(16, 185, 129, 0.15)",
+                    color: "#059669",
+                    fontWeight: "700"
+                  }}
+                >
+                  PC GPU (CUDA)
+                </span>
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                <span
+                  style={{
+                    fontSize: "11px",
+                    fontWeight: "700",
+                    padding: "3px 8px",
+                    borderRadius: "4px",
+                    background: isTrainingActive ? "rgba(59, 130, 246, 0.15)" : isTrainingCompleted ? "rgba(16, 185, 129, 0.15)" : "var(--bg-subtle)",
+                    color: isTrainingActive ? "#2563eb" : isTrainingCompleted ? "#059669" : "var(--text-muted)",
+                    border: "1px solid var(--border-color)"
+                  }}
+                >
+                  STATUS: {trainingStatus?.state || "IDLE"}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    fetchTrainingModels();
+                    fetchTrainingStatus();
+                  }}
+                  className="btn-secondary"
+                  title={`Host: ${pcApiBase}`}
+                  style={{ fontSize: "11px", padding: "3px 10px", borderRadius: "5px", cursor: "pointer" }}
+                >
+                  Refresh
+                </button>
+              </div>
             </div>
 
             {/* ACTION BUTTON */}
@@ -729,10 +693,6 @@ export default function ModelTrainingSubTab() {
             )}
 
           </div>
-
-        </div>
-
-      </div>
     </div>
   );
 }

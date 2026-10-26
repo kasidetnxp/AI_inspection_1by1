@@ -24,6 +24,29 @@ export declare class ConfigsService {
         active_recipe: any;
         active_machine: any;
     };
+    getActiveConfig(): {
+        status: string;
+        source: string;
+        active_recipe: any;
+        active_machine: any;
+        product: any;
+        machine: any;
+        prober_name: any;
+        computed: {
+            failDistanceUm: number;
+            maxAreaRatioPct: number;
+            targetWidth: any;
+            targetHeight: any;
+            minAreaSizes: any;
+            hRoi: any;
+            vRoi: any;
+            simulatedSourceFolder: any;
+            simulatedJudgeFolder: any;
+            processedFolder: any;
+            outputFolder: any;
+            isHardwareMounted: boolean;
+        };
+    };
     listConfigs(type: 'product' | 'machine'): {
         name: string;
         is_active: boolean;

@@ -13,6 +13,11 @@ export class ConfigsController {
     return this.configsService.getAllConfigs();
   }
 
+  @Get('active')
+  getActiveConfig() {
+    return this.configsService.getActiveConfig();
+  }
+
   @Get(':type/list')
   listConfigs(@Param('type') type: string) {
     if (type !== 'product' && type !== 'machine') {

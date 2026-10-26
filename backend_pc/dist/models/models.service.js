@@ -18,7 +18,15 @@ const child_process_1 = require("child_process");
 let ModelsService = ModelsService_1 = class ModelsService {
     constructor() {
         this.logger = new common_1.Logger(ModelsService_1.name);
-        this.projectRoot = '/home/nxp1/Desktop/PUNPUNJA/PROJECT/UIIU';
+        this.projectRoot = (() => {
+            if (fs.existsSync(path.join(process.cwd(), 'configs'))) {
+                return path.resolve(process.cwd(), '..');
+            }
+            if (fs.existsSync(path.join(process.cwd(), 'backend_pc', 'configs'))) {
+                return process.cwd();
+            }
+            return process.env.PROJECT_ROOT || '/home/nxp1/Desktop/PUNPUNJA/PROJECT/UIIU';
+        })();
         this.masterDir = path.join(this.projectRoot, 'datasets', 'models', 'master');
         this.registryPath = path.join(this.projectRoot, 'datasets', 'model_registry.json');
         this.recipesDir = path.join(this.projectRoot, 'backend_pc', 'configs', 'recipes');

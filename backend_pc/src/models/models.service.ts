@@ -29,8 +29,15 @@ export interface ModelEntry {
 @Injectable()
 export class ModelsService {
   private readonly logger = new Logger(ModelsService.name);
-
-  private readonly projectRoot = '/home/nxp1/Desktop/PUNPUNJA/PROJECT/UIIU';
+  private readonly projectRoot = (() => {
+    if (fs.existsSync(path.join(process.cwd(), 'configs'))) {
+      return path.resolve(process.cwd(), '..');
+    }
+    if (fs.existsSync(path.join(process.cwd(), 'backend_pc', 'configs'))) {
+      return process.cwd();
+    }
+    return process.env.PROJECT_ROOT || '/home/nxp1/Desktop/PUNPUNJA/PROJECT/UIIU';
+  })();
   private readonly masterDir = path.join(this.projectRoot, 'datasets', 'models', 'master');
   private readonly registryPath = path.join(this.projectRoot, 'datasets', 'model_registry.json');
   private readonly recipesDir = path.join(this.projectRoot, 'backend_pc', 'configs', 'recipes');

@@ -71,12 +71,13 @@ SYS_CONFIG = load_sys_config()
 PATHS_CFG = SYS_CONFIG.get("paths", {})
 
 # Database connection settings
+_db_cfg = SYS_CONFIG.get("database", {})
 POSTGRES_CONFIG = {
-    "host": "localhost",
-    "port": 5432,
-    "user": "postgres",
-    "password": "postgres",
-    "database": "postgres"
+    "host": os.getenv("POSTGRES_HOST", _db_cfg.get("host", "localhost")),
+    "port": int(os.getenv("POSTGRES_PORT", _db_cfg.get("port", 5432))),
+    "user": os.getenv("POSTGRES_USER", _db_cfg.get("user", "postgres")),
+    "password": os.getenv("POSTGRES_PASSWORD", _db_cfg.get("password", "password")),
+    "database": os.getenv("POSTGRES_DB", _db_cfg.get("database", "wafer_inspection")),
 }
 
 # Directory Paths for Machine Interfacing Pipeline (Mapped to Factory Drives N: & M:)
@@ -493,6 +494,7 @@ def apply_recipe_by_filename(filename: str):
             with open(fpath, "r", encoding="utf-8") as f:
                 parsed = json.load(f)
                 if isinstance(parsed, dict):
+                    ACTIVE_PRODUCT_SETTING.clear()
                     ACTIVE_PRODUCT_SETTING.update(parsed)
                     save_active_product_setting(ACTIVE_PRODUCT_SETTING)
                     reg = load_config_registry()
@@ -514,6 +516,7 @@ def apply_machine_by_filename(filename: str):
             with open(fpath, "r", encoding="utf-8") as f:
                 parsed = json.load(f)
                 if isinstance(parsed, dict):
+                    ACTIVE_MACHINE_SETTING.clear()
                     ACTIVE_MACHINE_SETTING.update(parsed)
                     save_active_machine_setting(ACTIVE_MACHINE_SETTING)
                     reg = load_config_registry()
@@ -747,11 +750,14 @@ class ConnectionManager:
             self.active_connections.remove(websocket)
 
     async def broadcast(self, message: str):
-        for connection in self.active_connections:
+        dead_connections = []
+        for connection in list(self.active_connections):
             try:
                 await connection.send_text(message)
             except Exception:
-                pass
+                dead_connections.append(connection)
+        for dead in dead_connections:
+            self.disconnect(dead)
 
 manager = ConnectionManager()
 
@@ -759,11 +765,30 @@ manager = ConnectionManager()
 # ==========================================
 # DATABASE CONNECTOR (PostgreSQL Exclusively)
 # ==========================================
+_last_pg_fail_time = 0.0
+_PG_FAIL_COOLDOWN = 30.0
+
 def get_pg_connection():
+    global _last_pg_fail_time
     if psycopg2 is None:
         return None
+
+    now = time.time()
+    if now - _last_pg_fail_time < _PG_FAIL_COOLDOWN:
+        return None
+
+    # Fast TCP socket pre-check (200ms) to avoid psycopg2 blocking event loop on dead ports
     try:
-        return psycopg2.connect(
+        import socket
+        s = socket.create_connection((POSTGRES_CONFIG["host"], POSTGRES_CONFIG["port"]), timeout=0.2)
+        s.close()
+    except Exception:
+        _last_pg_fail_time = now
+        return None
+
+    # 1. Primary connection attempt (configured in config.yaml / docker-compose)
+    try:
+        conn = psycopg2.connect(
             host=POSTGRES_CONFIG["host"],
             port=POSTGRES_CONFIG["port"],
             user=POSTGRES_CONFIG["user"],
@@ -771,8 +796,29 @@ def get_pg_connection():
             database=POSTGRES_CONFIG["database"],
             connect_timeout=1
         )
+        _last_pg_fail_time = 0.0
+        return conn
     except Exception:
-        return None
+        pass
+
+    # 2. Seamless fallback: try password 'postgres' and database 'postgres' (if local native PG)
+    if POSTGRES_CONFIG["password"] != "postgres" or POSTGRES_CONFIG["database"] != "postgres":
+        try:
+            conn = psycopg2.connect(
+                host=POSTGRES_CONFIG["host"],
+                port=POSTGRES_CONFIG["port"],
+                user=POSTGRES_CONFIG["user"],
+                password="postgres",
+                database="postgres",
+                connect_timeout=1
+            )
+            _last_pg_fail_time = 0.0
+            return conn
+        except Exception:
+            pass
+
+    _last_pg_fail_time = now
+    return None
 
 def init_database():
     global db_type, inspection_count
@@ -2000,37 +2046,51 @@ def process_new_file(filepath, filename, lot_no=None):
 # Priority Queue Dispatcher & Benchmark Evaluation Engine
 # ==============================================================================
 
+_BENCHMARK_RESULTS_CACHE = {}  # session_id -> list of records
+
 def save_benchmark_result_to_db(record: dict):
-    global db_type
+    global db_type, _BENCHMARK_RESULTS_CACHE
+    sess_id = record.get("session_id", "default")
+    if sess_id not in _BENCHMARK_RESULTS_CACHE:
+        _BENCHMARK_RESULTS_CACHE[sess_id] = []
+
+    # Fallback unique integer ID in case PG is unavailable or slow
+    fallback_id = int(time.time() * 1000) + len(_BENCHMARK_RESULTS_CACHE[sess_id])
+    if "id" not in record or not record["id"]:
+        record["id"] = fallback_id
+
     try:
         conn = get_pg_connection()
-        cursor = conn.cursor()
-        cursor.execute("""
-            INSERT INTO benchmark_results (
-                session_id, image_name, image_url, annotated_image_url, raw_image_url,
-                ai_decision, ai_confidence, ai_reason, inference_time_ms, rule_time_ms,
-                min_edge_distance_um, mark_area_ratio_pct, pads_count, marks_count, grains_count,
-                human_decision, human_reviewer, reviewed_at, notes
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            RETURNING id;
-        """, (
-            record["session_id"], record["image_name"], record["image_url"],
-            record["annotated_image_url"], record["raw_image_url"],
-            record["ai_decision"], record["ai_confidence"], record["ai_reason"],
-            record["inference_time_ms"], record["rule_time_ms"],
-            record["min_edge_distance_um"], record["mark_area_ratio_pct"],
-            record["pads_count"], record["marks_count"], record["grains_count"],
-            record.get("human_decision", "UNREVIEWED"), record.get("human_reviewer", "-"),
-            record.get("reviewed_at", "-"), record.get("notes", "")
-        ))
-        new_id = cursor.fetchone()
-        if new_id:
-            record["id"] = new_id[0]
-        conn.commit()
-        cursor.close()
-        conn.close()
+        if conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO benchmark_results (
+                    session_id, image_name, image_url, annotated_image_url, raw_image_url,
+                    ai_decision, ai_confidence, ai_reason, inference_time_ms, rule_time_ms,
+                    min_edge_distance_um, mark_area_ratio_pct, pads_count, marks_count, grains_count,
+                    human_decision, human_reviewer, reviewed_at, notes
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING id;
+            """, (
+                record["session_id"], record["image_name"], record["image_url"],
+                record["annotated_image_url"], record["raw_image_url"],
+                record["ai_decision"], record["ai_confidence"], record["ai_reason"],
+                record["inference_time_ms"], record["rule_time_ms"],
+                record["min_edge_distance_um"], record["mark_area_ratio_pct"],
+                record["pads_count"], record["marks_count"], record["grains_count"],
+                record.get("human_decision", "UNREVIEWED"), record.get("human_reviewer", "-"),
+                record.get("reviewed_at", "-"), record.get("notes", "")
+            ))
+            new_id = cursor.fetchone()
+            if new_id:
+                record["id"] = new_id[0]
+            conn.commit()
+            cursor.close()
+            conn.close()
     except Exception as pg_err:
         print("Failed to save benchmark result to PostgreSQL:", pg_err)
+
+    _BENCHMARK_RESULTS_CACHE[sess_id].append(record.copy())
 
 
 def compute_session_kpis(session_id: str) -> dict:
@@ -2925,19 +2985,23 @@ def priority_dispatcher_thread():
                     
                     if P1_QUEUE.qsize() == 0:
                         sess_id = priority_dispatcher_state.get("active_session_id")
-                        if priority_dispatcher_state.get("status") == "STOPPED":
+                        if priority_dispatcher_state.get("status") in ("STOPPED", "IDLE"):
+                            priority_dispatcher_state["status"] = "IDLE"
                             priority_dispatcher_state["active_priority"] = "IDLE"
                             priority_dispatcher_state["p1_current"] = ""
+                            priority_dispatcher_state["p1_processed"] = 0
+                            priority_dispatcher_state["p1_total"] = 0
+                            priority_dispatcher_state["active_session_id"] = None
                             if sess_id:
                                 finalize_benchmark_session(sess_id, status="STOPPED")
                             if main_loop and main_loop.is_running():
                                 asyncio.run_coroutine_threadsafe(manager.broadcast(json.dumps({
                                     "event": "BENCHMARK_PROGRESS",
                                     "data": {
-                                        "status": "STOPPED",
-                                        "session_id": sess_id,
-                                        "p1_processed": priority_dispatcher_state["p1_processed"],
-                                        "p1_total": priority_dispatcher_state["p1_total"],
+                                        "status": "IDLE",
+                                        "session_id": None,
+                                        "p1_processed": 0,
+                                        "p1_total": 0,
                                         "p0_pending": 0,
                                         "p1_pending": 0,
                                         "active_priority": "IDLE"
@@ -3039,8 +3103,9 @@ async def websocket_endpoint(websocket: WebSocket):
     await manager.connect(websocket)
     try:
         await websocket.send_text(json.dumps({"event": "CONNECTION_ESTABLISHED", "db": db_type}))
-        while True: await websocket.receive_text()
-    except WebSocketDisconnect:
+        while True:
+            await websocket.receive_text()
+    except (WebSocketDisconnect, Exception):
         manager.disconnect(websocket)
 
 def load_history_from_db():
@@ -3397,6 +3462,9 @@ async def trigger_end_signal(lot_no: Optional[str] = Query(None)):
 @app.get("/api/config/active")
 async def get_active_config():
     global ACTIVE_PRODUCT_SETTING, ACTIVE_MACHINE_SETTING
+    reg = load_config_registry()
+    active_rec = reg.get("active_recipe", "Product_Setting.txt")
+    active_mach = reg.get("active_machine_config", "Machine_Setting.txt")
     
     edge_thresh = float(ACTIVE_PRODUCT_SETTING.get("edgeThreshold", 8.0))
     edge_factor = float(ACTIVE_PRODUCT_SETTING.get("edgeConversionFactor", 1.0))
@@ -3411,6 +3479,8 @@ async def get_active_config():
     
     return {
         "status": "success",
+        "active_recipe": active_rec,
+        "active_machine": active_mach,
         "product": ACTIVE_PRODUCT_SETTING,
         "machine": ACTIVE_MACHINE_SETTING,
         "prober_name": get_current_prober_name(),
@@ -3430,52 +3500,37 @@ async def get_active_config():
         }
     }
 
+@app.post("/api/config/active")
+async def update_active_config(payload: dict = Body(...)):
+    """Update active configuration directly on Edge Node (Hot-Reload)."""
+    config_type = payload.get("type", "product")
+    return await save_config_file(config_type, payload)
+
 @app.get("/api/configs")
 async def get_all_configs():
     reg = load_config_registry()
     active_rec = reg.get("active_recipe", "Product_Setting.txt")
     active_mach = reg.get("active_machine_config", "Machine_Setting.txt")
     bindings = reg.get("bindings", {})
-
-    recipes = []
-    if os.path.exists(RECIPES_DIR):
-        for fname in sorted(os.listdir(RECIPES_DIR)):
-            if fname.lower().endswith((".txt", ".json")):
-                fp = os.path.join(RECIPES_DIR, fname)
-                sz_kb = round(os.path.getsize(fp) / 1024, 1)
-                mtime = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(os.path.getmtime(fp)))
-                bound_m = [m for m, b in bindings.items() if b.get("recipe") == fname]
-                recipes.append({
-                    "name": fname,
-                    "size": f"{sz_kb} KB",
-                    "updatedAt": mtime,
-                    "active": (fname == active_rec),
-                    "boundModels": bound_m
-                })
-
-    machines = []
-    if os.path.exists(MACHINES_DIR):
-        for fname in sorted(os.listdir(MACHINES_DIR)):
-            if fname.lower().endswith((".txt", ".json")):
-                fp = os.path.join(MACHINES_DIR, fname)
-                sz_kb = round(os.path.getsize(fp) / 1024, 1)
-                mtime = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(os.path.getmtime(fp)))
-                machines.append({
-                    "name": fname,
-                    "size": f"{sz_kb} KB",
-                    "updatedAt": mtime,
-                    "active": (fname == active_mach)
-                })
-
     return {
         "status": "success",
+        "recipes": [{
+            "name": active_rec,
+            "size": "Active (Edge)",
+            "updatedAt": "Current Runtime",
+            "active": True,
+            "boundModels": [m for m, b in bindings.items() if b.get("recipe") == active_rec]
+        }],
+        "machines": [{
+            "name": active_mach,
+            "size": "Active (Edge)",
+            "updatedAt": "Current Runtime",
+            "active": True
+        }],
         "active_model": reg.get("active_model", "unet.tflite"),
         "active_recipe": active_rec,
-        "active_machine": active_mach,
-        "prober_name": get_current_prober_name(),
-        "recipes": recipes,
-        "machines": machines,
         "bindings": bindings,
+        "prober_name": get_current_prober_name(),
         "current_product": ACTIVE_PRODUCT_SETTING,
         "current_machine": ACTIVE_MACHINE_SETTING
     }
@@ -3678,46 +3733,28 @@ async def save_config_file(config_type: str, payload: dict = Body(...)):
     if not isinstance(parsed, dict):
         raise HTTPException(status_code=400, detail="Config content must be a JSON object")
 
-    base_dir = RECIPES_DIR if config_type == "product" else MACHINES_DIR
-    os.makedirs(base_dir, exist_ok=True)
-    target = os.path.join(base_dir, clean_name)
-    if not is_safe_target_path(base_dir, target):
-        raise HTTPException(status_code=400, detail="Invalid target path")
-
     try:
-        with open(target, "w", encoding="utf-8") as f:
-            json.dump(parsed, f, indent=2)
-
         reg = load_config_registry()
-        is_currently_active = (
-            (config_type == "product" and reg.get("active_recipe") == clean_name) or
-            (config_type == "machine" and reg.get("active_machine_config") == clean_name)
-        )
-        should_activate = bool(payload.get("activate", False)) or is_currently_active
-
-        if should_activate:
-            if config_type == "product":
-                ACTIVE_PRODUCT_SETTING.clear()
-                ACTIVE_PRODUCT_SETTING.update(parsed)
-                save_active_product_setting(ACTIVE_PRODUCT_SETTING)
-                reg["active_recipe"] = clean_name
-                save_config_registry(reg)
-                log_audit("RECIPE", "SAVE_RECIPE", f"Saved and activated recipe '{clean_name}'")
-            else:
-                ACTIVE_MACHINE_SETTING.clear()
-                ACTIVE_MACHINE_SETTING.update(parsed)
-                save_active_machine_setting(ACTIVE_MACHINE_SETTING)
-                reg["active_machine_config"] = clean_name
-                save_config_registry(reg)
-                log_audit("MACHINE", "SAVE_MACHINE_CONFIG", f"Saved and activated machine setting '{clean_name}'")
+        if config_type == "product":
+            ACTIVE_PRODUCT_SETTING.clear()
+            ACTIVE_PRODUCT_SETTING.update(parsed)
+            save_active_product_setting(ACTIVE_PRODUCT_SETTING)
+            reg["active_recipe"] = clean_name
+            save_config_registry(reg)
+            log_audit("RECIPE", "SAVE_ACTIVE_RECIPE", f"Active recipe updated & hot-reloaded: '{clean_name}'")
         else:
-            log_audit(config_type.upper(), f"SAVE_{config_type.upper()}_CONFIG", f"Saved {config_type} config '{clean_name}'")
+            ACTIVE_MACHINE_SETTING.clear()
+            ACTIVE_MACHINE_SETTING.update(parsed)
+            save_active_machine_setting(ACTIVE_MACHINE_SETTING)
+            reg["active_machine_config"] = clean_name
+            save_config_registry(reg)
+            log_audit("MACHINE", "SAVE_ACTIVE_MACHINE", f"Active machine config updated: '{clean_name}'")
 
         return {
             "status": "success",
-            "message": f"Successfully saved {config_type} config '{clean_name}'" + (" and activated" if should_activate else ""),
+            "message": f"Successfully updated active {config_type} config '{clean_name}' on Edge Node (Hot-Reloaded).",
             "filename": clean_name,
-            "activated": should_activate,
+            "activated": True,
             "parsed": parsed
         }
     except Exception as e:
@@ -4719,6 +4756,9 @@ async def get_benchmark_results(
     except Exception as e:
         print("Error fetching PG benchmark results:", e)
 
+    if not results and target_session in _BENCHMARK_RESULTS_CACHE:
+        results = [r.copy() for r in _BENCHMARK_RESULTS_CACHE[target_session]]
+
     # Filter results
     if filter == "DISAGREEMENT":
         results = [r for r in results if r["human_decision"] in ("PASS", "FAIL") and r["human_decision"] != r["ai_decision"]]
@@ -4970,13 +5010,12 @@ async def resume_benchmark():
 
 @app.post("/api/model/benchmark/stop")
 async def stop_benchmark():
-    """Stops the active benchmark validation job."""
+    """Stops the active benchmark validation job and resets queue dispatcher to IDLE."""
     global priority_dispatcher_state, P1_QUEUE
     
-    priority_dispatcher_state["status"] = "STOPPED"
-    priority_dispatcher_state["active_priority"] = "IDLE"
-    priority_dispatcher_state["p1_pending"] = 0
-    priority_dispatcher_state["p1_current"] = ""
+    sess_id = priority_dispatcher_state.get("active_session_id")
+    if sess_id:
+        finalize_benchmark_session(sess_id, status="STOPPED")
 
     drained = 0
     while not P1_QUEUE.empty():
@@ -4987,25 +5026,30 @@ async def stop_benchmark():
         except queue.Empty:
             break
 
-    sess_id = priority_dispatcher_state.get("active_session_id")
-    if sess_id:
-        finalize_benchmark_session(sess_id, status="STOPPED")
+    # Reset dispatcher state back to IDLE
+    priority_dispatcher_state["status"] = "IDLE"
+    priority_dispatcher_state["active_priority"] = "IDLE"
+    priority_dispatcher_state["p1_pending"] = 0
+    priority_dispatcher_state["p1_current"] = ""
+    priority_dispatcher_state["p1_processed"] = 0
+    priority_dispatcher_state["p1_total"] = 0
+    priority_dispatcher_state["active_session_id"] = None
 
     if main_loop and main_loop.is_running():
         asyncio.run_coroutine_threadsafe(manager.broadcast(json.dumps({
             "event": "BENCHMARK_PROGRESS",
             "data": {
-                "status": "STOPPED",
-                "session_id": sess_id,
-                "p1_processed": priority_dispatcher_state.get("p1_processed", 0),
-                "p1_total": priority_dispatcher_state.get("p1_total", 0),
+                "status": "IDLE",
+                "session_id": None,
+                "p1_processed": 0,
+                "p1_total": 0,
                 "p0_pending": 0,
                 "p1_pending": 0,
                 "active_priority": "IDLE"
             }
         })), main_loop)
 
-    print(f"🛑 [BENCHMARK STOPPED] Drained {drained} remaining validation items from P1 Queue.")
+    print(f"🛑 [BENCHMARK STOPPED] Drained {drained} remaining validation items from P1 Queue. State reset to IDLE.")
     return {"status": "success", "message": f"Benchmark stopped. {drained} items cleared."}
 
 

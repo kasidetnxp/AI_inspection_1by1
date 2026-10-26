@@ -1,17 +1,22 @@
 services:
   postgres:
     image: postgres:17-alpine
+    container_name: wafer_postgres
+    restart: unless-stopped
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: password
       POSTGRES_DB: wafer_inspection
     ports:
-      - "5555:5432"
+      - "5432:5432"
     volumes:
       - ./docker/pgdata:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql:ro
 
   cloudbeaver:
     image: dbeaver/cloudbeaver:latest
+    container_name: wafer_cloudbeaver
+    restart: unless-stopped
     ports:
       - "8978:8978"
     volumes:

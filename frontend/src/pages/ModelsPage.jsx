@@ -32,7 +32,6 @@ export default function ModelsPage() {
     filteredBenchmarkResults,
     handleActivateModel,
     handleBatchReview,
-    handleBindModelConfig,
     handleDeleteModel,
     handleExportBenchmarkCSV,
     handlePauseBenchmark,
@@ -255,25 +254,25 @@ export default function ModelsPage() {
                 <>
                   {/* 1. TOP QUALITY KPI DASHBOARD */}
                   <div className="kpi-dashboard-grid">
-                    {/* Overkill Rate */}
-                    <div className={`kpi-card ${(benchmarkKpis.overkill_rate || 0) > 3 ? "alert-warning" : ""}`}>
+                    {/* Overkill Rate - Green highlighted */}
+                    <div className={`kpi-card ${(benchmarkKpis.overkill_rate || 0) > 3 ? "alert-warning" : "highlight-success"}`}>
                       <div className="kpi-header">
                         <span className="kpi-title">OVERKILL RATE</span>
                       </div>
                       <div className="kpi-value-row" style={{ display: "flex", alignItems: "baseline", gap: "8px", flexWrap: "wrap" }}>
-                        <span className="kpi-main-val" style={{ color: (benchmarkKpis.overkill_rate || 0) > 3 ? "var(--color-warn)" : "inherit" }}>
+                        <span className="kpi-main-val" style={{ color: (benchmarkKpis.overkill_rate || 0) > 3 ? "var(--color-warn)" : "var(--color-pass)" }}>
                           {Number(benchmarkKpis.overkill_rate ?? 0).toFixed(2)}%
                         </span>
                       </div>
                     </div>
 
-                    {/* Underkill Rate */}
-                    <div className={`kpi-card ${(benchmarkKpis.underkill_rate || 0) > 0 ? "alert-danger" : "highlight-success"}`}>
+                    {/* Underkill Rate - Orange gradient */}
+                    <div className={`kpi-card ${(benchmarkKpis.underkill_rate || 0) > 0 ? "alert-danger" : "highlight-orange"}`}>
                       <div className="kpi-header">
                         <span className="kpi-title">UNDERKILL</span>
                       </div>
                       <div className="kpi-value-row" style={{ display: "flex", alignItems: "baseline", gap: "8px", flexWrap: "wrap" }}>
-                        <span className="kpi-main-val" style={{ color: (benchmarkKpis.underkill_rate || 0) > 0 ? "var(--color-fail)" : "var(--color-pass)" }}>
+                        <span className="kpi-main-val" style={{ color: (benchmarkKpis.underkill_rate || 0) > 0 ? "var(--color-fail)" : "#f97316" }}>
                           {Number(benchmarkKpis.underkill_rate ?? 0).toFixed(2)}%
                         </span>
                       </div>
@@ -975,43 +974,17 @@ export default function ModelsPage() {
                           <thead>
                             <tr>
                               <th>Model Name</th>
-                              <th>Version</th>
                               <th>Size</th>
-                              <th>Bound Recipe</th>
                               <th>Status</th>
                               <th style={{ textAlign: "center" }}>Action</th>
                             </tr>
                           </thead>
                           <tbody id="models-table-body">
                             {modelsList.map((model, idx) => {
-                              const boundRecipe = configLibrary?.bindings?.[model.name]?.recipe || "Product_Setting.txt";
-
                               return (
                                 <tr key={idx} className={model.active ? "row-active-model" : ""}>
                                   <td className="font-mono" style={{ fontWeight: "600" }}>{model.name}</td>
-                                  <td className="font-mono">{model.version || "v1.0.0"}</td>
                                   <td className="font-mono">{model.size || "-"}</td>
-                                  <td>
-                                    <select
-                                      className="lab-select"
-                                      style={{ padding: "4px 8px", fontSize: "12px", borderRadius: "4px", background: "rgba(255,255,255,0.04)", border: "1px solid var(--border-color)", color: "var(--text-main)" }}
-                                      value={boundRecipe}
-                                      onChange={(e) => {
-                                        if (e.target.value) {
-                                          handleBindModelConfig(model.name, e.target.value, configLibrary?.active_machine || "Machine_Setting.txt");
-                                        }
-                                      }}
-                                    >
-                                      {(configLibrary?.recipes || []).map((r, rIdx) => (
-                                        <option key={rIdx} value={r.name}>
-                                          {r.name} {r.name === boundRecipe ? "(Current)" : ""}
-                                        </option>
-                                      ))}
-                                      {(!configLibrary?.recipes || configLibrary.recipes.length === 0) && (
-                                        <option value="Product_Setting.txt">Product_Setting.txt</option>
-                                      )}
-                                    </select>
-                                  </td>
                                   <td>
                                     <span className={`badge-result ${model.active ? "pass" : "warn"}`} style={{ fontSize: "11px", fontWeight: "700" }}>
                                       {model.active ? "ACTIVE ON NPU (EDGE)" : "CENTRAL STORE (PC)"}

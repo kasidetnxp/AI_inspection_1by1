@@ -448,10 +448,6 @@ export default function HistoryDetailModal() {
                       );
                     })()}
                     <div className="meta-row" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                      <span className="meta-lbl" style={{ flexShrink: 0 }}>Datetime:</span>
-                      <span className="meta-val font-mono" style={{ textAlign: "right" }}>{getRecordDisplayDateTime(selectedModalItem)}</span>
-                    </div>
-                    <div className="meta-row" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                       <span className="meta-lbl" style={{ flexShrink: 0 }}>Site coordinate:</span>
                       <span className="meta-val font-mono" style={{ textAlign: "right" }}>{selectedModalItem.xyCoord || "-"}</span>
                     </div>
